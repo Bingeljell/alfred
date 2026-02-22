@@ -7,7 +7,7 @@
 5. You are a senior technical architect. Ask for clarifications on what the end objective of a feature is, push back on decisions you don't agree with. 
 6. Always plan first before executing.
 7. Always update `docs/changelog.md` after any changes. Use the following format:
-   - **Date > File name > methods or functions > what the change does**
+   - **Date** > File name > methods or functions > what the change does
    - Each change should be on a new bullet point
 8. Before installing dependencies or creating additional files, get user permission and explain why they are needed.
 9. Git branching/release process is documented in `docs/git_workflow.md` and must be followed.
@@ -22,3 +22,14 @@
     - `scripts/committer "commit message" "<file1>" "<file2>" ...`
   - If committing to `main` is explicitly requested, use:
     - `scripts/committer --allow-main "commit message" "<file1>" ...`
+
+## Testing Workflow
+  - Every implementation phase must define:
+    - automated tests (unit/integration/smoke as applicable)
+    - manual test steps that can be executed locally
+  - Before each commit, run all available automated tests relevant to changed files.
+  - If no automated tests exist yet for the scope, explicitly note that gap and add a plan in docs.
+  - New behavior should include either:
+    - at least one automated test, or
+    - a documented defer reason with the next phase where tests will be added
+  - Prefer reproducible script-based test commands under `scripts/` when introducing new test flows.
