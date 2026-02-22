@@ -7,6 +7,7 @@ import { FileBackedQueueStore } from "../../apps/gateway-orchestrator/src/local_
 import { OutboundNotificationStore } from "../../apps/gateway-orchestrator/src/notification_store";
 import { startNotificationDispatcher } from "../../apps/gateway-orchestrator/src/notification_dispatcher";
 import { ApprovalStore } from "../../apps/gateway-orchestrator/src/builtins/approval_store";
+import { NoteStore } from "../../apps/gateway-orchestrator/src/builtins/note_store";
 import { ReminderStore } from "../../apps/gateway-orchestrator/src/builtins/reminder_store";
 import { startReminderDispatcher } from "../../apps/gateway-orchestrator/src/builtins/reminder_dispatcher";
 import { TaskStore } from "../../apps/gateway-orchestrator/src/builtins/task_store";
@@ -20,16 +21,25 @@ describe("phase 5 integration", () => {
     const queueStore = new FileBackedQueueStore(stateDir);
     const notificationStore = new OutboundNotificationStore(stateDir);
     const reminderStore = new ReminderStore(stateDir);
+    const noteStore = new NoteStore(stateDir);
     const taskStore = new TaskStore(stateDir);
     const approvalStore = new ApprovalStore(stateDir);
 
     await queueStore.ensureReady();
     await notificationStore.ensureReady();
     await reminderStore.ensureReady();
+    await noteStore.ensureReady();
     await taskStore.ensureReady();
     await approvalStore.ensureReady();
 
-    const service = new GatewayService(queueStore, notificationStore, reminderStore, taskStore, approvalStore);
+    const service = new GatewayService(
+      queueStore,
+      notificationStore,
+      reminderStore,
+      noteStore,
+      taskStore,
+      approvalStore
+    );
 
     const adapter = new InMemoryWhatsAppAdapter();
     const notificationDispatcher = startNotificationDispatcher({
@@ -86,6 +96,22 @@ describe("phase 5 integration", () => {
     });
 
     expect(taskDone.response).toContain("Task completed");
+
+    const noteAdd = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "/note add Ask dentist for records",
+      requestJob: false
+    });
+
+    expect(noteAdd.response).toContain("Note added");
+
+    const noteList = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "/note list",
+      requestJob: false
+    });
+
+    expect(noteList.response).toContain("Ask dentist for records");
 
     const remindAt = new Date(Date.now() + 20).toISOString();
     const reminder = await service.handleInbound({

@@ -1,6 +1,7 @@
 import { InboundMessageSchema, JobCreateSchema } from "../../../packages/contracts/src";
 import { parseCommand, type ParsedCommand } from "./builtins/command_parser";
 import { ApprovalStore } from "./builtins/approval_store";
+import { NoteStore } from "./builtins/note_store";
 import { ReminderStore } from "./builtins/reminder_store";
 import { TaskStore } from "./builtins/task_store";
 import { FileBackedQueueStore } from "./local_queue_store";
@@ -13,6 +14,7 @@ export class GatewayService {
     private readonly store: FileBackedQueueStore,
     private readonly notificationStore?: OutboundNotificationStore,
     private readonly reminderStore?: ReminderStore,
+    private readonly noteStore?: NoteStore,
     private readonly taskStore?: TaskStore,
     private readonly approvalStore?: ApprovalStore
   ) {}
@@ -165,6 +167,31 @@ export class GatewayService {
 
         const task = await this.taskStore.add(sessionId, command.text);
         return `Task added (${task.id}): ${task.text}`;
+      }
+
+      case "note_add": {
+        if (!this.noteStore) {
+          return "Notes are not configured.";
+        }
+
+        const note = await this.noteStore.add(sessionId, command.text);
+        return `Note added (${note.id}): ${note.text}`;
+      }
+
+      case "note_list": {
+        if (!this.noteStore) {
+          return "Notes are not configured.";
+        }
+
+        const notes = await this.noteStore.listBySession(sessionId);
+        if (notes.length === 0) {
+          return "No saved notes.";
+        }
+
+        return `Notes:\n${notes
+          .slice(-10)
+          .map((item) => `- ${item.id}: ${item.text}`)
+          .join("\n")}`;
       }
 
       case "task_list": {

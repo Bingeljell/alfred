@@ -6,6 +6,7 @@ import { MessageDedupeStore } from "./whatsapp/dedupe_store";
 import { OutboundNotificationStore } from "./notification_store";
 import { MemoryService } from "../../../packages/memory/src";
 import { ReminderStore } from "./builtins/reminder_store";
+import { NoteStore } from "./builtins/note_store";
 import { TaskStore } from "./builtins/task_store";
 import { ApprovalStore } from "./builtins/approval_store";
 
@@ -20,6 +21,7 @@ export function createGatewayApp(
     notificationStore?: OutboundNotificationStore;
     memoryService?: MemoryService;
     reminderStore?: ReminderStore;
+    noteStore?: NoteStore;
     taskStore?: TaskStore;
     approvalStore?: ApprovalStore;
   }
@@ -29,6 +31,7 @@ export function createGatewayApp(
     store,
     options?.notificationStore,
     options?.reminderStore,
+    options?.noteStore,
     options?.taskStore,
     options?.approvalStore
   );

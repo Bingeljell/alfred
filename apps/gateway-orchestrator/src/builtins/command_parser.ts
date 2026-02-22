@@ -1,6 +1,8 @@
 export type ParsedCommand =
   | { kind: "remind_add"; remindAt: string; text: string }
   | { kind: "remind_list" }
+  | { kind: "note_add"; text: string }
+  | { kind: "note_list" }
   | { kind: "task_add"; text: string }
   | { kind: "task_list" }
   | { kind: "task_done"; id: string }
@@ -36,6 +38,17 @@ export function parseCommand(text: string): ParsedCommand | null {
     if (note) {
       return { kind: "task_add", text: note };
     }
+  }
+
+  if (value.toLowerCase().startsWith("/note add ")) {
+    const note = value.slice("/note add ".length).trim();
+    if (note) {
+      return { kind: "note_add", text: note };
+    }
+  }
+
+  if (value.toLowerCase() === "/note list") {
+    return { kind: "note_list" };
   }
 
   if (value.toLowerCase() === "/task list") {

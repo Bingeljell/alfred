@@ -7,6 +7,7 @@ import { startNotificationDispatcher } from "./notification_dispatcher";
 import { StdoutWhatsAppAdapter } from "../../../packages/provider-adapters/src";
 import { MemoryService } from "../../../packages/memory/src";
 import { ReminderStore } from "./builtins/reminder_store";
+import { NoteStore } from "./builtins/note_store";
 import { TaskStore } from "./builtins/task_store";
 import { ApprovalStore } from "./builtins/approval_store";
 import { startReminderDispatcher } from "./builtins/reminder_dispatcher";
@@ -17,6 +18,7 @@ async function main(): Promise<void> {
   const dedupeStore = new MessageDedupeStore(config.stateDir);
   const notificationStore = new OutboundNotificationStore(config.stateDir);
   const reminderStore = new ReminderStore(config.stateDir);
+  const noteStore = new NoteStore(config.stateDir);
   const taskStore = new TaskStore(config.stateDir);
   const approvalStore = new ApprovalStore(config.stateDir);
   const memoryService = new MemoryService({
@@ -28,6 +30,7 @@ async function main(): Promise<void> {
   await dedupeStore.ensureReady();
   await notificationStore.ensureReady();
   await reminderStore.ensureReady();
+  await noteStore.ensureReady();
   await taskStore.ensureReady();
   await approvalStore.ensureReady();
   await memoryService.start();
@@ -37,6 +40,7 @@ async function main(): Promise<void> {
     notificationStore,
     memoryService,
     reminderStore,
+    noteStore,
     taskStore,
     approvalStore
   });

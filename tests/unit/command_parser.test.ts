@@ -15,6 +15,14 @@ describe("parseCommand", () => {
     expect(parsed).toEqual({ kind: "job_retry", id: "abc123" });
   });
 
+  it("parses note commands", () => {
+    const add = parseCommand("/note add remember this");
+    const list = parseCommand("/note list");
+
+    expect(add).toEqual({ kind: "note_add", text: "remember this" });
+    expect(list).toEqual({ kind: "note_list" });
+  });
+
   it("returns null for unsupported input", () => {
     expect(parseCommand("hello world")).toBeNull();
   });
