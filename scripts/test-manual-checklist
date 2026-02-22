@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cat <<'CHECKLIST'
+Phase 1 Manual Checklist
+1. Start gateway: npm run dev:gateway
+2. Start worker: npm run dev:worker
+3. Submit a job:
+   curl -s -X POST http://localhost:3000/v1/jobs \
+     -H 'content-type: application/json' \
+     -d '{"type":"stub_task","payload":{"action":"manual-check"},"priority":5}'
+4. Fetch job until status is succeeded:
+   curl -s http://localhost:3000/v1/jobs/<jobId>
+5. Verify result.summary contains processed:manual-check
+CHECKLIST

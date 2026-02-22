@@ -14,3 +14,10 @@
 - **2026-02-22** > docs/progress.md > phase tracker > Added canonical progress tracking file with current phase and completion checklist template.
 - **2026-02-22** > AGENTS.md > Progress and Changelog Discipline section > Added rule to require progress + changelog updates when tasks/phases complete.
 - **2026-02-22** > Gemini.md > Progress and Changelog Discipline section > Added rule to require progress + changelog updates when tasks/phases complete.
+- **2026-02-22** > package.json, tsconfig.json, vitest.config.ts, .gitignore > project bootstrap scripts/config > Added TypeScript runtime/test tooling with build and phase test commands.
+- **2026-02-22** > apps/gateway-orchestrator/src/config.ts, apps/gateway-orchestrator/src/local_queue_store.ts, apps/gateway-orchestrator/src/gateway_service.ts, apps/gateway-orchestrator/src/app.ts, apps/gateway-orchestrator/src/server.ts > core runtime skeleton > Added config loader, file-backed queue store, gateway service, API app, and gateway startup entrypoint.
+- **2026-02-22** > apps/worker/src/worker.ts, apps/worker/src/server.ts > worker loop > Added polling worker with deterministic stub processor, cancellation handling, and process bootstrap.
+- **2026-02-22** > packages/contracts/src/job.ts, packages/contracts/src/receipt.ts, packages/contracts/src/index.ts > contracts schemas > Added initial job/message/receipt schemas and exported contract types.
+- **2026-02-22** > tests/unit/config.test.ts, tests/unit/schemas.test.ts, tests/integration/job_handoff.test.ts, tests/smoke/phase1_smoke.test.ts, tests/helpers/wait_for.ts > Phase 1 tests > Added unit/integration/smoke tests covering config, contracts, and queue handoff flow.
+- **2026-02-22** > scripts/test-unit, scripts/test-integration, scripts/test-smoke, scripts/test-security, scripts/test-manual-checklist > test runners > Added executable scripts for automated and manual phase validation.
+- **2026-02-22** > docs/progress.md > Phase 1 status > Marked Phase 1 complete and advanced current phase marker to Phase 2.

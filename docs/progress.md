@@ -2,16 +2,16 @@
 
 ## Current Phase
 
-- Phase 1: Core Runtime Skeleton
-- Status: In Progress
-- Started: 2026-02-22
+- Phase 2: WhatsApp Ingress and Async UX
+- Status: Not Started
+- Started: -
 
 ## Phase Tracker
 
 | Phase | Name | Status | Started | Completed | Notes |
 |---|---|---|---|---|---|
 | 0 | Governance and Planning Baseline | Done | 2026-02-22 | 2026-02-22 | Repo and documentation bootstrap complete. |
-| 1 | Core Runtime Skeleton | In Progress | 2026-02-22 | - | Gateway + worker + contracts + tests in progress. |
+| 1 | Core Runtime Skeleton | Done | 2026-02-22 | 2026-02-22 | Gateway/worker runtime, file-backed queue, contracts, and test suite completed. |
 | 2 | WhatsApp Ingress and Async UX | Not Started | - | - | Baileys integration and async UX updates. |
 | 3 | Memory v1 | Not Started | - | - | Markdown canonical memory + SQLite index. |
 | 4 | External Skill Integration Contract | Not Started | - | - | Allowlisted external skill install and invocation contract. |
