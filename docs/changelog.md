@@ -48,3 +48,4 @@
 - **2026-02-22** > apps/gateway-orchestrator/src/builtins/note_store.ts, apps/gateway-orchestrator/src/builtins/command_parser.ts > notes capability > Added file-backed notes store and `/note add`/`/note list` command parsing.
 - **2026-02-22** > apps/gateway-orchestrator/src/gateway_service.ts, apps/gateway-orchestrator/src/app.ts, apps/gateway-orchestrator/src/server.ts > notes runtime wiring > Added note command handling and note store wiring in gateway/app/server composition.
 - **2026-02-22** > tests/unit/command_parser.test.ts, tests/unit/note_store.test.ts, tests/integration/reminders_and_commands.test.ts, tests/smoke/phase5_smoke.test.ts > notes test coverage > Added/expanded unit, integration, and smoke tests for note command flows.
+- **2026-02-22** > scripts/test-manual-checklist, docs/progress.md > phase 5 docs refinement > Added manual note-validation steps and updated Phase 5 summary to explicitly include notes.

@@ -54,9 +54,12 @@ Phase 5 Manual Checklist
    curl -s -X POST http://localhost:3000/v1/messages/inbound \
      -H 'content-type: application/json' \
      -d '{"sessionId":"owner@s.whatsapp.net","text":"/remind 2026-02-23T09:00:00Z standup","requestJob":false}'
-4. Confirm approval gate:
+4. Add and list notes:
+   - send `/note add Bring medical records`
+   - send `/note list` and verify note appears
+5. Confirm approval gate:
    send `send <text>` then `approve <token>` and verify approved execution response.
-5. Fail and retry a job:
+6. Fail and retry a job:
    - submit failing job fixture
    - run `/job retry <jobId>`
    - confirm new job is queued and completes.
