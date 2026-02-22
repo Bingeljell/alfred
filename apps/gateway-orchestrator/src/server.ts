@@ -6,12 +6,19 @@ import { OutboundNotificationStore } from "./notification_store";
 import { startNotificationDispatcher } from "./notification_dispatcher";
 import { StdoutWhatsAppAdapter } from "../../../packages/provider-adapters/src";
 import { MemoryService } from "../../../packages/memory/src";
+import { ReminderStore } from "./builtins/reminder_store";
+import { TaskStore } from "./builtins/task_store";
+import { ApprovalStore } from "./builtins/approval_store";
+import { startReminderDispatcher } from "./builtins/reminder_dispatcher";
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const store = new FileBackedQueueStore(config.stateDir);
   const dedupeStore = new MessageDedupeStore(config.stateDir);
   const notificationStore = new OutboundNotificationStore(config.stateDir);
+  const reminderStore = new ReminderStore(config.stateDir);
+  const taskStore = new TaskStore(config.stateDir);
+  const approvalStore = new ApprovalStore(config.stateDir);
   const memoryService = new MemoryService({
     rootDir: process.cwd(),
     stateDir: config.stateDir
@@ -20,14 +27,29 @@ async function main(): Promise<void> {
   await store.ensureReady();
   await dedupeStore.ensureReady();
   await notificationStore.ensureReady();
+  await reminderStore.ensureReady();
+  await taskStore.ensureReady();
+  await approvalStore.ensureReady();
   await memoryService.start();
 
-  const app = createGatewayApp(store, { dedupeStore, notificationStore, memoryService });
+  const app = createGatewayApp(store, {
+    dedupeStore,
+    notificationStore,
+    memoryService,
+    reminderStore,
+    taskStore,
+    approvalStore
+  });
   const adapter = new StdoutWhatsAppAdapter();
   const dispatcher = startNotificationDispatcher({
     store: notificationStore,
     adapter,
     pollIntervalMs: config.notificationPollMs
+  });
+  const reminderDispatcher = startReminderDispatcher({
+    reminderStore,
+    notificationStore,
+    pollIntervalMs: config.reminderPollMs
   });
 
   const server = app.listen(config.port, () => {
@@ -37,6 +59,7 @@ async function main(): Promise<void> {
 
   const shutdown = async () => {
     await dispatcher.stop();
+    await reminderDispatcher.stop();
     await memoryService.stop();
     server.close();
     process.exit(0);

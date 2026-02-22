@@ -53,6 +53,40 @@ export class FileBackedQueueStore {
     return job;
   }
 
+  async retryJob(jobId: string): Promise<Job | null> {
+    const original = await this.getJob(jobId);
+    if (!original) {
+      return null;
+    }
+
+    if (!["failed", "cancelled"].includes(original.status)) {
+      return null;
+    }
+
+    const now = new Date().toISOString();
+    const retried: Job = {
+      id: randomUUID(),
+      type: original.type,
+      payload: original.payload,
+      priority: original.priority,
+      status: "queued",
+      createdAt: now,
+      updatedAt: now,
+      requestedSkill: original.requestedSkill,
+      retryOf: original.id
+    };
+
+    await this.writeJob(retried);
+    await this.appendEvent({
+      jobId: retried.id,
+      at: now,
+      step: "job.queued",
+      detail: `retryOf=${original.id}`
+    });
+
+    return retried;
+  }
+
   async getJob(jobId: string): Promise<Job | null> {
     await this.ensureReady();
 

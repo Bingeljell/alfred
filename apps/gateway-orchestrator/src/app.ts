@@ -5,6 +5,9 @@ import { GatewayService } from "./gateway_service";
 import { MessageDedupeStore } from "./whatsapp/dedupe_store";
 import { OutboundNotificationStore } from "./notification_store";
 import { MemoryService } from "../../../packages/memory/src";
+import { ReminderStore } from "./builtins/reminder_store";
+import { TaskStore } from "./builtins/task_store";
+import { ApprovalStore } from "./builtins/approval_store";
 
 const CancelParamsSchema = z.object({
   jobId: z.string().min(1)
@@ -16,10 +19,19 @@ export function createGatewayApp(
     dedupeStore?: MessageDedupeStore;
     notificationStore?: OutboundNotificationStore;
     memoryService?: MemoryService;
+    reminderStore?: ReminderStore;
+    taskStore?: TaskStore;
+    approvalStore?: ApprovalStore;
   }
 ) {
   const app = express();
-  const service = new GatewayService(store, options?.notificationStore);
+  const service = new GatewayService(
+    store,
+    options?.notificationStore,
+    options?.reminderStore,
+    options?.taskStore,
+    options?.approvalStore
+  );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;
   void dedupeStore.ensureReady();
@@ -82,6 +94,20 @@ export function createGatewayApp(
       res.status(200).json({ jobId: job.id, status: job.status });
     } catch (error) {
       res.status(400).json({ error: "invalid_cancel_request", detail: String(error) });
+    }
+  });
+
+  app.post("/v1/jobs/:jobId/retry", async (req, res) => {
+    try {
+      const params = CancelParamsSchema.parse(req.params);
+      const job = await service.retryJob(params.jobId);
+      if (!job) {
+        res.status(409).json({ error: "job_retry_unavailable" });
+        return;
+      }
+      res.status(202).json({ jobId: job.id, status: job.status, retryOf: params.jobId });
+    } catch (error) {
+      res.status(400).json({ error: "invalid_retry_request", detail: String(error) });
     }
   });
 

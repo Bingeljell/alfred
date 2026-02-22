@@ -29,6 +29,7 @@ export const JobSchema = z.object({
   startedAt: z.string().optional(),
   endedAt: z.string().optional(),
   requestedSkill: z.string().optional(),
+  retryOf: z.string().optional(),
   workerId: z.string().optional(),
   result: z.record(z.string(), z.unknown()).optional(),
   error: z

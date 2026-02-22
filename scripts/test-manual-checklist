@@ -40,4 +40,24 @@ Phase 4 Manual Checklist
 3. Run skill using `SkillRunner` with input payload and workspace dir.
 4. Verify success output contract (`output.json`) and structured failure contract (`error.json`).
 5. Confirm non-allowlisted repos and wildcard network manifests are blocked.
+
+Phase 5 Manual Checklist
+1. Add task:
+   curl -s -X POST http://localhost:3000/v1/messages/inbound \
+     -H 'content-type: application/json' \
+     -d '{"sessionId":"owner@s.whatsapp.net","text":"/task add call accountant","requestJob":false}'
+2. List tasks:
+   curl -s -X POST http://localhost:3000/v1/messages/inbound \
+     -H 'content-type: application/json' \
+     -d '{"sessionId":"owner@s.whatsapp.net","text":"/task list","requestJob":false}'
+3. Create reminder:
+   curl -s -X POST http://localhost:3000/v1/messages/inbound \
+     -H 'content-type: application/json' \
+     -d '{"sessionId":"owner@s.whatsapp.net","text":"/remind 2026-02-23T09:00:00Z standup","requestJob":false}'
+4. Confirm approval gate:
+   send `send <text>` then `approve <token>` and verify approved execution response.
+5. Fail and retry a job:
+   - submit failing job fixture
+   - run `/job retry <jobId>`
+   - confirm new job is queued and completes.
 CHECKLIST
