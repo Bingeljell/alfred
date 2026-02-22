@@ -2,9 +2,9 @@
 
 ## Current Phase
 
-- Phase 3: Memory v1
-- Status: In Progress
-- Started: 2026-02-22
+- Phase 4: External Skill Integration Contract
+- Status: Not Started
+- Started: -
 
 ## Phase Tracker
 
@@ -13,7 +13,7 @@
 | 0 | Governance and Planning Baseline | Done | 2026-02-22 | 2026-02-22 | Repo and documentation bootstrap complete. |
 | 1 | Core Runtime Skeleton | Done | 2026-02-22 | 2026-02-22 | Gateway/worker runtime, file-backed queue, contracts, and test suite completed. |
 | 2 | WhatsApp Ingress and Async UX | Done | 2026-02-22 | 2026-02-22 | Baileys payload normalization, dedupe, async status notifications, and phase tests completed. |
-| 3 | Memory v1 | In Progress | 2026-02-22 | - | Markdown canonical memory + SQLite index. |
+| 3 | Memory v1 | Done | 2026-02-22 | 2026-02-22 | Markdown canonical memory, SQLite FTS index, retrieval APIs, and evaluation smoke tests completed. |
 | 4 | External Skill Integration Contract | Not Started | - | - | Allowlisted external skill install and invocation contract. |
 | 5 | Built-in Reminders and Notes + Job Controls | Not Started | - | - | Reminder/task workflows with status/cancel/retry controls. |
 | 6 | MVP Hardening for Low-cost Host | Not Started | - | - | Retention, backup reminders, CI, performance tuning. |

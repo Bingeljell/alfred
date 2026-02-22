@@ -4,6 +4,7 @@ import { FileBackedQueueStore } from "./local_queue_store";
 import { GatewayService } from "./gateway_service";
 import { MessageDedupeStore } from "./whatsapp/dedupe_store";
 import { OutboundNotificationStore } from "./notification_store";
+import { MemoryService } from "../../../packages/memory/src";
 
 const CancelParamsSchema = z.object({
   jobId: z.string().min(1)
@@ -14,11 +15,13 @@ export function createGatewayApp(
   options?: {
     dedupeStore?: MessageDedupeStore;
     notificationStore?: OutboundNotificationStore;
+    memoryService?: MemoryService;
   }
 ) {
   const app = express();
   const service = new GatewayService(store, options?.notificationStore);
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
+  const memoryService = options?.memoryService;
   void dedupeStore.ensureReady();
   app.use(express.json());
 
@@ -80,6 +83,73 @@ export function createGatewayApp(
     } catch (error) {
       res.status(400).json({ error: "invalid_cancel_request", detail: String(error) });
     }
+  });
+
+  app.get("/v1/memory/status", (_req, res) => {
+    if (!memoryService) {
+      res.status(404).json({ error: "memory_not_configured" });
+      return;
+    }
+
+    res.status(200).json(memoryService.memoryStatus());
+  });
+
+  app.post("/v1/memory/sync", async (_req, res) => {
+    if (!memoryService) {
+      res.status(404).json({ error: "memory_not_configured" });
+      return;
+    }
+
+    await memoryService.syncMemory("manual_api");
+    res.status(200).json({ synced: true, status: memoryService.memoryStatus() });
+  });
+
+  app.get("/v1/memory/search", async (req, res) => {
+    if (!memoryService) {
+      res.status(404).json({ error: "memory_not_configured" });
+      return;
+    }
+
+    const query = typeof req.query.q === "string" ? req.query.q : "";
+    const maxResults = typeof req.query.maxResults === "string" ? Number(req.query.maxResults) : undefined;
+    const minScore = typeof req.query.minScore === "string" ? Number(req.query.minScore) : undefined;
+
+    const results = await memoryService.searchMemory(query, { maxResults, minScore });
+    res.status(200).json({ results });
+  });
+
+  app.get("/v1/memory/snippet", async (req, res) => {
+    if (!memoryService) {
+      res.status(404).json({ error: "memory_not_configured" });
+      return;
+    }
+
+    const filePath = typeof req.query.path === "string" ? req.query.path : "";
+    const from = typeof req.query.from === "string" ? Number(req.query.from) : undefined;
+    const lines = typeof req.query.lines === "string" ? Number(req.query.lines) : undefined;
+
+    try {
+      const snippet = await memoryService.getMemorySnippet(filePath, from, lines);
+      res.status(200).json({ snippet });
+    } catch (error) {
+      res.status(400).json({ error: "invalid_snippet_request", detail: String(error) });
+    }
+  });
+
+  app.post("/v1/memory/notes", async (req, res) => {
+    if (!memoryService) {
+      res.status(404).json({ error: "memory_not_configured" });
+      return;
+    }
+
+    if (!req.body || typeof req.body.text !== "string" || req.body.text.trim().length === 0) {
+      res.status(400).json({ error: "invalid_note_payload" });
+      return;
+    }
+
+    const date = typeof req.body.date === "string" ? req.body.date : undefined;
+    const written = await memoryService.appendMemoryNote(req.body.text, date);
+    res.status(201).json(written);
   });
 
   return app;

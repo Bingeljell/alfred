@@ -11,4 +11,26 @@ Phase 1 Manual Checklist
 4. Fetch job until status is succeeded:
    curl -s http://localhost:3000/v1/jobs/<jobId>
 5. Verify result.summary contains processed:manual-check
+
+Phase 2 Manual Checklist
+1. Post Baileys-style inbound async job:
+   curl -s -X POST http://localhost:3000/v1/whatsapp/baileys/inbound \
+     -H 'content-type: application/json' \
+     -d '{"key":{"id":"manual-1","remoteJid":"owner@s.whatsapp.net"},"message":{"conversation":"/job run phase2"}}'
+2. Send normal chat while job is running:
+   curl -s -X POST http://localhost:3000/v1/messages/inbound \
+     -H 'content-type: application/json' \
+     -d '{"sessionId":"owner@s.whatsapp.net","text":"are you still there?","requestJob":false}'
+3. Verify chat response is immediate and job state eventually succeeds.
+
+Phase 3 Manual Checklist
+1. Add a memory note:
+   curl -s -X POST http://localhost:3000/v1/memory/notes \
+     -H 'content-type: application/json' \
+     -d '{"text":"We chose Baileys and TypeScript for v1."}'
+2. Sync memory:
+   curl -s -X POST http://localhost:3000/v1/memory/sync
+3. Search memory:
+   curl -s "http://localhost:3000/v1/memory/search?q=what+did+we+choose+for+v1"
+4. Confirm results include source citations (`path:start:end`).
 CHECKLIST
