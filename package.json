@@ -5,10 +5,11 @@
   "description": "WhatsApp-first personal agent core runtime",
   "scripts": {
     "build": "tsc --noEmit",
-    "test": "npm run test:unit && npm run test:integration && npm run test:smoke",
+    "test": "npm run test:unit && npm run test:integration && npm run test:smoke && npm run test:security",
     "test:unit": "vitest run tests/unit --reporter=dot",
     "test:integration": "vitest run tests/integration --reporter=dot",
     "test:smoke": "vitest run tests/smoke --reporter=dot",
+    "test:security": "vitest run tests/security --reporter=dot",
     "dev:gateway": "tsx apps/gateway-orchestrator/src/server.ts",
     "dev:worker": "tsx apps/worker/src/server.ts"
   },

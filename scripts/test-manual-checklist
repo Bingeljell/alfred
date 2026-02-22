@@ -33,4 +33,11 @@ Phase 3 Manual Checklist
 3. Search memory:
    curl -s "http://localhost:3000/v1/memory/search?q=what+did+we+choose+for+v1"
 4. Confirm results include source citations (`path:start:end`).
+
+Phase 4 Manual Checklist
+1. Prepare a local/allowlisted skill repo with `skill.json` and runnable entrypoint.
+2. Install skill using `SkillInstaller` (dev script/REPL path) pinned to commit SHA.
+3. Run skill using `SkillRunner` with input payload and workspace dir.
+4. Verify success output contract (`output.json`) and structured failure contract (`error.json`).
+5. Confirm non-allowlisted repos and wildcard network manifests are blocked.
 CHECKLIST
