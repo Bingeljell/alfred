@@ -1,18 +1,48 @@
 # Detailed Project Plan
 
-## 1) Objective
+## Objective
 
-Build a WhatsApp-first personal agent platform with secure, permissioned skills, auditable execution receipts, and phased delivery where every phase is testable manually and automatically.
+Build a WhatsApp-first personal agent that runs on a single self-hosted machine (local dev, then low-cost VM/edge), executes real tasks through external skills, and provides auditable, secure behavior.
 
-## 2) Scope Principles
+## Architectural Decisions (Locked)
 
-- Keep the orchestrator minimal and stable.
-- Expose typed tools only through skills.
-- Enforce least privilege by default.
-- Make each phase independently shippable and testable.
-- Prefer reversible changes and small commits.
+- Runtime: TypeScript/Node for v1, Go review in v2/v3.
+- WhatsApp connector: Baileys direct.
+- Topology: same-machine persistent gateway + worker process.
+- Execution lanes:
+  - chat lane: per-user serialized turns
+  - job lane: async queued jobs for long-running work
+- Concurrency:
+  - per-user serial chat
+  - per-skill caps
+  - video jobs: 1 job per worker
+- Skills:
+  - core repo is integration-only (no in-repo skill implementation)
+  - install from allowlisted git repos pinned to commit SHA
+  - manual approval for skill updates
+  - initial external target: `Bingeljell/videoclipper`
+- Security:
+  - network default deny for skill runs with explicit allowlist
+  - side-effect actions require confirmation
+  - transient retries: one automatic retry
+  - cancel: best-effort terminate + partial-output status
+- Data model:
+  - memory canonical truth: markdown files
+  - memory retrieval index: SQLite + FTS5 + embeddings
+  - operational state: file-first append log with locking and compaction
+- LLM auth:
+  - OAuth-first
+  - fallback prompt for API key if entitlement is unavailable
+- Artifacts/logs:
+  - local disk artifacts (7-day retention)
+  - logs (14-day retention)
+  - no public download links in v1
+  - oversize output returns structured failure with guidance
+- Built-in capabilities in v1: reminders + simple notes/tasks.
+- Testing: Vitest + Supertest, phase completion requires automated tests + manual checklist.
+- Performance target on low-cost host: text response P95 < 3s.
 
-## 3) Proposed Repository Structure
+## Repository Structure (Planned)
 
 ```text
 .
@@ -22,245 +52,129 @@ Build a WhatsApp-first personal agent platform with secure, permissioned skills,
 │   ├── Personal_Agent_starter.md
 │   ├── detailed_project_plan.md
 │   ├── features.md
+│   ├── progress.md
 │   ├── changelog.md
 │   └── git_workflow.md
 ├── apps/
-│   ├── orchestrator/           # API/webhooks, routing, policy checks
-│   ├── worker/                 # job execution and queues
-│   └── cli/                    # local dev/manual test entrypoints
+│   ├── gateway-orchestrator/
+│   └── worker/
 ├── packages/
-│   ├── contracts/              # schemas: skill manifest, receipts, events
-│   ├── policy-engine/          # permission and risk policy evaluation
-│   ├── memory/                 # memory read/write and summarization
-│   └── provider-adapters/      # LLM provider abstractions
-├── skills/
-│   ├── writing/                # low-risk starter skill
-│   └── video-compress/         # deterministic media processing skill
+│   ├── contracts/
+│   ├── memory/
+│   ├── policy-engine/
+│   ├── provider-adapters/
+│   └── skill-runner/
 ├── scripts/
 │   ├── committer
-│   ├── test-unit               # run all unit tests
-│   ├── test-integration        # run integration suite
-│   ├── test-smoke              # fast end-to-end local smoke tests
-│   └── test-manual-checklist   # prints phase-wise manual checklist
-└── testdata/
-    ├── fixtures/
-    └── media-samples/
+│   ├── test-unit
+│   ├── test-integration
+│   ├── test-smoke
+│   ├── test-security
+│   └── test-manual-checklist
+├── memory/
+├── state/
+└── artifacts/
 ```
 
-Notes:
-- `apps/`, `packages/`, and `skills/` are planned; they are created phase-wise.
-- Script names are targets to introduce once runtime/language choice is finalized.
-
-## 4) Phase Plan (Builds on Previous Phases)
+## Phase Plan
 
 ## Phase 0: Governance and Planning Baseline (Done)
 
 Deliverables:
-- Repository bootstrap, branching/commit workflow, changelog format.
-- Initial architecture and product docs.
+- Repo workflow, changelog standards, initial architecture docs.
 
-Testability:
-- Automated: script syntax checks where available.
-- Manual: verify repo can commit and push via `scripts/committer`.
+Validation:
+- Commit workflow and documentation structure verified.
 
-Exit criteria:
-- Feature branch exists, remote tracking enabled, docs baselined.
-
-## Phase 1: Core Runtime Skeleton
+## Phase 1: Core Runtime Skeleton (Next)
 
 Deliverables:
-- `apps/orchestrator` skeleton with health endpoint and config loader.
-- `apps/worker` skeleton with queue consumer loop.
-- `packages/contracts` initial event/job schema definitions.
+- `apps/gateway-orchestrator` with health endpoint and local queue integration.
+- `apps/worker` with queue consumer loop and deterministic stub processing.
+- `packages/contracts` with initial message/job/receipt schemas.
+- Test scaffolding and phase test scripts.
 
 Automated tests:
-- Unit: config validation, schema validation.
-- Integration: orchestrator-to-worker job handoff using local queue.
-- Smoke: boot orchestrator and worker, submit one sample job.
+- Unit: config and schema validation.
+- Integration: orchestrator to worker job handoff via local queue.
+- Smoke: boot components and complete one deterministic stub job.
 
-Manual test:
-1. Start orchestrator and worker locally.
-2. Send a local CLI/API request.
-3. Confirm queued job appears and completes with a stub output.
+Manual checklist:
+1. Start gateway and worker locally.
+2. Submit job request.
+3. Verify completion and receipt output.
 
-Exit criteria:
-- One end-to-end stub flow works locally with deterministic result.
+Definition of done:
+- Deterministic end-to-end stub flow passes automated and manual checks.
 
-## Phase 2: WhatsApp Ingress and Artifact Intake
+## Phase 2: WhatsApp Ingress and Async UX
 
 Deliverables:
-- Webhook endpoint for inbound messages/media metadata.
-- Artifact intake service storing raw files and metadata.
-- Idempotent retry handling for repeated webhook deliveries.
+- Baileys ingress and outbound messaging.
+- Deduped inbound normalization.
+- Async status updates while chat lane remains responsive.
 
-Automated tests:
-- Unit: webhook signature validation and dedupe logic.
-- Integration: webhook payload -> persisted job -> artifact record.
-- Contract: inbound message schema fixtures.
+Definition of done:
+- Real/sandbox messages can trigger jobs without blocking chat.
 
-Manual test:
-1. Use provider sandbox webhook/test payload.
-2. Trigger inbound message with text and media.
-3. Verify artifact is stored and a job is queued.
-
-Exit criteria:
-- Real webhook payload can produce a queued job and traceable artifact.
-
-## Phase 3: Skill Contract and Local Sandbox Runner
+## Phase 3: Memory v1
 
 Deliverables:
-- `packages/contracts`: `skill.yaml` schema (inputs, outputs, permissions).
-- Runner interface with ephemeral per-job workspace.
-- Permission policy checks: filesystem scope, timeout, network deny default.
+- Markdown canonical memory store.
+- SQLite chunk index with embeddings + FTS5.
+- `searchMemory`, `getMemorySnippet`, `appendMemoryNote`, `syncMemory`, `memoryStatus`.
+- Citation-first recall policy.
 
-Automated tests:
-- Unit: permission evaluator and manifest validation.
-- Integration: run sample skill with allowed and denied permissions.
-- Security regression: ensure blocked network/file operations fail closed.
+Defaults:
+- Chunking: ~500 tokens with 80 overlap.
+- Hybrid ranking: 70% vector / 30% keyword.
+- Prompt memory budget: max 3 snippets or ~900 tokens.
+- Sync triggers: startup, dirty-on-search, debounce watch, hourly tick, manual sync.
 
-Manual test:
-1. Execute `writing` sample skill on a local job.
-2. Execute `video-compress` sample skill on sample media.
-3. Attempt disallowed operation and verify explicit denial in receipt/log.
+Definition of done:
+- Top-5 retrieval contains correct snippet >= 80% on project-doc eval set.
 
-Exit criteria:
-- At least two skills execute with policy enforcement and predictable outputs.
-
-## Phase 4: Master Router and Sub-Agent Profiles
+## Phase 4: External Skill Integration Contract
 
 Deliverables:
-- Router selecting sub-agent profile and skills by intent/risk.
-- `SOUL.md` + hard policy split (`POLICY.md`) for sub-agents.
-- Deterministic fallback route for ambiguous requests.
+- Allowlisted repo install with commit SHA pinning.
+- CLI skill invocation contract.
+- Structured error contract and policy enforcement.
 
-Automated tests:
-- Unit: routing rules and risk scoring.
-- Integration: inbound request -> selected profile -> required skill chain.
+Definition of done:
+- External skill can be installed, invoked, and audited without adding skill code to this repo.
 
-Manual test:
-1. Submit three intents (writing, video, unsupported).
-2. Validate route selection and fallback messaging.
-3. Confirm policies cannot be elevated by persona config.
-
-Exit criteria:
-- Router is stable with test fixtures and explicit fallback behavior.
-
-## Phase 5: Receipts and Audit Trail
+## Phase 5: Built-in Reminders and Notes + Job Controls
 
 Deliverables:
-- Receipt schema and persistence (`job_id`, skill digest, actions, artifacts, cost).
-- User-facing summary formatter for WhatsApp responses.
-- Audit query endpoint/CLI for debugging.
+- Reminders and note/task primitives.
+- Job status/cancel/retry in natural language.
+- Side-effect approval gates.
 
-Automated tests:
-- Unit: receipt serialization and summary rendering.
-- Integration: full job execution produces complete receipt.
-- Regression: required receipt fields always present.
+Definition of done:
+- Daily-use flows work with receipts and policy traceability.
 
-Manual test:
-1. Run one writing and one video flow.
-2. Inspect stored receipts.
-3. Confirm chat-visible summary is concise and accurate.
-
-Exit criteria:
-- Every job returns receipt metadata and stored detailed logs.
-
-## Phase 6: Memory Service (Markdown-first)
+## Phase 6: MVP Hardening for Low-cost Host
 
 Deliverables:
-- Daily/weekly/profile memory writers.
-- Memory retrieval API used by router/skills.
-- Redaction rules for sensitive memory updates.
+- Retention workers (artifacts/logs).
+- Backup reminder using `last_backup_at` memory signal.
+- Minimal CI and release checklist.
 
-Automated tests:
-- Unit: memory extraction/summarization logic.
-- Integration: interaction events -> markdown files + retrieval query.
+Definition of done:
+- Stable long-running behavior on single-host setup with performance target met.
 
-Manual test:
-1. Simulate multiple interactions.
-2. Verify `memory/YYYY-MM-DD.md`, weekly summary, and profile updates.
-3. Confirm retrieval returns relevant snippets.
+## Deferred (v2/v3)
 
-Exit criteria:
-- Memory is persisted and retrievable without vector database dependency.
+- Public artifact links and object storage.
+- Container/hardened sandbox upgrades (Docker/gVisor).
+- Multi-user tenancy.
+- Self-healing/self-building via PR-only flow with plain-language approval UI and canary rollback.
+- Expanded skill packaging via npm/npx/brew and richer registry workflows.
 
-## Phase 7: Human Gates and High-Risk Controls
+## Phase Completion Rule
 
-Deliverables:
-- Explicit confirmation workflows for high-risk actions.
-- Approval token lifecycle and timeout behavior.
-- Browser automation skill gating model (read-only vs interactive).
-
-Automated tests:
-- Unit: gating policy transitions.
-- Integration: risky action blocked until explicit confirmation.
-- Security: replay/expired approvals rejected.
-
-Manual test:
-1. Trigger a high-risk flow.
-2. Confirm agent asks for approval and blocks execution.
-3. Approve and verify resumed execution with audit event.
-
-Exit criteria:
-- High-risk capabilities cannot execute without user approval.
-
-## Phase 8: MVP Hardening and Release Candidate
-
-Deliverables:
-- Reliability tuning, observability dashboards/logging, deployment baseline.
-- Backup/restore for artifacts and receipts.
-- Developer documentation for adding new skills.
-
-Automated tests:
-- Load smoke tests on queue/worker path.
-- End-to-end regression suite across core flows.
-- Backup/restore and migration checks.
-
-Manual test:
-1. Run complete scenario matrix (writing/video/business-op skeleton).
-2. Validate failure/retry behavior.
-3. Verify rollback plan and release checklist.
-
-Exit criteria:
-- MVP can run reliably for daily personal usage with auditable behavior.
-
-## 5) Test Plan and Script Roadmap
-
-## Planned Test Types
-
-- Unit tests: pure logic (routing, policy checks, schema validation).
-- Integration tests: service boundaries (webhook -> queue -> worker -> receipt).
-- End-to-end smoke tests: happy paths for key user jobs.
-- Security regression tests: deny-by-default and permission boundary checks.
-- Manual test scripts/checklists: reproducible local verification steps.
-
-## Planned Scripts (to introduce when code lands)
-
-- `scripts/test-unit`
-- `scripts/test-integration`
-- `scripts/test-smoke`
-- `scripts/test-security`
-- `scripts/test-manual-checklist`
-
-Each script should:
-- fail fast on error code,
-- print deterministic pass/fail summary,
-- be callable in local dev and CI.
-
-## 6) Phase-by-Phase Manual Testing Strategy
-
-- Keep one minimal manual scenario per phase in runnable form.
-- Use deterministic fixtures (`testdata/`) to avoid flaky validation.
-- Store expected outputs where possible (golden outputs).
-- For each phase completion, document:
-  - command(s) executed,
-  - expected result,
-  - actual result.
-
-## 7) Open Decisions Required Before Phase 1 Coding
-
-1. Runtime stack preference (TypeScript vs Python) for orchestrator/worker.
-2. Queue choice (Redis/BullMQ vs Temporal or equivalent).
-3. Initial WhatsApp provider (Meta Cloud API vs Twilio).
-4. Sandbox baseline (container-only vs container+gVisor).
-5. Artifact store baseline (local FS vs S3-compatible store).
+For every completed task/phase:
+- update `docs/progress.md`
+- add corresponding `docs/changelog.md` entry in the same commit
+- record automated test results and manual checklist outcome

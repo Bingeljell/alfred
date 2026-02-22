@@ -9,3 +9,8 @@
 - **2026-02-22** > docs/features.md > MVP and post-MVP features > Added key feature set with acceptance criteria and test approach per feature.
 - **2026-02-22** > docs/changelog.md > changelog entries > Corrected legacy entry format and logged new planning/documentation updates.
 - **2026-02-22** > AGENTS.md, Gemini.md > Repo Guidelines updates > Reloaded and committed updated agent instruction files with clarified architect/clarification-first guidance.
+- **2026-02-22** > docs/detailed_project_plan.md > architecture and phase definitions > Replaced draft plan with locked decisions, phase exit criteria, and completion rule for progress/changelog updates.
+- **2026-02-22** > docs/features.md > MVP and deferred scope > Aligned features to locked runtime, memory, external skill integration, and security model.
+- **2026-02-22** > docs/progress.md > phase tracker > Added canonical progress tracking file with current phase and completion checklist template.
+- **2026-02-22** > AGENTS.md > Progress and Changelog Discipline section > Added rule to require progress + changelog updates when tasks/phases complete.
+- **2026-02-22** > Gemini.md > Progress and Changelog Discipline section > Added rule to require progress + changelog updates when tasks/phases complete.

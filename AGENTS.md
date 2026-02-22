@@ -34,3 +34,8 @@
     - at least one automated test, or
     - a documented defer reason with the next phase where tests will be added
   - Prefer reproducible script-based test commands under `scripts/` when introducing new test flows.
+
+## Progress and Changelog Discipline
+  - When any planned task or phase is completed, update `docs/progress.md` in the same commit.
+  - Add a corresponding entry in `docs/changelog.md` in the same commit for every completed task or phase checkpoint.
+  - Do not mark a task complete without both progress and changelog updates.

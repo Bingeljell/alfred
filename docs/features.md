@@ -2,114 +2,105 @@
 
 ## Product Goal
 
-Deliver a WhatsApp-first personal agent that executes practical tasks through secure, installable skills with full auditability.
+Deliver a WhatsApp-first self-hosted personal agent that can complete practical tasks safely, with auditable execution and strong memory recall.
 
-## MVP Features (Must Build)
+## MVP Features (v1)
 
-## 1) WhatsApp Task Ingress
-
-Description:
-- Receive user text/media requests from WhatsApp and normalize into internal jobs.
-
-Acceptance criteria:
-- Inbound message creates a job with user/session context.
-- Media references are persisted as artifacts.
-- Duplicate webhooks are safely deduplicated.
-
-Testing:
-- Automated: webhook schema + dedupe integration tests.
-- Manual: send test webhook payload and verify job/artifact records.
-
-## 2) Master Dispatch + Specialist Routing
+## 1) Persistent Gateway + Conversational Orchestration
 
 Description:
-- Route each request to the right sub-agent profile and skill chain.
+- Always-on gateway process handles inbound/outbound chat and routes requests.
 
 Acceptance criteria:
-- Intent-to-route mapping is deterministic for known intents.
-- Unsupported/ambiguous requests trigger explicit fallback response.
-- Personality instructions cannot override hard policy.
+- Gateway stays responsive for normal chat turns.
+- Chat lane is serialized per user for deterministic context.
+- Health endpoint reports service status.
 
 Testing:
-- Automated: routing fixtures and risk-scoring unit tests.
-- Manual: run sample writing/video/unsupported tasks and inspect route decisions.
+- Automated: lane routing and config tests.
+- Manual: send multiple sequential prompts and verify deterministic responses.
 
-## 3) Skill Contract + Execution Runtime
+## 2) Async Job Lane for Long-running Tasks
 
 Description:
-- Skills are installed capabilities with typed inputs/outputs and explicit permissions.
+- Long jobs execute asynchronously in worker process while chat remains usable.
 
 Acceptance criteria:
-- Skill manifests validate against schema.
-- Skills run in isolated per-job workspace.
-- Denied permissions fail closed with clear error reporting.
+- Jobs return ticket IDs and support status/cancel/retry.
+- Worker can process queued jobs with deterministic completion states.
+- Chat remains available while job is running.
 
 Testing:
-- Automated: manifest validation, permission enforcement, runtime integration tests.
-- Manual: run approved skill actions and one denied action.
+- Automated: queue handoff integration test.
+- Manual: submit job, keep chatting, observe status updates.
 
-## 4) Receipts and Audit Logs
+## 3) External Skill Integration Contract (No In-repo Skills)
 
 Description:
-- Every job emits structured, queryable receipts.
+- Core system integrates external skills from allowlisted git repos pinned to commit SHA.
 
 Acceptance criteria:
-- Receipt includes job id, selected agent/skills, artifacts, policy decisions, timings.
-- Chat-visible summary is returned to user.
-- Full logs are retrievable for debugging.
+- Skill install metadata stores source + pinned revision.
+- Invocation uses typed JSON I/O contract.
+- Structured errors are captured in receipts.
 
 Testing:
-- Automated: receipt contract and completeness tests.
-- Manual: execute jobs and inspect stored receipts/logs.
+- Automated: manifest and invocation contract tests.
+- Manual: register external skill and run contract validation.
 
-## 5) Memory (Markdown-first)
+## 4) Receipts and Auditability
 
 Description:
-- Persist daily/weekly summaries and profile facts for recall.
+- Every job emits machine-readable and user-visible receipt data.
 
 Acceptance criteria:
-- Interaction events produce daily and weekly summaries.
-- Profile facts can be updated and queried.
-- Sensitive updates can be gated.
+- Receipt includes route, actions, artifacts, policy decisions, timings, status.
+- User receives concise final outcome summary.
+- Logs are retained and queryable locally for debugging.
 
 Testing:
-- Automated: memory write/read and summarization tests.
-- Manual: run multi-interaction scenario and verify markdown outputs.
+- Automated: receipt field completeness tests.
+- Manual: inspect receipt after success/failure/cancel scenarios.
 
-## 6) Human Approval Gates for High-Risk Actions
+## 5) Memory v1 (Markdown + SQLite Index)
 
 Description:
-- Require explicit user confirmation before risky operations.
+- Markdown memory files remain source of truth; SQLite index enables fast recall.
 
 Acceptance criteria:
-- High-risk action pauses and requests confirmation.
-- Approval/resume workflow is auditable.
-- Expired/replayed approvals are rejected.
+- Search returns snippet + source file/line citations.
+- Hybrid retrieval uses vector + keyword ranking.
+- Manual notes and confirmed durable facts append without overwrite.
 
 Testing:
-- Automated: gating state machine tests.
-- Manual: trigger risky task and verify block-until-approve behavior.
+- Automated: indexing/search/ranking tests.
+- Manual: add notes and verify recall to cited decisions/preferences/todos.
 
-## Post-MVP Features (After Core Stability)
+## 6) Built-in Daily Utility
 
-- Multi-provider LLM account linking and spend controls.
-- Signed skill artifacts and stronger supply-chain attestations.
-- Remote browser automation skill with strict recording/approval gates.
-- Optional vector memory indexing for large history retrieval.
-- Desktop companion app and richer operator UI.
+Description:
+- Core includes reminders and simple notes/tasks without heavy external tools.
 
-## Manual Test Feature Matrix
+Acceptance criteria:
+- Reminder creation, listing, and trigger notifications work.
+- User timezone is respected.
+- Daily backup reminder appears when overdue.
 
-For each release candidate, manually validate:
+Testing:
+- Automated: reminder scheduling tests.
+- Manual: create reminder and verify trigger behavior.
 
-1. Text-only writing task from WhatsApp to response and receipt.
-2. Video compression task with artifact in/out and receipt.
-3. Denied permission path returns safe error.
-4. High-risk action requires and records confirmation.
-5. Memory retrieval includes expected historical context.
+## Security Baseline (v1)
 
-## Non-Goals (Current)
+- Side-effect actions require explicit confirmation.
+- Skill execution network is deny-by-default with allowlist exceptions.
+- Cancellation and retries are auditable.
+- OAuth-first auth with API key fallback if entitlement is unavailable.
 
-- Fully autonomous unrestricted computer control.
-- Unbounded shell access from agents.
-- Shipping self-modifying code paths without human-gated review.
+## Deferred to v2/v3
+
+- Public artifact download links.
+- Container-based hardened sandbox layers.
+- Multi-user tenancy.
+- Self-healing/self-building (PR-only proposals, plain-language review UI, canary rollback).
+- Additional skill distribution channels (`npm`, `npx`, `brew`).
