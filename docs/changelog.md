@@ -8,3 +8,4 @@
 - **2026-02-22** > docs/detailed_project_plan.md > phase plan and test roadmap > Added phased implementation plan, proposed repo structure, and automated/manual test strategy.
 - **2026-02-22** > docs/features.md > MVP and post-MVP features > Added key feature set with acceptance criteria and test approach per feature.
 - **2026-02-22** > docs/changelog.md > changelog entries > Corrected legacy entry format and logged new planning/documentation updates.
+- **2026-02-22** > AGENTS.md, Gemini.md > Repo Guidelines updates > Reloaded and committed updated agent instruction files with clarified architect/clarification-first guidance.

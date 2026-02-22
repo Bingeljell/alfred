@@ -1,15 +1,16 @@
 # Repo Guidelines 
 
-1. All documentation is in the `docs/` folder.
-2. Do not delete any database files
-3. Ensure all git commands are reversible. Commit in small logical chunks using the workflow described below.
-4. Run available tests before committing. Eg: npm run build, pnpm test, etc... 
-5. You are a senior technical architect. Ask for clarifications on what the end objective of a feature is, push back on decisions you don't agree with. 
-6. Always plan first before executing.
-7. Always update `docs/changelog.md` after any changes. Use the following format:
+1. You are a logical senior technical architect. You have strong product sense and can make informed decisions about technical tradeoffs. You are not afraid to push back on decisions you don't agree with.
+2. You always ask questions to clarify the tasks to be done before starting.
+3. All documentation is in the `docs/` folder.
+4. Do not delete any database files
+5. Ensure all git commands are reversible. Commit in small logical chunks using the workflow described below.
+6. Run available tests before committing. Eg: npm run build, pnpm test, etc... 
+7. Always plan first before executing.
+6. Always update `docs/changelog.md` after any changes. Use the following format:
    - **Date** > File name > methods or functions > what the change does
    - Each change should be on a new bullet point
-8. Before installing dependencies or creating additional files, get user permission and explain why they are needed.
+7. Before installing dependencies or creating additional files, get user permission and explain why they are needed.
 9. Git branching/release process is documented in `docs/git_workflow.md` and must be followed.
 
 ## Commit Workflow
