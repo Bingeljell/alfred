@@ -12,6 +12,11 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .transform((v) => (v ? Number(v) : 250))
+    .pipe(z.number().int().min(25).max(60000)),
+  NOTIFICATION_POLL_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 250))
     .pipe(z.number().int().min(25).max(60000))
 });
 
@@ -19,6 +24,7 @@ export type AppConfig = {
   port: number;
   stateDir: string;
   workerPollMs: number;
+  notificationPollMs: number;
 };
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
@@ -27,6 +33,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   return {
     port: parsed.PORT,
     stateDir: path.resolve(parsed.STATE_DIR),
-    workerPollMs: parsed.WORKER_POLL_MS
+    workerPollMs: parsed.WORKER_POLL_MS,
+    notificationPollMs: parsed.NOTIFICATION_POLL_MS
   };
 }

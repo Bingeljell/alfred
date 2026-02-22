@@ -2,14 +2,24 @@ import express from "express";
 import { z } from "zod";
 import { FileBackedQueueStore } from "./local_queue_store";
 import { GatewayService } from "./gateway_service";
+import { MessageDedupeStore } from "./whatsapp/dedupe_store";
+import { OutboundNotificationStore } from "./notification_store";
 
 const CancelParamsSchema = z.object({
   jobId: z.string().min(1)
 });
 
-export function createGatewayApp(store: FileBackedQueueStore) {
+export function createGatewayApp(
+  store: FileBackedQueueStore,
+  options?: {
+    dedupeStore?: MessageDedupeStore;
+    notificationStore?: OutboundNotificationStore;
+  }
+) {
   const app = express();
-  const service = new GatewayService(store);
+  const service = new GatewayService(store, options?.notificationStore);
+  const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
+  void dedupeStore.ensureReady();
   app.use(express.json());
 
   app.get("/health", async (_req, res) => {
@@ -23,6 +33,19 @@ export function createGatewayApp(store: FileBackedQueueStore) {
       res.status(result.mode === "async-job" ? 202 : 200).json(result);
     } catch (error) {
       res.status(400).json({ error: "invalid_inbound_message", detail: String(error) });
+    }
+  });
+
+  app.post("/v1/whatsapp/baileys/inbound", async (req, res) => {
+    try {
+      const result = await service.handleBaileysInbound(req.body, dedupeStore);
+      if (result.duplicate) {
+        res.status(200).json(result);
+        return;
+      }
+      res.status(result.mode === "async-job" ? 202 : 200).json(result);
+    } catch (error) {
+      res.status(400).json({ error: "invalid_baileys_inbound", detail: String(error) });
     }
   });
 

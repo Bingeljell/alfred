@@ -9,6 +9,13 @@ function sleep(ms: number): Promise<void> {
 
 export type WorkerProcessor = (job: Job) => Promise<Record<string, unknown>>;
 
+export type WorkerStatusEvent = {
+  jobId: string;
+  sessionId?: string;
+  status: "running" | "succeeded" | "failed" | "cancelled";
+  summary?: string;
+};
+
 export type WorkerHandle = {
   stop: () => Promise<void>;
 };
@@ -26,11 +33,16 @@ export function startWorker(options: {
   workerId?: string;
   pollIntervalMs?: number;
   processor?: WorkerProcessor;
+  onStatusChange?: (event: WorkerStatusEvent) => Promise<void> | void;
 }): WorkerHandle {
   const store = options.store;
   const workerId = options.workerId ?? "worker-1";
   const pollIntervalMs = options.pollIntervalMs ?? 250;
   const processor = options.processor ?? defaultProcessor;
+  const onStatusChange = options.onStatusChange;
+
+  const sessionFromJob = (job: Job): string | undefined =>
+    typeof job.payload.sessionId === "string" ? job.payload.sessionId : undefined;
 
   let active = true;
 
@@ -43,19 +55,43 @@ export function startWorker(options: {
       }
 
       try {
+        await onStatusChange?.({
+          jobId: claimed.job.id,
+          sessionId: sessionFromJob(claimed.job),
+          status: "running"
+        });
+
         const result = await processor(claimed.job);
         const latest = await store.getJob(claimed.job.id);
 
         if (latest?.status === "cancelling") {
-          await store.markCancelledAfterRun(claimed.job.id, result);
+          const cancelled = await store.markCancelledAfterRun(claimed.job.id, result);
+          await onStatusChange?.({
+            jobId: claimed.job.id,
+            sessionId: sessionFromJob(claimed.job),
+            status: "cancelled",
+            summary: typeof cancelled?.result?.summary === "string" ? cancelled.result.summary : undefined
+          });
         } else {
-          await store.completeJob(claimed.job.id, result);
+          const completed = await store.completeJob(claimed.job.id, result);
+          await onStatusChange?.({
+            jobId: claimed.job.id,
+            sessionId: sessionFromJob(claimed.job),
+            status: "succeeded",
+            summary: typeof completed?.result?.summary === "string" ? completed.result.summary : undefined
+          });
         }
       } catch (error) {
         await store.failJob(claimed.job.id, {
           code: "processor_failure",
           message: error instanceof Error ? error.message : String(error),
           retryable: false
+        });
+        await onStatusChange?.({
+          jobId: claimed.job.id,
+          sessionId: sessionFromJob(claimed.job),
+          status: "failed",
+          summary: error instanceof Error ? error.message : String(error)
         });
       } finally {
         await store.releaseClaim(claimed.job.id);
