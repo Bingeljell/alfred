@@ -117,7 +117,6 @@ export class BaileysRuntime implements BaileysTransport {
   private readonly onInbound: (message: BaileysInboundMessage) => Promise<void>;
   private readonly maxTextChars: number;
   private readonly reconnectDelayMs: number;
-  private readonly printQrInTerminal: boolean;
   private readonly allowSelfFromMe: boolean;
   private readonly requirePrefix?: string;
   private readonly allowedSenders: Set<string>;
@@ -148,7 +147,6 @@ export class BaileysRuntime implements BaileysTransport {
     onInbound: (message: BaileysInboundMessage) => Promise<void>;
     maxTextChars?: number;
     reconnectDelayMs?: number;
-    printQrInTerminal?: boolean;
     allowSelfFromMe?: boolean;
     requirePrefix?: string;
     allowedSenders?: string[];
@@ -158,7 +156,6 @@ export class BaileysRuntime implements BaileysTransport {
     this.onInbound = options.onInbound;
     this.maxTextChars = options.maxTextChars ?? 4000;
     this.reconnectDelayMs = options.reconnectDelayMs ?? 3000;
-    this.printQrInTerminal = options.printQrInTerminal ?? true;
     this.allowSelfFromMe = options.allowSelfFromMe ?? false;
     this.requirePrefix = options.requirePrefix?.trim() || undefined;
     this.allowedSenders = new Set((options.allowedSenders ?? []).map((item) => item.trim()).filter((item) => item.length > 0));
@@ -254,7 +251,6 @@ export class BaileysRuntime implements BaileysTransport {
 
       const socket = module.default({
         auth: authState.state,
-        printQRInTerminal: this.printQrInTerminal,
         browser: ["Alfred", "Chrome", "1.0.0"],
         version: version.version
       });

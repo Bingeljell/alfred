@@ -13,7 +13,6 @@ describe("loadConfig", () => {
     expect(config.openAiResponsesModel).toBe("gpt-4.1-mini");
     expect(config.whatsAppProvider).toBe("stdout");
     expect(config.whatsAppBaileysAutoConnect).toBe(false);
-    expect(config.whatsAppBaileysPrintQr).toBe(true);
     expect(config.whatsAppBaileysAllowSelfFromMe).toBe(false);
     expect(config.whatsAppBaileysRequirePrefix).toBe("/alfred");
     expect(config.whatsAppBaileysAllowedSenders).toEqual([]);
@@ -39,7 +38,6 @@ describe("loadConfig", () => {
       WHATSAPP_BAILEYS_AUTO_CONNECT: "true",
       WHATSAPP_BAILEYS_AUTH_DIR: "./tmp/wa-auth",
       WHATSAPP_BAILEYS_INBOUND_TOKEN: "secret-token",
-      WHATSAPP_BAILEYS_PRINT_QR: "false",
       WHATSAPP_BAILEYS_ALLOW_SELF_FROM_ME: "true",
       WHATSAPP_BAILEYS_REQUIRE_PREFIX: "/bot",
       WHATSAPP_BAILEYS_ALLOWED_SENDERS: "111@s.whatsapp.net,222@s.whatsapp.net",
@@ -64,7 +62,6 @@ describe("loadConfig", () => {
     expect(config.whatsAppBaileysAutoConnect).toBe(true);
     expect(config.whatsAppBaileysAuthDir.endsWith("tmp/wa-auth")).toBe(true);
     expect(config.whatsAppBaileysInboundToken).toBe("secret-token");
-    expect(config.whatsAppBaileysPrintQr).toBe(false);
     expect(config.whatsAppBaileysAllowSelfFromMe).toBe(true);
     expect(config.whatsAppBaileysRequirePrefix).toBe("/bot");
     expect(config.whatsAppBaileysAllowedSenders).toEqual(["111@s.whatsapp.net", "222@s.whatsapp.net"]);

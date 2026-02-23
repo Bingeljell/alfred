@@ -55,10 +55,6 @@ const EnvSchema = z.object({
     .transform((v) => (v ? v.toLowerCase() !== "false" : false)),
   WHATSAPP_BAILEYS_AUTH_DIR: z.string().optional(),
   WHATSAPP_BAILEYS_INBOUND_TOKEN: z.string().optional(),
-  WHATSAPP_BAILEYS_PRINT_QR: z
-    .string()
-    .optional()
-    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
   WHATSAPP_BAILEYS_ALLOW_SELF_FROM_ME: z
     .string()
     .optional()
@@ -119,7 +115,6 @@ export type AppConfig = {
   whatsAppBaileysAutoConnect: boolean;
   whatsAppBaileysAuthDir: string;
   whatsAppBaileysInboundToken?: string;
-  whatsAppBaileysPrintQr: boolean;
   whatsAppBaileysAllowSelfFromMe: boolean;
   whatsAppBaileysRequirePrefix?: string;
   whatsAppBaileysAllowedSenders: string[];
@@ -173,7 +168,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     whatsAppBaileysAutoConnect: parsed.WHATSAPP_BAILEYS_AUTO_CONNECT,
     whatsAppBaileysAuthDir: path.resolve(parsed.WHATSAPP_BAILEYS_AUTH_DIR ?? path.join(parsed.STATE_DIR, "whatsapp", "baileys_auth")),
     whatsAppBaileysInboundToken: parsed.WHATSAPP_BAILEYS_INBOUND_TOKEN,
-    whatsAppBaileysPrintQr: parsed.WHATSAPP_BAILEYS_PRINT_QR,
     whatsAppBaileysAllowSelfFromMe: parsed.WHATSAPP_BAILEYS_ALLOW_SELF_FROM_ME,
     whatsAppBaileysRequirePrefix: parsed.WHATSAPP_BAILEYS_REQUIRE_PREFIX.trim() || undefined,
     whatsAppBaileysAllowedSenders: (parsed.WHATSAPP_BAILEYS_ALLOWED_SENDERS ?? "")

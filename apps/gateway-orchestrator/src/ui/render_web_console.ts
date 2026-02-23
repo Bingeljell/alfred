@@ -334,7 +334,7 @@ export function renderWebConsoleHtml(): string {
           <ol class="setup-steps">
             <li>Set provider to <span class="mono">baileys</span> and restart gateway.</li>
             <li>Click <strong>Live Connect</strong>.</li>
-            <li>Scan QR from gateway logs (or raw QR below).</li>
+            <li>Scan QR from the status panel (raw QR below if needed).</li>
             <li>Send a test message prefixed with <span class="mono">/alfred</span>.</li>
           </ol>
           <div class="hint" id="waSetupNext">Next step: click <strong>Live Status</strong> to confirm runtime is configured.</div>
@@ -498,7 +498,7 @@ export function renderWebConsoleHtml(): string {
         } else if (status.qr) {
           waSetupNext.textContent = "QR is ready. Scan it from WhatsApp Linked Devices now.";
         } else if (state === "connecting") {
-          waSetupNext.textContent = "Connecting. Wait for QR to appear (check gateway logs if print QR is enabled).";
+          waSetupNext.textContent = "Connecting. Wait for QR to appear in status.";
         } else {
           waSetupNext.textContent = "Not connected. Click Live Connect to start WhatsApp linking.";
         }
@@ -510,7 +510,6 @@ export function renderWebConsoleHtml(): string {
         "WHATSAPP_BAILEYS_AUTO_CONNECT=false",
         "WHATSAPP_BAILEYS_AUTH_DIR=./state/whatsapp/baileys_auth",
         "WHATSAPP_BAILEYS_INBOUND_TOKEN=replace_with_strong_token",
-        "WHATSAPP_BAILEYS_PRINT_QR=true",
         "WHATSAPP_BAILEYS_REQUIRE_PREFIX=/alfred",
         "WHATSAPP_BAILEYS_ALLOW_SELF_FROM_ME=true"
       ].join("\\n");

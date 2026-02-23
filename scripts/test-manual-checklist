@@ -27,13 +27,12 @@ Live WhatsApp (Baileys) Manual Checklist
    - `WHATSAPP_BAILEYS_AUTO_CONNECT=false`
    - `WHATSAPP_BAILEYS_AUTH_DIR=./state/whatsapp/baileys_auth`
    - `WHATSAPP_BAILEYS_INBOUND_TOKEN=<strong-random-token>`
-   - `WHATSAPP_BAILEYS_PRINT_QR=true`
    - `WHATSAPP_BAILEYS_REQUIRE_PREFIX=/alfred`
    - (Optional single-number test) `WHATSAPP_BAILEYS_ALLOW_SELF_FROM_ME=true`
    - (Recommended safety) `WHATSAPP_BAILEYS_ALLOWED_SENDERS=<jid1,jid2>`
 2. Start gateway + worker and open `/ui`.
 3. Click `Live Status` and confirm API is configured (not 404).
-4. Click `Live Connect`; if QR is required, scan the QR printed in gateway logs (or check `WA_LIVE_CONNECT`/`WA_LIVE_STATUS` payload for raw `qr`).
+4. Click `Live Connect`; if QR is required, scan it via the UI raw QR helper/status payload.
 5. Scan QR in WhatsApp Linked Devices and verify `Live Status` shows connected with `meId`.
 6. Send a WhatsApp message from your phone and verify gateway logs show inbound processing.
    - Message must start with `/alfred ` (example: `/alfred what time is it?`).
