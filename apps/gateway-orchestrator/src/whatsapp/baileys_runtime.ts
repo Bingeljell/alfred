@@ -2,6 +2,9 @@ import type { BaileysInboundMessage } from "../../../../packages/contracts/src";
 import type { BaileysTransport } from "../../../../packages/provider-adapters/src";
 
 type ConnectionState = "disconnected" | "connecting" | "connected" | "error";
+type InboundSyncState = "bootstrapping" | "live";
+
+const MAX_SEEN_MESSAGE_KEYS = 5000;
 
 type BaileysRuntimeStatus = {
   provider: "baileys";
@@ -16,6 +19,13 @@ type BaileysRuntimeStatus = {
   lastDisconnectCode: number | null;
   lastDisconnectReason: string | null;
   lastError: string | null;
+  inboundSyncState: InboundSyncState;
+  inboundLiveAt: string | null;
+  acceptedMessageCount: number;
+  ignoredNonNotifyCount: number;
+  ignoredPreLiveCount: number;
+  ignoredStaleCount: number;
+  ignoredDuplicateCount: number;
   updatedAt: string;
 };
 
@@ -115,6 +125,28 @@ function safeDisconnectReason(payload: unknown): string | null {
   return typeof message === "string" ? message : null;
 }
 
+function safeMessageTimestampSeconds(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+    return value > 10_000_000_000 ? Math.floor(value / 1000) : Math.floor(value);
+  }
+
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed > 10_000_000_000 ? Math.floor(parsed / 1000) : Math.floor(parsed);
+    }
+  }
+
+  if (value && typeof value === "object" && "toString" in value && typeof value.toString === "function") {
+    const parsed = Number(value.toString());
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed > 10_000_000_000 ? Math.floor(parsed / 1000) : Math.floor(parsed);
+    }
+  }
+
+  return null;
+}
+
 export class BaileysRuntime implements BaileysTransport {
   private readonly authDir: string;
   private readonly onInbound: (message: BaileysInboundMessage) => Promise<void>;
@@ -123,6 +155,7 @@ export class BaileysRuntime implements BaileysTransport {
   private readonly maxQrGenerations: number;
   private readonly allowSelfFromMe: boolean;
   private readonly requirePrefix?: string;
+  private readonly historyGraceWindowSec: number;
   private readonly allowedSenders: Set<string>;
   private readonly loadModule: () => Promise<BaileysModule>;
 
@@ -132,6 +165,8 @@ export class BaileysRuntime implements BaileysTransport {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private allowReconnect = true;
   private inboundHandler: ((message: BaileysInboundMessage) => Promise<void> | void) | null = null;
+  private liveSinceUnixSec: number | null = null;
+  private readonly seenMessageKeys = new Set<string>();
 
   private statusValue: BaileysRuntimeStatus = {
     provider: "baileys",
@@ -146,6 +181,13 @@ export class BaileysRuntime implements BaileysTransport {
     lastDisconnectCode: null,
     lastDisconnectReason: null,
     lastError: null,
+    inboundSyncState: "bootstrapping",
+    inboundLiveAt: null,
+    acceptedMessageCount: 0,
+    ignoredNonNotifyCount: 0,
+    ignoredPreLiveCount: 0,
+    ignoredStaleCount: 0,
+    ignoredDuplicateCount: 0,
     updatedAt: nowIso()
   };
 
@@ -157,6 +199,7 @@ export class BaileysRuntime implements BaileysTransport {
     maxQrGenerations?: number;
     allowSelfFromMe?: boolean;
     requirePrefix?: string;
+    historyGraceWindowSec?: number;
     allowedSenders?: string[];
     moduleLoader?: () => Promise<BaileysModule>;
   }) {
@@ -167,6 +210,7 @@ export class BaileysRuntime implements BaileysTransport {
     this.maxQrGenerations = options.maxQrGenerations ?? 3;
     this.allowSelfFromMe = options.allowSelfFromMe ?? false;
     this.requirePrefix = options.requirePrefix?.trim() || undefined;
+    this.historyGraceWindowSec = Math.max(0, options.historyGraceWindowSec ?? 90);
     this.allowedSenders = new Set((options.allowedSenders ?? []).map((item) => item.trim()).filter((item) => item.length > 0));
     this.loadModule = options.moduleLoader ?? defaultModuleLoader;
     this.updateStatus({
@@ -203,6 +247,8 @@ export class BaileysRuntime implements BaileysTransport {
     const socket = this.socket;
     this.socket = null;
     this.saveCreds = null;
+    this.liveSinceUnixSec = null;
+    this.seenMessageKeys.clear();
 
     if (shouldLogout && socket?.logout) {
       try {
@@ -222,7 +268,9 @@ export class BaileysRuntime implements BaileysTransport {
       qr: null,
       qrUpdatedAt: null,
       qrGenerationCount: 0,
-      qrLocked: false
+      qrLocked: false,
+      inboundSyncState: "bootstrapping",
+      inboundLiveAt: null
     });
     return this.status();
   }
@@ -251,6 +299,8 @@ export class BaileysRuntime implements BaileysTransport {
   }
 
   private async connectInternal(): Promise<void> {
+    this.liveSinceUnixSec = null;
+    this.seenMessageKeys.clear();
     this.updateStatus({
       state: "connecting",
       connected: false,
@@ -258,7 +308,9 @@ export class BaileysRuntime implements BaileysTransport {
       qr: null,
       qrUpdatedAt: null,
       qrGenerationCount: 0,
-      qrLocked: false
+      qrLocked: false,
+      inboundSyncState: "bootstrapping",
+      inboundLiveAt: null
     });
 
     try {
@@ -346,6 +398,7 @@ export class BaileysRuntime implements BaileysTransport {
     }
 
     if (connection === "open") {
+      this.liveSinceUnixSec = Math.floor(Date.now() / 1000) - this.historyGraceWindowSec;
       this.updateStatus({
         state: "connected",
         connected: true,
@@ -354,7 +407,9 @@ export class BaileysRuntime implements BaileysTransport {
         qrGenerationCount: 0,
         qrLocked: false,
         meId: this.socket?.user?.id ?? null,
-        lastError: null
+        lastError: null,
+        inboundSyncState: "live",
+        inboundLiveAt: nowIso()
       });
       return;
     }
@@ -373,9 +428,13 @@ export class BaileysRuntime implements BaileysTransport {
       qrLocked: false,
       meId: null,
       lastDisconnectCode: code,
-      lastDisconnectReason: reason
+      lastDisconnectReason: reason,
+      inboundSyncState: "bootstrapping",
+      inboundLiveAt: null
     });
 
+    this.liveSinceUnixSec = null;
+    this.seenMessageKeys.clear();
     this.socket = null;
     if (!this.allowReconnect || code === 401) {
       this.updateStatus({ state: "disconnected" });
@@ -398,10 +457,33 @@ export class BaileysRuntime implements BaileysTransport {
     if (!payload || typeof payload !== "object") {
       return;
     }
+    const upsert = payload as Record<string, unknown>;
     const messages =
-      "messages" in payload && Array.isArray((payload as Record<string, unknown>).messages)
-        ? ((payload as Record<string, unknown>).messages as Array<Record<string, unknown>>)
+      "messages" in upsert && Array.isArray(upsert.messages)
+        ? (upsert.messages as Array<Record<string, unknown>>)
         : [];
+    if (messages.length === 0) {
+      return;
+    }
+
+    const upsertType = typeof upsert.type === "string" ? upsert.type.toLowerCase() : "";
+    if (upsertType && upsertType !== "notify") {
+      this.updateStatus({
+        ignoredNonNotifyCount: this.statusValue.ignoredNonNotifyCount + messages.length
+      });
+      return;
+    }
+
+    if (!this.statusValue.connected || this.liveSinceUnixSec === null) {
+      this.updateStatus({
+        ignoredPreLiveCount: this.statusValue.ignoredPreLiveCount + messages.length
+      });
+      return;
+    }
+
+    let acceptedCount = 0;
+    let ignoredStaleCount = 0;
+    let ignoredDuplicateCount = 0;
 
     for (const message of messages) {
       const key =
@@ -414,6 +496,20 @@ export class BaileysRuntime implements BaileysTransport {
       if (!remoteJid || !id || !isAllowedRemoteJid(remoteJid)) {
         continue;
       }
+
+      const messageKey = remoteJid + ":" + id;
+      if (this.seenMessageKeys.has(messageKey)) {
+        ignoredDuplicateCount += 1;
+        continue;
+      }
+      this.trackSeenMessageKey(messageKey);
+
+      const messageTimestampSeconds = safeMessageTimestampSeconds(message.messageTimestamp);
+      if (messageTimestampSeconds !== null && messageTimestampSeconds < this.liveSinceUnixSec) {
+        ignoredStaleCount += 1;
+        continue;
+      }
+
       if (fromMe && !this.allowSelfFromMe) {
         continue;
       }
@@ -445,7 +541,7 @@ export class BaileysRuntime implements BaileysTransport {
           conversation: inboundText
         },
         pushName: typeof message.pushName === "string" ? message.pushName : undefined,
-        messageTimestamp: typeof message.messageTimestamp === "number" ? message.messageTimestamp : undefined
+        messageTimestamp: messageTimestampSeconds ?? undefined
       };
 
       try {
@@ -453,11 +549,20 @@ export class BaileysRuntime implements BaileysTransport {
         if (this.inboundHandler) {
           await this.inboundHandler(payloadMessage);
         }
+        acceptedCount += 1;
       } catch (error) {
         this.updateStatus({
           lastError: error instanceof Error ? error.message : String(error)
         });
       }
+    }
+
+    if (acceptedCount > 0 || ignoredStaleCount > 0 || ignoredDuplicateCount > 0) {
+      this.updateStatus({
+        acceptedMessageCount: this.statusValue.acceptedMessageCount + acceptedCount,
+        ignoredStaleCount: this.statusValue.ignoredStaleCount + ignoredStaleCount,
+        ignoredDuplicateCount: this.statusValue.ignoredDuplicateCount + ignoredDuplicateCount
+      });
     }
   }
 
@@ -475,6 +580,17 @@ export class BaileysRuntime implements BaileysTransport {
     }
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+  }
+
+  private trackSeenMessageKey(messageKey: string): void {
+    this.seenMessageKeys.add(messageKey);
+    if (this.seenMessageKeys.size <= MAX_SEEN_MESSAGE_KEYS) {
+      return;
+    }
+    const oldest = this.seenMessageKeys.values().next();
+    if (!oldest.done) {
+      this.seenMessageKeys.delete(oldest.value);
+    }
   }
 
   private applyRequiredPrefix(text: string): string {

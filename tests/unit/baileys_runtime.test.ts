@@ -84,7 +84,9 @@ describe("BaileysRuntime", () => {
     });
 
     await runtime.connect();
+    fake.emit("connection.update", { connection: "open" });
     fake.emit("messages.upsert", {
+      type: "notify",
       messages: [
         {
           key: { id: "a", remoteJid: "group@g.us", fromMe: false },
@@ -129,7 +131,9 @@ describe("BaileysRuntime", () => {
     });
 
     await runtime.connect();
+    fake.emit("connection.update", { connection: "open" });
     fake.emit("messages.upsert", {
+      type: "notify",
       messages: [
         {
           key: { id: "a1", remoteJid: "99999@s.whatsapp.net", fromMe: false },
@@ -154,6 +158,115 @@ describe("BaileysRuntime", () => {
     expect(received).toHaveLength(2);
     expect(received[0]?.text).toBe("run report");
     expect(received[1]?.text).toBe("self check");
+  });
+
+  it("filters non-notify upserts and stale messages to reduce history-sync noise", async () => {
+    const fake = createFakeSocket();
+    const received: Array<{ remoteJid: string; text: string }> = [];
+    const runtime = new BaileysRuntime({
+      authDir: "/tmp/baileys-auth",
+      historyGraceWindowSec: 0,
+      onInbound: async (message) => {
+        received.push({
+          remoteJid: message.key.remoteJid,
+          text: message.message?.conversation ?? ""
+        });
+      },
+      moduleLoader: async () => ({
+        default: () => fake.socket,
+        fetchLatestBaileysVersion: async () => ({ version: [1, 0, 0] as [number, number, number] }),
+        useMultiFileAuthState: async () => ({ state: {}, saveCreds: async () => undefined })
+      })
+    });
+
+    await runtime.connect();
+    fake.emit("connection.update", { connection: "open" });
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    fake.emit("messages.upsert", {
+      type: "append",
+      messages: [
+        {
+          key: { id: "h1", remoteJid: "11111@s.whatsapp.net", fromMe: false },
+          message: { conversation: "history" },
+          messageTimestamp: nowSeconds
+        }
+      ]
+    });
+    fake.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "s1", remoteJid: "11111@s.whatsapp.net", fromMe: false },
+          message: { conversation: "stale" },
+          messageTimestamp: nowSeconds - 120
+        },
+        {
+          key: { id: "l1", remoteJid: "11111@s.whatsapp.net", fromMe: false },
+          message: { conversation: "live" },
+          messageTimestamp: nowSeconds + 1
+        }
+      ]
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(received).toHaveLength(1);
+    expect(received[0]?.text).toBe("live");
+
+    const status = runtime.status() as {
+      acceptedMessageCount: number;
+      ignoredNonNotifyCount: number;
+      ignoredStaleCount: number;
+    };
+    expect(status.acceptedMessageCount).toBe(1);
+    expect(status.ignoredNonNotifyCount).toBe(1);
+    expect(status.ignoredStaleCount).toBe(1);
+  });
+
+  it("deduplicates already-seen inbound message ids", async () => {
+    const fake = createFakeSocket();
+    const received: string[] = [];
+    const runtime = new BaileysRuntime({
+      authDir: "/tmp/baileys-auth",
+      allowSelfFromMe: true,
+      onInbound: async (message) => {
+        received.push(message.message?.conversation ?? "");
+      },
+      moduleLoader: async () => ({
+        default: () => fake.socket,
+        fetchLatestBaileysVersion: async () => ({ version: [1, 0, 0] as [number, number, number] }),
+        useMultiFileAuthState: async () => ({ state: {}, saveCreds: async () => undefined })
+      })
+    });
+
+    await runtime.connect();
+    fake.emit("connection.update", { connection: "open" });
+    const nowSeconds = Math.floor(Date.now() / 1000);
+    fake.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "dup-1", remoteJid: "11111@s.whatsapp.net", fromMe: false },
+          message: { conversation: "first" },
+          messageTimestamp: nowSeconds
+        }
+      ]
+    });
+    fake.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "dup-1", remoteJid: "11111@s.whatsapp.net", fromMe: false },
+          message: { conversation: "first duplicate" },
+          messageTimestamp: nowSeconds
+        }
+      ]
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(received).toEqual(["first"]);
+
+    const status = runtime.status() as { ignoredDuplicateCount: number };
+    expect(status.ignoredDuplicateCount).toBe(1);
   });
 
   it("locks QR linking after max generation count and requires manual reconnect", async () => {

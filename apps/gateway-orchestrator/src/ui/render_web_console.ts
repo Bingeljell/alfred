@@ -875,8 +875,15 @@ export function renderWebConsoleHtml(): string {
         const qrLimit = typeof status.qrGenerationLimit === "number" ? status.qrGenerationLimit : "n/a";
         const qrLocked = status.qrLocked === true;
         const lastError = status.lastError ? String(status.lastError) : "none";
+        const syncState = status.inboundSyncState ? String(status.inboundSyncState) : "unknown";
+        const acceptedCount = typeof status.acceptedMessageCount === "number" ? status.acceptedMessageCount : 0;
+        const ignoredNonNotifyCount = typeof status.ignoredNonNotifyCount === "number" ? status.ignoredNonNotifyCount : 0;
+        const ignoredPreLiveCount = typeof status.ignoredPreLiveCount === "number" ? status.ignoredPreLiveCount : 0;
+        const ignoredStaleCount = typeof status.ignoredStaleCount === "number" ? status.ignoredStaleCount : 0;
+        const ignoredDuplicateCount = typeof status.ignoredDuplicateCount === "number" ? status.ignoredDuplicateCount : 0;
+        const ignoredCount = ignoredNonNotifyCount + ignoredPreLiveCount + ignoredStaleCount + ignoredDuplicateCount;
         waLiveSummary.textContent =
-          "WhatsApp " + (connected ? "connected" : "not connected") + " | state: " + state + " | me: " + me + " | " + qr + " | qrAttempts: " + qrCount + "/" + qrLimit + " | lastError: " + lastError;
+          "WhatsApp " + (connected ? "connected" : "not connected") + " | state: " + state + " | me: " + me + " | " + qr + " | qrAttempts: " + qrCount + "/" + qrLimit + " | sync: " + syncState + " | accepted: " + acceptedCount + " | ignored: " + ignoredCount + " | lastError: " + lastError;
         waLiveSummary.dataset.state = connected ? "connected" : "disconnected";
         waLiveBadge.textContent = state;
         waLiveBadge.dataset.state = connected ? "connected" : state === "connecting" ? "connecting" : "disconnected";
@@ -905,14 +912,17 @@ export function renderWebConsoleHtml(): string {
           {
             state: connected ? "ok" : state === "connecting" ? "warn" : "error",
             value: connected ? "Connected" : state,
-            meta: "me: " + me + " | lastError: " + lastError
+            meta: "me: " + me + " | sync: " + syncState + " | accepted: " + acceptedCount + " | ignored: " + ignoredCount
           },
           {
             configured: true,
             connected,
             state,
             meId: me,
-            lastError
+            lastError,
+            syncState,
+            acceptedCount,
+            ignoredCount
           }
         );
       }
