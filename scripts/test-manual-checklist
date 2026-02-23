@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cat <<'CHECKLIST'
+Web Console Manual Checklist
+1. Start gateway: npm run dev:gateway
+2. Open http://localhost:3000/ui
+3. Send a chat message from the UI and confirm immediate response in the log panel.
+4. Send as async job and confirm jobId appears and can be checked with Job Controls.
+5. Run Memory Search/Sync/Status actions and confirm responses are shown in the log panel.
+
 Phase 1 Manual Checklist
 1. Start gateway: npm run dev:gateway
 2. Start worker: npm run dev:worker

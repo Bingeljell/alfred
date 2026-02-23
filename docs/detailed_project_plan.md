@@ -78,6 +78,12 @@ Build a WhatsApp-first personal agent that runs on a single self-hosted machine 
 
 ## Phase Plan
 
+## Test Surfaces (Locked)
+
+- Browser-based test console at `GET /ui` for rapid local/manual validation.
+- WhatsApp ingress path via Baileys payloads for API-level/manual simulation.
+- Future UI tracks (nicer web app + TUI) must call the same gateway APIs to avoid behavior drift.
+
 ## Phase 0: Governance and Planning Baseline (Done)
 
 Deliverables:

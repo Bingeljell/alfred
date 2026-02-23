@@ -1,5 +1,9 @@
 # Changelog
 
+- **2026-02-23** > apps/gateway-orchestrator/src/ui/render_web_console.ts > renderWebConsoleHtml > Added browser-based test console UI for chat, async jobs, Baileys simulation, and memory operations.
+- **2026-02-23** > apps/gateway-orchestrator/src/app.ts, tests/unit/gateway_app_ui_route.test.ts, tests/unit/web_console_ui.test.ts > createGatewayApp and UI route tests > Added `/ui` HTML route, root redirect to `/ui`, and route/render tests for the new interface.
+- **2026-02-23** > scripts/test-manual-checklist > web console checklist section > Added manual browser-driven validation steps for the new test interface.
+- **2026-02-23** > docs/detailed_project_plan.md, docs/features.md > test surfaces and feature definition > Documented dual testing surfaces (web console now, WhatsApp path next) and acceptance criteria.
 - **2026-02-22** > scripts/committer > first-commit index reset path > Added unborn-HEAD-safe staged index clearing so initial commits can run via `scripts/committer`.
 - **2026-02-22** > docs/git_workflow.md > workflow sections > Added repository branching, commit, push, and validation workflow documentation.
 - **2026-02-22** > docs/changelog.md > changelog format > Created changelog file with required per-change entry format.

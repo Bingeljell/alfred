@@ -90,6 +90,20 @@ Testing:
 - Automated: reminder scheduling tests.
 - Manual: create reminder and verify trigger behavior.
 
+## 7) Dual Test Interfaces (Web Now, WhatsApp Path Next)
+
+Description:
+- Provide a simple browser console for fast end-to-end testing now while keeping WhatsApp-compatible ingress for future real channel rollout.
+
+Acceptance criteria:
+- `GET /ui` serves a local test console for chat, async job, and memory endpoints.
+- Root route redirects to `/ui` for quick local access.
+- Same gateway APIs remain usable by Baileys simulation and future WhatsApp production connector.
+
+Testing:
+- Automated: route-level test for `/ui` and root redirect; UI render test for required controls/endpoints.
+- Manual: use browser console to submit chat/job/memory actions and verify responses/log output.
+
 ## Security Baseline (v1)
 
 - Side-effect actions require explicit confirmation.
