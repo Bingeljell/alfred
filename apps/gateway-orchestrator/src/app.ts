@@ -11,7 +11,7 @@ import { TaskStore } from "./builtins/task_store";
 import { ApprovalStore } from "./builtins/approval_store";
 import { renderWebConsoleHtml } from "./ui/render_web_console";
 import { OAuthService } from "./auth/oauth_service";
-import { OpenAIResponsesService } from "./llm/openai_responses_service";
+import { CodexAuthService, type CodexLoginStartMode } from "./codex/auth_service";
 
 const CancelParamsSchema = z.object({
   jobId: z.string().min(1)
@@ -38,7 +38,10 @@ export function createGatewayApp(
     taskStore?: TaskStore;
     approvalStore?: ApprovalStore;
     oauthService?: OAuthService;
-    llmService?: OpenAIResponsesService;
+    llmService?: { generateText: (sessionId: string, input: string) => Promise<{ text: string } | null> };
+    codexAuthService?: CodexAuthService;
+    codexLoginMode?: CodexLoginStartMode;
+    codexApiKey?: string;
   }
 ) {
   const app = express();
@@ -50,11 +53,15 @@ export function createGatewayApp(
     options?.taskStore,
     options?.approvalStore,
     options?.oauthService,
-    options?.llmService
+    options?.llmService,
+    options?.codexAuthService,
+    options?.codexLoginMode,
+    options?.codexApiKey
   );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;
   const oauthService = options?.oauthService;
+  const codexAuthService = options?.codexAuthService;
   void dedupeStore.ensureReady();
   app.use(express.json());
 
@@ -208,6 +215,23 @@ export function createGatewayApp(
   });
 
   app.post("/v1/auth/openai/start", async (req, res) => {
+    if (codexAuthService) {
+      try {
+        const input = SessionBodySchema.parse(req.body ?? {});
+        const started = await codexAuthService.startLogin(options?.codexLoginMode ?? "chatgpt", options?.codexApiKey);
+        res.status(200).json({
+          provider: "openai-codex",
+          mode: started.mode,
+          sessionId: input.sessionId,
+          loginId: started.loginId,
+          authorizationUrl: started.authorizationUrl
+        });
+      } catch (error) {
+        res.status(400).json({ error: "codex_auth_start_failed", detail: String(error) });
+      }
+      return;
+    }
+
     if (!oauthService) {
       res.status(404).json({ error: "oauth_not_configured" });
       return;
@@ -223,6 +247,21 @@ export function createGatewayApp(
   });
 
   app.get("/v1/auth/openai/status", async (req, res) => {
+    if (codexAuthService) {
+      try {
+        const status = await codexAuthService.readStatus(false);
+        const lastLogin = codexAuthService.lastLoginResult();
+        res.status(200).json({
+          provider: "openai-codex",
+          ...status,
+          lastLogin
+        });
+      } catch (error) {
+        res.status(400).json({ error: "codex_auth_status_failed", detail: String(error) });
+      }
+      return;
+    }
+
     if (!oauthService) {
       res.status(404).json({ error: "oauth_not_configured" });
       return;
@@ -239,6 +278,17 @@ export function createGatewayApp(
   });
 
   app.post("/v1/auth/openai/disconnect", async (req, res) => {
+    if (codexAuthService) {
+      try {
+        const input = SessionBodySchema.parse(req.body ?? {});
+        await codexAuthService.logout();
+        res.status(200).json({ disconnected: true, sessionId: input.sessionId, provider: "openai-codex" });
+      } catch (error) {
+        res.status(400).json({ error: "codex_auth_disconnect_failed", detail: String(error) });
+      }
+      return;
+    }
+
     if (!oauthService) {
       res.status(404).json({ error: "oauth_not_configured" });
       return;
@@ -273,6 +323,20 @@ export function createGatewayApp(
         .status(400)
         .type("html")
         .send(`<html><body><h1>OAuth failed</h1><p>${String(error)}</p><p>You can return to the console.</p></body></html>`);
+    }
+  });
+
+  app.get("/v1/auth/openai/rate-limits", async (_req, res) => {
+    if (!codexAuthService) {
+      res.status(404).json({ error: "codex_auth_not_configured" });
+      return;
+    }
+
+    try {
+      const limits = await codexAuthService.readRateLimits();
+      res.status(200).json(limits);
+    } catch (error) {
+      res.status(400).json({ error: "codex_rate_limits_failed", detail: String(error) });
     }
   });
 

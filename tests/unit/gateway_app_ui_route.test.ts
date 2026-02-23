@@ -22,6 +22,7 @@ describe("gateway web console routes", () => {
     expect(routes).toContain("GET /ui");
     expect(routes).toContain("POST /v1/auth/openai/start");
     expect(routes).toContain("GET /v1/auth/openai/status");
+    expect(routes).toContain("GET /v1/auth/openai/rate-limits");
     expect(routes).toContain("POST /v1/auth/openai/disconnect");
     expect(routes).toContain("GET /v1/auth/openai/callback");
   });

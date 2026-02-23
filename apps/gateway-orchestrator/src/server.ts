@@ -13,6 +13,11 @@ import { ApprovalStore } from "./builtins/approval_store";
 import { startReminderDispatcher } from "./builtins/reminder_dispatcher";
 import { OAuthService } from "./auth/oauth_service";
 import { OpenAIResponsesService } from "./llm/openai_responses_service";
+import { CodexAppServerClient } from "./codex/app_server_client";
+import { CodexAuthService } from "./codex/auth_service";
+import { CodexThreadStore } from "./codex/thread_store";
+import { CodexChatService } from "./llm/codex_chat_service";
+import { HybridLlmService } from "./llm/hybrid_llm_service";
 
 async function main(): Promise<void> {
   loadDotEnvFile();
@@ -38,7 +43,7 @@ async function main(): Promise<void> {
       scope: config.oauthOpenAiScope
     }
   });
-  const llmService = new OpenAIResponsesService({
+  const responsesService = new OpenAIResponsesService({
     enabled: config.openAiResponsesEnabled,
     apiUrl: config.openAiResponsesUrl,
     model: config.openAiResponsesModel,
@@ -46,6 +51,29 @@ async function main(): Promise<void> {
     apiKey: config.openAiApiKey,
     oauthService
   });
+  let codexClient: CodexAppServerClient | undefined;
+  let codexAuthService: CodexAuthService | undefined;
+  let codexChatService: CodexChatService | undefined;
+
+  if (config.codexAppServerEnabled) {
+    codexClient = new CodexAppServerClient({
+      command: config.codexAppServerCommand,
+      clientName: config.codexAppServerClientName,
+      clientVersion: config.codexAppServerClientVersion
+    });
+    codexAuthService = new CodexAuthService(codexClient);
+    const threadStore = new CodexThreadStore(config.stateDir);
+    codexChatService = new CodexChatService({
+      client: codexClient,
+      auth: codexAuthService,
+      threadStore,
+      model: config.codexModel,
+      timeoutMs: config.codexTurnTimeoutMs,
+      accountRefreshBeforeTurn: config.codexAccountRefreshBeforeTurn
+    });
+  }
+
+  let llmService: HybridLlmService;
   const memoryService = new MemoryService({
     rootDir: process.cwd(),
     stateDir: config.stateDir
@@ -59,7 +87,22 @@ async function main(): Promise<void> {
   await taskStore.ensureReady();
   await approvalStore.ensureReady();
   await oauthService.ensureReady();
+  if (codexAuthService) {
+    try {
+      await codexAuthService.ensureReady();
+    } catch {
+      // Codex auth remains disabled if startup fails; Responses fallback still works.
+      await codexAuthService.stop();
+      codexAuthService = undefined;
+      codexChatService = undefined;
+    }
+  }
   await memoryService.start();
+
+  llmService = new HybridLlmService({
+    codex: codexChatService,
+    responses: responsesService
+  });
 
   const app = createGatewayApp(store, {
     dedupeStore,
@@ -70,7 +113,10 @@ async function main(): Promise<void> {
     taskStore,
     approvalStore,
     oauthService,
-    llmService
+    llmService,
+    codexAuthService,
+    codexLoginMode: config.codexAuthLoginMode,
+    codexApiKey: config.openAiApiKey
   });
   const adapter = new StdoutWhatsAppAdapter();
   const dispatcher = startNotificationDispatcher({
@@ -93,6 +139,9 @@ async function main(): Promise<void> {
     await dispatcher.stop();
     await reminderDispatcher.stop();
     await memoryService.stop();
+    if (codexAuthService) {
+      await codexAuthService.stop();
+    }
     server.close();
     process.exit(0);
   };

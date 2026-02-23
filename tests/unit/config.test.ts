@@ -11,6 +11,8 @@ describe("loadConfig", () => {
     expect(config.openAiResponsesEnabled).toBe(true);
     expect(config.openAiResponsesUrl).toBe("https://api.openai.com/v1/responses");
     expect(config.openAiResponsesModel).toBe("gpt-4.1-mini");
+    expect(config.codexAppServerEnabled).toBe(false);
+    expect(config.codexAuthLoginMode).toBe("chatgpt");
     expect(config.stateDir.length).toBeGreaterThan(0);
   });
 
@@ -25,7 +27,12 @@ describe("loadConfig", () => {
       OAUTH_OPENAI_TOKEN_URL: "https://example.test/token",
       OPENAI_RESPONSES_ENABLED: "false",
       OPENAI_RESPONSES_MODEL: "gpt-4.1",
-      OPENAI_RESPONSES_TIMEOUT_MS: "7000"
+      OPENAI_RESPONSES_TIMEOUT_MS: "7000",
+      CODEX_APP_SERVER_ENABLED: "true",
+      CODEX_APP_SERVER_COMMAND: "codex",
+      CODEX_AUTH_LOGIN_MODE: "apiKey",
+      CODEX_MODEL: "openai-codex/mini",
+      CODEX_TURN_TIMEOUT_MS: "45000"
     });
 
     expect(config.port).toBe(4010);
@@ -36,6 +43,10 @@ describe("loadConfig", () => {
     expect(config.openAiResponsesEnabled).toBe(false);
     expect(config.openAiResponsesModel).toBe("gpt-4.1");
     expect(config.openAiResponsesTimeoutMs).toBe(7000);
+    expect(config.codexAppServerEnabled).toBe(true);
+    expect(config.codexAuthLoginMode).toBe("apiKey");
+    expect(config.codexModel).toBe("openai-codex/mini");
+    expect(config.codexTurnTimeoutMs).toBe(45000);
     expect(config.stateDir.endsWith("tmp/state-a")).toBe(true);
   });
 

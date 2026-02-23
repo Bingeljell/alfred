@@ -47,7 +47,25 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ? Number(v) : 20000))
     .pipe(z.number().int().min(1000).max(120000)),
-  OPENAI_API_KEY: z.string().optional()
+  OPENAI_API_KEY: z.string().optional(),
+  CODEX_APP_SERVER_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : false)),
+  CODEX_APP_SERVER_COMMAND: z.string().optional().default("codex"),
+  CODEX_APP_SERVER_CLIENT_NAME: z.string().optional().default("alfred-gateway"),
+  CODEX_APP_SERVER_CLIENT_VERSION: z.string().optional().default("0.1.0"),
+  CODEX_AUTH_LOGIN_MODE: z.enum(["chatgpt", "chatgptAuthTokens", "apiKey"]).optional().default("chatgpt"),
+  CODEX_MODEL: z.string().optional(),
+  CODEX_TURN_TIMEOUT_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 120000))
+    .pipe(z.number().int().min(5000).max(300000)),
+  CODEX_ACCOUNT_REFRESH_BEFORE_TURN: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true))
 });
 
 export type AppConfig = {
@@ -70,6 +88,14 @@ export type AppConfig = {
   openAiResponsesModel: string;
   openAiResponsesTimeoutMs: number;
   openAiApiKey?: string;
+  codexAppServerEnabled: boolean;
+  codexAppServerCommand: string;
+  codexAppServerClientName: string;
+  codexAppServerClientVersion: string;
+  codexAuthLoginMode: "chatgpt" | "chatgptAuthTokens" | "apiKey";
+  codexModel?: string;
+  codexTurnTimeoutMs: number;
+  codexAccountRefreshBeforeTurn: boolean;
 };
 
 export function loadDotEnvFile(dotEnvPath = path.resolve(process.cwd(), ".env")): void {
@@ -105,6 +131,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     openAiResponsesUrl: parsed.OPENAI_RESPONSES_URL,
     openAiResponsesModel: parsed.OPENAI_RESPONSES_MODEL,
     openAiResponsesTimeoutMs: parsed.OPENAI_RESPONSES_TIMEOUT_MS,
-    openAiApiKey: parsed.OPENAI_API_KEY
+    openAiApiKey: parsed.OPENAI_API_KEY,
+    codexAppServerEnabled: parsed.CODEX_APP_SERVER_ENABLED,
+    codexAppServerCommand: parsed.CODEX_APP_SERVER_COMMAND,
+    codexAppServerClientName: parsed.CODEX_APP_SERVER_CLIENT_NAME,
+    codexAppServerClientVersion: parsed.CODEX_APP_SERVER_CLIENT_VERSION,
+    codexAuthLoginMode: parsed.CODEX_AUTH_LOGIN_MODE,
+    codexModel: parsed.CODEX_MODEL,
+    codexTurnTimeoutMs: parsed.CODEX_TURN_TIMEOUT_MS,
+    codexAccountRefreshBeforeTurn: parsed.CODEX_ACCOUNT_REFRESH_BEFORE_TURN
   };
 }

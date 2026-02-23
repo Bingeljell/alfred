@@ -167,7 +167,7 @@ export function renderWebConsoleHtml(): string {
           <button class="secondary" id="sendJob">Send as Async Job</button>
           <button class="secondary" id="healthBtn">Health</button>
         </div>
-        <div class="hint">Quick commands: <span class="pill">/task add ...</span><span class="pill">/note add ...</span><span class="pill">/remind &lt;ISO&gt; ...</span><span class="pill">/auth connect</span><span class="pill">/auth status</span><span class="pill">send ...</span><span class="pill">approve &lt;token&gt;</span></div>
+        <div class="hint">Quick commands: <span class="pill">/task add ...</span><span class="pill">/note add ...</span><span class="pill">/remind &lt;ISO&gt; ...</span><span class="pill">/auth connect</span><span class="pill">/auth status</span><span class="pill">/auth limits</span><span class="pill">send ...</span><span class="pill">approve &lt;token&gt;</span></div>
         <div class="status" id="statusLine"></div>
       </section>
 
@@ -215,6 +215,7 @@ export function renderWebConsoleHtml(): string {
             <div class="actions">
               <button class="secondary" id="oauthConnect">Connect</button>
               <button class="secondary" id="oauthStatus">Status</button>
+              <button class="secondary" id="oauthLimits">Rate Limits</button>
               <button class="secondary" id="oauthDisconnect">Disconnect</button>
             </div>
           </div>
@@ -395,6 +396,14 @@ export function renderWebConsoleHtml(): string {
         if (!sessionId) return setStatus("Session ID is required.");
         const response = await api("GET", "/v1/auth/openai/status?sessionId=" + encodeURIComponent(sessionId));
         pushLog("OAUTH_STATUS", response);
+        if (response.data?.connected === false) {
+          setStatus("Codex auth unavailable; chat may use API key fallback if configured.");
+        }
+      });
+
+      $("oauthLimits").addEventListener("click", async () => {
+        const response = await api("GET", "/v1/auth/openai/rate-limits");
+        pushLog("OAUTH_RATE_LIMITS", response);
       });
 
       $("oauthDisconnect").addEventListener("click", async () => {

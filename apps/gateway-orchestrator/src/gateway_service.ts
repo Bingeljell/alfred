@@ -9,7 +9,7 @@ import { OutboundNotificationStore } from "./notification_store";
 import { MessageDedupeStore } from "./whatsapp/dedupe_store";
 import { normalizeBaileysInbound } from "./whatsapp/normalize_baileys";
 import { OAuthService } from "./auth/oauth_service";
-import { OpenAIResponsesService } from "./llm/openai_responses_service";
+import { CodexAuthService, type CodexLoginStartMode } from "./codex/auth_service";
 
 export class GatewayService {
   constructor(
@@ -20,7 +20,10 @@ export class GatewayService {
     private readonly taskStore?: TaskStore,
     private readonly approvalStore?: ApprovalStore,
     private readonly oauthService?: OAuthService,
-    private readonly llmService?: OpenAIResponsesService
+    private readonly llmService?: { generateText: (sessionId: string, input: string) => Promise<{ text: string } | null> },
+    private readonly codexAuthService?: CodexAuthService,
+    private readonly codexLoginMode: CodexLoginStartMode = "chatgpt",
+    private readonly codexApiKey?: string
   ) {}
 
   async health(): Promise<{
@@ -260,6 +263,14 @@ export class GatewayService {
       }
 
       case "auth_connect": {
+        if (this.codexAuthService) {
+          const started = await this.codexAuthService.startLogin(this.codexLoginMode, this.codexApiKey);
+          if (started.authorizationUrl) {
+            return `Open this link to connect Codex (${started.mode}): ${started.authorizationUrl}`;
+          }
+          return `Codex auth login started (${started.mode}).`;
+        }
+
         if (!this.oauthService) {
           return "OAuth is not configured.";
         }
@@ -269,6 +280,17 @@ export class GatewayService {
       }
 
       case "auth_status": {
+        if (this.codexAuthService) {
+          const status = await this.codexAuthService.readStatus(false);
+          if (!status.connected) {
+            return "Codex auth is not connected.";
+          }
+
+          const identity = status.email ? `${status.email}` : "session";
+          const plan = status.planType ? ` (${status.planType})` : "";
+          return `Codex auth connected as ${identity}${plan}.`;
+        }
+
         if (!this.oauthService) {
           return "OAuth is not configured.";
         }
@@ -282,7 +304,29 @@ export class GatewayService {
         return `OpenAI OAuth connected (${status.mode}, ${status.storageScheme}${expiry}).`;
       }
 
+      case "auth_limits": {
+        if (!this.codexAuthService) {
+          return "Rate limits are available when Codex auth is configured.";
+        }
+
+        const limits = await this.codexAuthService.readRateLimits();
+        const primary = limits.rateLimits?.primary;
+        if (!primary) {
+          return "Codex rate limits unavailable.";
+        }
+
+        const used = `${Math.round(primary.usedPercent * 100) / 100}%`;
+        const reset = primary.resetsAt ? new Date(primary.resetsAt * 1000).toISOString() : "unknown";
+        const label = limits.rateLimits?.limitName ?? limits.rateLimits?.limitId ?? "default";
+        return `Codex rate limit (${label}): used ${used}, resets at ${reset}`;
+      }
+
       case "auth_disconnect": {
+        if (this.codexAuthService) {
+          await this.codexAuthService.logout();
+          return "Codex auth disconnected.";
+        }
+
         if (!this.oauthService) {
           return "OAuth is not configured.";
         }

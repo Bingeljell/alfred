@@ -26,6 +26,7 @@ describe("parseCommand", () => {
   it("parses oauth commands", () => {
     expect(parseCommand("/auth connect")).toEqual({ kind: "auth_connect" });
     expect(parseCommand("/auth status")).toEqual({ kind: "auth_status" });
+    expect(parseCommand("/auth limits")).toEqual({ kind: "auth_limits" });
     expect(parseCommand("/auth disconnect")).toEqual({ kind: "auth_disconnect" });
   });
 
