@@ -181,6 +181,7 @@ Deliverables:
 - Stream retention/noise controls: enforce bounded conversation stream persistence and short-window duplicate suppression, with optional noisy-event inclusion for diagnostics.
 - Operator auth-path control: allow per-request auth preference selection (`auto`, `oauth`, `api_key`) in `/ui` for deterministic fallback testing.
 - Memory-aware chat path: inject top cited memory hits into chat prompts and return explicit memory references for recall traceability.
+- Conversation continuity path: surface persisted session transcript in `/ui` and inject bounded recent session turns into chat prompts for restart-safe continuity.
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.

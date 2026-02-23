@@ -114,6 +114,7 @@ Acceptance criteria:
 - Live WhatsApp status includes accepted/ignored inbound counters and sync mode so operators can verify context-bloat protection behavior.
 - Stream API supports low-noise mode by default (`chat`/`command`/`job`/`error`) with optional noisy-event inclusion in `/ui` for deeper diagnostics.
 - Stream persistence has retention and noise controls (`STREAM_MAX_EVENTS`, `STREAM_RETENTION_DAYS`, `STREAM_DEDUPE_WINDOW_MS`) to keep long-running state bounded.
+- `/ui` includes a persisted session transcript panel so operators can reload and inspect prior conversation turns after refresh/restart.
 
 Testing:
 - Automated: route-level/UI render tests for live WhatsApp endpoints plus unit coverage for Baileys runtime filtering/token authorization.
@@ -133,6 +134,7 @@ Acceptance criteria:
 - Web console supports explicit LLM auth preference selection per request (`auto`, `oauth`, `api_key`) so operators can force-test fallback paths intentionally.
 - When no backend credential is available, chat returns explicit guidance instead of silent `ack:` fallback.
 - Normal chat turns can inject top memory snippets into prompt context and append source references for auditable recall.
+- Normal chat turns can also inject recent persisted conversation context (bounded window) to improve continuity after reconnects/restarts.
 
 Testing:
 - Automated: OAuth service unit tests, command parsing tests, and integration flow for connect/status/disconnect.

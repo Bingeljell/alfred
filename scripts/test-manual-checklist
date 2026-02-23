@@ -5,10 +5,11 @@ Web Console Manual Checklist
 1. Copy `.env.example` to `.env` and set required values.
 2. Start gateway: npm run dev:gateway
 3. Open http://localhost:3000/ui
-4. Use `LLM Auth Mode` = `Auto (Recommended)` and send a chat message; confirm response appears in log panel.
-5. Switch `LLM Auth Mode` to `API key only` (without API key configured) and confirm explicit backend guidance is returned (not silent `ack:`).
-6. Send as async job and confirm jobId appears and can be checked with Job Controls.
-7. Run Memory Search/Sync/Status actions and confirm responses are shown in the log panel.
+4. Confirm `Persisted Transcript` loads prior turns for the selected Session ID after refresh/restart.
+5. Use `LLM Auth Mode` = `Auto (Recommended)` and send a chat message; confirm response appears in log panel and transcript updates.
+6. Switch `LLM Auth Mode` to `API key only` (without API key configured) and confirm explicit backend guidance is returned (not silent `ack:`).
+7. Send as async job and confirm jobId appears and can be checked with Job Controls.
+8. Run Memory Search/Sync/Status actions and confirm responses are shown in the log panel.
 
 OAuth Manual Checklist
 1. Set `.env` for Codex auth path:
