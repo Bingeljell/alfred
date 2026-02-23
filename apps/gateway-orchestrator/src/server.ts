@@ -11,6 +11,7 @@ import { NoteStore } from "./builtins/note_store";
 import { TaskStore } from "./builtins/task_store";
 import { ApprovalStore } from "./builtins/approval_store";
 import { startReminderDispatcher } from "./builtins/reminder_dispatcher";
+import { ConversationStore } from "./builtins/conversation_store";
 import { OAuthService } from "./auth/oauth_service";
 import { OpenAIResponsesService } from "./llm/openai_responses_service";
 import { CodexAppServerClient } from "./codex/app_server_client";
@@ -32,6 +33,7 @@ async function main(): Promise<void> {
   const noteStore = new NoteStore(config.stateDir);
   const taskStore = new TaskStore(config.stateDir);
   const approvalStore = new ApprovalStore(config.stateDir);
+  const conversationStore = new ConversationStore(config.stateDir);
   const oauthService = new OAuthService({
     stateDir: config.stateDir,
     publicBaseUrl: config.publicBaseUrl,
@@ -92,6 +94,7 @@ async function main(): Promise<void> {
   await noteStore.ensureReady();
   await taskStore.ensureReady();
   await approvalStore.ensureReady();
+  await conversationStore.ensureReady();
   await oauthService.ensureReady();
   if (codexAuthService) {
     try {
@@ -171,12 +174,14 @@ async function main(): Promise<void> {
     codexAuthService,
     codexLoginMode: config.codexAuthLoginMode,
     codexApiKey: config.openAiApiKey,
+    conversationStore,
     whatsAppLiveManager: whatsAppLiveRuntime,
     baileysInboundToken: config.whatsAppBaileysInboundToken
   });
   const dispatcher = startNotificationDispatcher({
     store: notificationStore,
     adapter: whatsAppAdapter,
+    conversationStore,
     pollIntervalMs: config.notificationPollMs
   });
   const reminderDispatcher = startReminderDispatcher({

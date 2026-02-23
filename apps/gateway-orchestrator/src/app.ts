@@ -12,6 +12,7 @@ import { ApprovalStore } from "./builtins/approval_store";
 import { renderWebConsoleHtml } from "./ui/render_web_console";
 import { OAuthService } from "./auth/oauth_service";
 import { CodexAuthService, type CodexLoginStartMode } from "./codex/auth_service";
+import { ConversationStore } from "./builtins/conversation_store";
 
 const CancelParamsSchema = z.object({
   jobId: z.string().min(1)
@@ -96,6 +97,7 @@ export function createGatewayApp(
     codexAuthService?: CodexAuthService;
     codexLoginMode?: CodexLoginStartMode;
     codexApiKey?: string;
+    conversationStore?: ConversationStore;
     whatsAppLiveManager?: {
       status: () => unknown | Promise<unknown>;
       connect: () => Promise<unknown>;
@@ -116,13 +118,15 @@ export function createGatewayApp(
     options?.llmService,
     options?.codexAuthService,
     options?.codexLoginMode,
-    options?.codexApiKey
+    options?.codexApiKey,
+    options?.conversationStore
   );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;
   const oauthService = options?.oauthService;
   const codexAuthService = options?.codexAuthService;
   const whatsAppLiveManager = options?.whatsAppLiveManager;
+  const conversationStore = options?.conversationStore;
   const baileysInboundToken = options?.baileysInboundToken?.trim() ? options.baileysInboundToken.trim() : undefined;
   void dedupeStore.ensureReady();
   app.use(express.json());
@@ -138,6 +142,20 @@ export function createGatewayApp(
   app.get("/health", async (_req, res) => {
     const health = await service.health();
     res.status(200).json(health);
+  });
+
+  app.get("/v1/stream/events", async (req, res) => {
+    if (!conversationStore) {
+      res.status(404).json({ error: "stream_not_configured" });
+      return;
+    }
+
+    const limitRaw = Number(req.query.limit ?? 100);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, Math.floor(limitRaw))) : 100;
+    const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
+
+    const events = sessionId ? await conversationStore.listBySession(sessionId, limit) : await conversationStore.listRecent(limit);
+    res.status(200).json({ events });
   });
 
   app.post("/v1/messages/inbound", async (req, res) => {

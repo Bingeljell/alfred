@@ -106,6 +106,8 @@ Acceptance criteria:
 - Web UI auto-refreshes live WhatsApp status so QR image/raw payload update without repeated manual status clicks.
 - QR image payload is rendered by the gateway (`qrImageDataUrl`) so linking does not rely on browser CDN script availability.
 - Web UI includes source-at-a-glance cards and change logs for Gateway/Auth/WhatsApp/Memory so operators can track cross-service state without tailing terminal output.
+- Unified interaction stream is available in `/ui` from persisted backend events (inbound/outbound/system) across direct API, WhatsApp ingress, and worker-delivered notifications.
+- Gateway shutdown now preserves Baileys linked-device auth state (no forced logout), so restarting the process should not require re-linking by default.
 
 Testing:
 - Automated: route-level/UI render tests for live WhatsApp endpoints plus unit coverage for Baileys runtime filtering/token authorization.

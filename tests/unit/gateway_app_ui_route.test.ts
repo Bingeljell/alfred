@@ -27,6 +27,7 @@ describe("gateway web console routes", () => {
     expect(routes).toContain("GET /v1/whatsapp/live/status");
     expect(routes).toContain("POST /v1/whatsapp/live/connect");
     expect(routes).toContain("POST /v1/whatsapp/live/disconnect");
+    expect(routes).toContain("GET /v1/stream/events");
     expect(routes).toContain("GET /v1/auth/openai/callback");
   });
 });

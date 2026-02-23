@@ -6,6 +6,10 @@ type Listener = (payload: unknown) => void;
 function createFakeSocket() {
   const listeners = new Map<string, Listener[]>();
   const sent: Array<{ jid: string; text: string }> = [];
+  const counters = {
+    logoutCalls: 0,
+    endCalls: 0
+  };
 
   const socket = {
     ev: {
@@ -18,8 +22,12 @@ function createFakeSocket() {
     sendMessage: async (jid: string, payload: { text: string }) => {
       sent.push({ jid, text: payload.text });
     },
-    end: () => undefined,
-    logout: async () => undefined,
+    end: () => {
+      counters.endCalls += 1;
+    },
+    logout: async () => {
+      counters.logoutCalls += 1;
+    },
     user: { id: "12345@s.whatsapp.net" }
   };
 
@@ -29,7 +37,7 @@ function createFakeSocket() {
     }
   }
 
-  return { socket, sent, emit };
+  return { socket, sent, emit, counters };
 }
 
 describe("BaileysRuntime", () => {
@@ -181,5 +189,24 @@ describe("BaileysRuntime", () => {
     expect(status.qrGenerationLimit).toBe(3);
     expect(status.qrLocked).toBe(true);
     expect(status.lastError).toBe("baileys_qr_generation_limit_reached");
+  });
+
+  it("keeps auth session on runtime stop (no logout)", async () => {
+    const fake = createFakeSocket();
+    const runtime = new BaileysRuntime({
+      authDir: "/tmp/baileys-auth",
+      onInbound: async () => undefined,
+      moduleLoader: async () => ({
+        default: () => fake.socket,
+        fetchLatestBaileysVersion: async () => ({ version: [1, 0, 0] as [number, number, number] }),
+        useMultiFileAuthState: async () => ({ state: {}, saveCreds: async () => undefined })
+      })
+    });
+
+    await runtime.connect();
+    await runtime.stop();
+
+    expect(fake.counters.logoutCalls).toBe(0);
+    expect(fake.counters.endCalls).toBeGreaterThan(0);
   });
 });

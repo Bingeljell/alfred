@@ -173,6 +173,8 @@ Deliverables:
 - Live WhatsApp linking hardening: auto-refresh QR/status in UI and cap QR generation attempts per connect window before manual re-init.
 - Live WhatsApp linking reliability: backend-generated QR image payloads (no CDN dependency) returned via live status/connect endpoints.
 - Operator observability pass: source-level status cards and change-feed logging in `/ui` for Gateway/Auth/WhatsApp/Memory.
+- Operator observability pass (continued): persisted unified interaction stream endpoint (`/v1/stream/events`) consumed by `/ui` for cross-channel inbound/outbound/system tracing.
+- Runtime durability: preserve WhatsApp linked-device auth across gateway stop/start cycles by avoiding implicit logout on process shutdown.
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.

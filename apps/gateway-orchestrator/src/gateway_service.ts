@@ -10,6 +10,7 @@ import { MessageDedupeStore } from "./whatsapp/dedupe_store";
 import { normalizeBaileysInbound } from "./whatsapp/normalize_baileys";
 import { OAuthService } from "./auth/oauth_service";
 import { CodexAuthService, type CodexLoginStartMode } from "./codex/auth_service";
+import { ConversationStore } from "./builtins/conversation_store";
 
 export class GatewayService {
   constructor(
@@ -23,7 +24,8 @@ export class GatewayService {
     private readonly llmService?: { generateText: (sessionId: string, input: string) => Promise<{ text: string } | null> },
     private readonly codexAuthService?: CodexAuthService,
     private readonly codexLoginMode: CodexLoginStartMode = "chatgpt",
-    private readonly codexApiKey?: string
+    private readonly codexApiKey?: string,
+    private readonly conversationStore?: ConversationStore
   ) {}
 
   async health(): Promise<{
@@ -46,6 +48,15 @@ export class GatewayService {
     jobId?: string;
   }> {
     const inbound = InboundMessageSchema.parse(payload ?? {});
+    const provider = String(inbound.metadata?.provider ?? "");
+    const source = provider === "baileys" ? "whatsapp" : "gateway";
+    const channel = provider === "baileys" ? "baileys" : "direct";
+    await this.recordConversation(inbound.sessionId, "inbound", inbound.text ?? "", {
+      source,
+      channel,
+      kind: inbound.requestJob ? "job" : "chat",
+      metadata: inbound.metadata
+    });
 
     if (inbound.requestJob) {
       const job = await this.store.createJob({
@@ -59,6 +70,12 @@ export class GatewayService {
       });
 
       await this.queueJobNotification(inbound.sessionId, job.id, "queued", `Job ${job.id} is queued`);
+      await this.recordConversation(inbound.sessionId, "outbound", `Job ${job.id} queued`, {
+        source: "gateway",
+        channel: "internal",
+        kind: "job",
+        metadata: { jobId: job.id, status: "queued" }
+      });
 
       return {
         accepted: true,
@@ -71,6 +88,11 @@ export class GatewayService {
       const command = parseCommand(inbound.text);
       if (command) {
         const response = await this.executeCommand(inbound.sessionId, command);
+        await this.recordConversation(inbound.sessionId, "outbound", response, {
+          source: "gateway",
+          channel: "internal",
+          kind: "command"
+        });
         return {
           accepted: true,
           mode: "chat",
@@ -79,6 +101,11 @@ export class GatewayService {
       }
 
       const response = await this.executeChatTurn(inbound.sessionId, inbound.text);
+      await this.recordConversation(inbound.sessionId, "outbound", response, {
+        source: "gateway",
+        channel: "internal",
+        kind: "chat"
+      });
       return {
         accepted: true,
         mode: "chat",
@@ -129,6 +156,12 @@ export class GatewayService {
     const duplicate = await dedupeStore.isDuplicateAndMark(normalized.dedupeKey);
 
     if (duplicate) {
+      await this.recordConversation(normalized.normalized.sessionId, "system", "Dropped duplicate inbound message", {
+        source: "whatsapp",
+        channel: "baileys",
+        kind: "dedupe",
+        metadata: { providerMessageId: normalized.providerMessageId }
+      });
       return {
         accepted: true,
         duplicate: true,
@@ -396,5 +429,26 @@ export class GatewayService {
       status,
       text
     });
+  }
+
+  private async recordConversation(
+    sessionId: string,
+    direction: "inbound" | "outbound" | "system",
+    text: string,
+    options?: {
+      source?: "gateway" | "whatsapp" | "auth" | "memory" | "worker" | "system";
+      channel?: "direct" | "baileys" | "api" | "internal";
+      kind?: "chat" | "command" | "job" | "status" | "error" | "dedupe";
+      metadata?: Record<string, unknown>;
+    }
+  ): Promise<void> {
+    if (!this.conversationStore) {
+      return;
+    }
+    try {
+      await this.conversationStore.add(sessionId, direction, text, options);
+    } catch {
+      // Observability is best-effort; never block user flows.
+    }
   }
 }

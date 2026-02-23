@@ -457,7 +457,12 @@ export function renderWebConsoleHtml(): string {
               <input type="checkbox" id="logSourceEvents" checked />
               Log source changes
             </label>
+            <label class="inline-control" for="logInteractionStream">
+              <input type="checkbox" id="logInteractionStream" checked />
+              Log interaction stream
+            </label>
             <button class="secondary" id="sourceRefresh">Refresh Sources</button>
+            <button class="secondary" id="streamRefresh">Refresh Stream</button>
           </div>
         </div>
         <div class="toolbar">
@@ -484,6 +489,7 @@ export function renderWebConsoleHtml(): string {
       const waQrHint = $("waQrHint");
       const logNewestFirst = $("logNewestFirst");
       const logSourceEvents = $("logSourceEvents");
+      const logInteractionStream = $("logInteractionStream");
       const sourceGatewayCard = $("sourceGatewayCard");
       const sourceGatewayValue = $("sourceGatewayValue");
       const sourceGatewayMeta = $("sourceGatewayMeta");
@@ -498,11 +504,15 @@ export function renderWebConsoleHtml(): string {
       const sourceMemoryMeta = $("sourceMemoryMeta");
       const WA_LIVE_AUTO_POLL_MS = 2000;
       const SOURCE_AUTO_POLL_MS = 5000;
+      const STREAM_AUTO_POLL_MS = 1500;
       let waLivePollInFlight = false;
       let waLivePollTimer = null;
       let sourcePollInFlight = false;
       let sourcePollTimer = null;
+      let streamPollInFlight = false;
+      let streamPollTimer = null;
       const sourceFingerprints = Object.create(null);
+      const seenStreamEventIds = new Set();
 
       function stamp() {
         return new Date().toISOString();
@@ -538,6 +548,35 @@ export function renderWebConsoleHtml(): string {
           return;
         }
         pushLog("SOURCE_" + sourceKey.toUpperCase(), snapshot);
+      }
+
+      function rememberStreamEvent(eventId) {
+        seenStreamEventIds.add(eventId);
+        if (seenStreamEventIds.size <= 2000) {
+          return;
+        }
+        const first = seenStreamEventIds.values().next();
+        if (!first.done) {
+          seenStreamEventIds.delete(first.value);
+        }
+      }
+
+      function pushStreamEvent(event) {
+        const source = event?.source ? String(event.source).toUpperCase() : "SYSTEM";
+        const direction = event?.direction ? String(event.direction).toUpperCase() : "SYSTEM";
+        const kind = event?.kind ? String(event.kind).toUpperCase() : "STATUS";
+        const payload = {
+          id: event?.id ?? "unknown",
+          at: event?.createdAt ?? stamp(),
+          source: event?.source ?? "system",
+          channel: event?.channel ?? "internal",
+          direction: event?.direction ?? "system",
+          kind: event?.kind ?? "status",
+          sessionId: event?.sessionId ?? "system",
+          text: event?.text ?? "",
+          metadata: event?.metadata ?? {}
+        };
+        pushLog("STREAM_" + source + "_" + direction + "_" + kind, payload);
       }
 
       async function api(method, url, body) {
@@ -930,6 +969,41 @@ export function renderWebConsoleHtml(): string {
         }, SOURCE_AUTO_POLL_MS);
       }
 
+      async function pollInteractionStreamSilently() {
+        if (streamPollInFlight) {
+          return;
+        }
+        streamPollInFlight = true;
+        try {
+          const response = await api("GET", "/v1/stream/events?limit=80");
+          if (!response.ok) {
+            return;
+          }
+          const events = Array.isArray(response.data?.events) ? response.data.events : [];
+          for (const event of events) {
+            const eventId = event && typeof event.id === "string" ? event.id : "";
+            if (!eventId || seenStreamEventIds.has(eventId)) {
+              continue;
+            }
+            rememberStreamEvent(eventId);
+            if (logInteractionStream.checked) {
+              pushStreamEvent(event);
+            }
+          }
+        } finally {
+          streamPollInFlight = false;
+        }
+      }
+
+      function startInteractionStreamPoll() {
+        if (streamPollTimer) {
+          clearInterval(streamPollTimer);
+        }
+        streamPollTimer = setInterval(() => {
+          void pollInteractionStreamSilently();
+        }, STREAM_AUTO_POLL_MS);
+      }
+
       window.addEventListener("beforeunload", () => {
         if (!waLivePollTimer) {
           // Continue to source timer cleanup
@@ -938,10 +1012,16 @@ export function renderWebConsoleHtml(): string {
           waLivePollTimer = null;
         }
         if (!sourcePollTimer) {
+          // Continue to stream cleanup
+        } else {
+          clearInterval(sourcePollTimer);
+          sourcePollTimer = null;
+        }
+        if (!streamPollTimer) {
           return;
         }
-        clearInterval(sourcePollTimer);
-        sourcePollTimer = null;
+        clearInterval(streamPollTimer);
+        streamPollTimer = null;
       });
 
       const waEnvSnippet = [
@@ -1201,6 +1281,14 @@ export function renderWebConsoleHtml(): string {
         setStatus("Source snapshot refreshed.", "success");
       });
 
+      $("streamRefresh").addEventListener("click", async () => {
+        await runButtonAction($("streamRefresh"), "STREAM_REFRESH", async () => {
+          await pollInteractionStreamSilently();
+          return { ok: true, status: 200, data: { refreshed: true } };
+        });
+        setStatus("Interaction stream refreshed.", "success");
+      });
+
       $("logClear").addEventListener("click", async () => {
         await runButtonAction($("logClear"), "CLEAR_LOG", async () => {
           log.textContent = "";
@@ -1238,6 +1326,14 @@ export function renderWebConsoleHtml(): string {
           await pollSourcesSilently();
         } finally {
           startSourceAutoPoll();
+        }
+      })();
+
+      void (async () => {
+        try {
+          await pollInteractionStreamSilently();
+        } finally {
+          startInteractionStreamPoll();
         }
       })();
     </script>

@@ -195,15 +195,16 @@ export class BaileysRuntime implements BaileysTransport {
     }
   }
 
-  async disconnect(): Promise<BaileysRuntimeStatus> {
+  async disconnect(options?: { logout?: boolean }): Promise<BaileysRuntimeStatus> {
     this.allowReconnect = false;
     this.clearReconnectTimer();
+    const shouldLogout = options?.logout === true;
 
     const socket = this.socket;
     this.socket = null;
     this.saveCreds = null;
 
-    if (socket?.logout) {
+    if (shouldLogout && socket?.logout) {
       try {
         await socket.logout();
       } catch {
@@ -227,7 +228,7 @@ export class BaileysRuntime implements BaileysTransport {
   }
 
   async stop(): Promise<void> {
-    await this.disconnect();
+    await this.disconnect({ logout: false });
   }
 
   onMessage(handler: (message: BaileysInboundMessage) => Promise<void> | void): void {
