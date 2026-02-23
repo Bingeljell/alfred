@@ -1,9 +1,10 @@
-import { loadConfig } from "../../gateway-orchestrator/src/config";
+import { loadConfig, loadDotEnvFile } from "../../gateway-orchestrator/src/config";
 import { FileBackedQueueStore } from "../../gateway-orchestrator/src/local_queue_store";
 import { OutboundNotificationStore } from "../../gateway-orchestrator/src/notification_store";
 import { startWorker } from "./worker";
 
 async function main(): Promise<void> {
+  loadDotEnvFile();
   const config = loadConfig();
   const store = new FileBackedQueueStore(config.stateDir);
   const notificationStore = new OutboundNotificationStore(config.stateDir);

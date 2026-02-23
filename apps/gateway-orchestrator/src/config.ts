@@ -55,6 +55,17 @@ export type AppConfig = {
   oauthOpenAiScope: string;
 };
 
+export function loadDotEnvFile(dotEnvPath = path.resolve(process.cwd(), ".env")): void {
+  try {
+    process.loadEnvFile(dotEnvPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
   const parsed = EnvSchema.parse(env);
 

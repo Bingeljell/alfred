@@ -1,4 +1,4 @@
-import { loadConfig } from "./config";
+import { loadConfig, loadDotEnvFile } from "./config";
 import { createGatewayApp } from "./app";
 import { FileBackedQueueStore } from "./local_queue_store";
 import { MessageDedupeStore } from "./whatsapp/dedupe_store";
@@ -14,6 +14,7 @@ import { startReminderDispatcher } from "./builtins/reminder_dispatcher";
 import { OAuthService } from "./auth/oauth_service";
 
 async function main(): Promise<void> {
+  loadDotEnvFile();
   const config = loadConfig();
   const store = new FileBackedQueueStore(config.stateDir);
   const dedupeStore = new MessageDedupeStore(config.stateDir);
