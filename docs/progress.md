@@ -3,8 +3,8 @@
 ## Current Phase
 
 - Phase 6: MVP Hardening for Low-cost Host
-- Status: Not Started
-- Started: -
+- Status: In Progress
+- Started: 2026-02-23
 
 ## Phase Tracker
 
@@ -16,7 +16,7 @@
 | 3 | Memory v1 | Done | 2026-02-22 | 2026-02-22 | Markdown canonical memory, SQLite FTS index, retrieval APIs, and evaluation smoke tests completed. |
 | 4 | External Skill Integration Contract | Done | 2026-02-22 | 2026-02-22 | Allowlisted git install pinned to commit SHA, CLI runner contract, and security policy tests completed. |
 | 5 | Built-in Reminders and Notes + Job Controls | Done | 2026-02-22 | 2026-02-22 | Added reminder/task/note commands, approval gating, and job status/cancel/retry control flows with test coverage. |
-| 6 | MVP Hardening for Low-cost Host | Not Started | - | - | Retention, backup reminders, CI, performance tuning. |
+| 6 | MVP Hardening for Low-cost Host | In Progress | 2026-02-23 | - | OAuth Phase 6.1 implemented (web + WhatsApp command flow). Remaining: retention, backup reminders, CI, performance tuning. |
 
 ## Completion Checklist Template
 

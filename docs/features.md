@@ -104,6 +104,20 @@ Testing:
 - Automated: route-level test for `/ui` and root redirect; UI render test for required controls/endpoints.
 - Manual: use browser console to submit chat/job/memory actions and verify responses/log output.
 
+## 8) OAuth Connection Layer (OpenAI First)
+
+Description:
+- Add OAuth-first LLM connection flow with local mock mode for development and a live mode path for production credentials.
+
+Acceptance criteria:
+- Web/API endpoint can start OAuth and return an authorization URL bound to a session-specific state token.
+- Callback endpoint validates state and stores per-session token material for later provider use.
+- WhatsApp command path supports `/auth connect`, `/auth status`, and `/auth disconnect`.
+
+Testing:
+- Automated: OAuth service unit tests, command parsing tests, and integration flow for connect/status/disconnect.
+- Manual: run OAuth connect from `/ui`, complete callback, verify status in both web console and chat commands.
+
 ## Security Baseline (v1)
 
 - Side-effect actions require explicit confirmation.

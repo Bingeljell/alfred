@@ -8,6 +8,13 @@ Web Console Manual Checklist
 4. Send as async job and confirm jobId appears and can be checked with Job Controls.
 5. Run Memory Search/Sync/Status actions and confirm responses are shown in the log panel.
 
+OAuth Manual Checklist
+1. In `/ui`, click OAuth Connect and approve on the mock authorize page.
+2. Back in `/ui`, click OAuth Status and confirm connected mode/status is returned.
+3. Send `/auth status` through chat endpoint and confirm connected response.
+4. Send `/auth disconnect` and verify `/auth status` reports not connected.
+5. (Optional live mode) set `OAUTH_OPENAI_MODE=live` and provider env vars, then repeat start/callback/status flow.
+
 Phase 1 Manual Checklist
 1. Start gateway: npm run dev:gateway
 2. Start worker: npm run dev:worker

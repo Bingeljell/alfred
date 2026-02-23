@@ -163,6 +163,8 @@ Definition of done:
 ## Phase 6: MVP Hardening for Low-cost Host
 
 Deliverables:
+- OAuth Phase 6.1: OpenAI connect/status/disconnect with local mock authorize flow and callback handling.
+- OAuth entry points from both web console controls and WhatsApp chat commands (`/auth connect`, `/auth status`, `/auth disconnect`).
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.
