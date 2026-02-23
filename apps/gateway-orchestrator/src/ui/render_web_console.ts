@@ -395,6 +395,25 @@ export function renderWebConsoleHtml(): string {
           </div>
         </div>
         <div class="hint auth-summary" id="authSummary" data-state="unknown">Auth: unknown</div>
+        <div class="setup-box">
+          <h3>Identity Mapping (WhatsApp -> Auth Profile)</h3>
+          <div class="row">
+            <div>
+              <label for="mapWhatsAppJid">WhatsApp JID</label>
+              <input id="mapWhatsAppJid" value="owner@s.whatsapp.net" />
+            </div>
+            <div>
+              <label for="mapAuthSessionId">Auth Session ID</label>
+              <input id="mapAuthSessionId" placeholder="defaults to same as JID" />
+            </div>
+          </div>
+          <div class="actions">
+            <button class="secondary" id="mapBind">Bind Mapping</button>
+            <button class="secondary" id="mapResolve">Resolve Mapping</button>
+            <button class="secondary" id="mapList">List Mappings</button>
+          </div>
+          <div class="hint" id="mapSummary">Use this when a WhatsApp JID should use a different auth profile/session for LLM routing.</div>
+        </div>
 
         <h2>Live WhatsApp (Baileys)</h2>
         <div class="actions">
@@ -481,6 +500,7 @@ export function renderWebConsoleHtml(): string {
       const log = $("log");
       const statusLine = $("statusLine");
       const authSummary = $("authSummary");
+      const mapSummary = $("mapSummary");
       const waLiveSummary = $("waLiveSummary");
       const waLiveBadge = $("waLiveBadge");
       const waSetupNext = $("waSetupNext");
@@ -502,6 +522,8 @@ export function renderWebConsoleHtml(): string {
       const sourceMemoryCard = $("sourceMemoryCard");
       const sourceMemoryValue = $("sourceMemoryValue");
       const sourceMemoryMeta = $("sourceMemoryMeta");
+      const mapWhatsAppJid = $("mapWhatsAppJid");
+      const mapAuthSessionId = $("mapAuthSessionId");
       const WA_LIVE_AUTO_POLL_MS = 2000;
       const SOURCE_AUTO_POLL_MS = 5000;
       const STREAM_AUTO_POLL_MS = 1500;
@@ -511,6 +533,8 @@ export function renderWebConsoleHtml(): string {
       let sourcePollTimer = null;
       let streamPollInFlight = false;
       let streamPollTimer = null;
+      let streamEventSource = null;
+      let streamUsingSse = false;
       const sourceFingerprints = Object.create(null);
       const seenStreamEventIds = new Set();
 
@@ -577,6 +601,24 @@ export function renderWebConsoleHtml(): string {
           metadata: event?.metadata ?? {}
         };
         pushLog("STREAM_" + source + "_" + direction + "_" + kind, payload);
+      }
+
+      function ingestStreamEvents(events) {
+        for (const event of events) {
+          const eventId = event && typeof event.id === "string" ? event.id : "";
+          if (!eventId || seenStreamEventIds.has(eventId)) {
+            continue;
+          }
+          rememberStreamEvent(eventId);
+          if (logInteractionStream.checked) {
+            pushStreamEvent(event);
+          }
+        }
+      }
+
+      function updateMapSummary(text, state = "idle") {
+        mapSummary.textContent = text;
+        mapSummary.dataset.state = state;
       }
 
       async function api(method, url, body) {
@@ -980,28 +1022,69 @@ export function renderWebConsoleHtml(): string {
             return;
           }
           const events = Array.isArray(response.data?.events) ? response.data.events : [];
-          for (const event of events) {
-            const eventId = event && typeof event.id === "string" ? event.id : "";
-            if (!eventId || seenStreamEventIds.has(eventId)) {
-              continue;
-            }
-            rememberStreamEvent(eventId);
-            if (logInteractionStream.checked) {
-              pushStreamEvent(event);
-            }
-          }
+          ingestStreamEvents(events);
         } finally {
           streamPollInFlight = false;
         }
       }
 
       function startInteractionStreamPoll() {
+        streamUsingSse = false;
+        if (streamEventSource) {
+          streamEventSource.close();
+          streamEventSource = null;
+        }
         if (streamPollTimer) {
           clearInterval(streamPollTimer);
         }
         streamPollTimer = setInterval(() => {
           void pollInteractionStreamSilently();
         }, STREAM_AUTO_POLL_MS);
+      }
+
+      function startInteractionStreamSse() {
+        if (typeof window.EventSource !== "function") {
+          startInteractionStreamPoll();
+          return;
+        }
+
+        if (streamEventSource) {
+          streamEventSource.close();
+          streamEventSource = null;
+        }
+        if (streamPollTimer) {
+          clearInterval(streamPollTimer);
+          streamPollTimer = null;
+        }
+
+        const url = "/v1/stream/events/subscribe?limit=80";
+        const source = new window.EventSource(url);
+        streamEventSource = source;
+        streamUsingSse = true;
+
+        source.onmessage = (evt) => {
+          if (!evt || !evt.data) {
+            return;
+          }
+          try {
+            const parsed = JSON.parse(evt.data);
+            ingestStreamEvents([parsed]);
+          } catch {
+            // ignore malformed events
+          }
+        };
+
+        source.onerror = () => {
+          if (streamEventSource) {
+            streamEventSource.close();
+            streamEventSource = null;
+          }
+          if (!streamUsingSse) {
+            return;
+          }
+          streamUsingSse = false;
+          startInteractionStreamPoll();
+        };
       }
 
       window.addEventListener("beforeunload", () => {
@@ -1018,10 +1101,16 @@ export function renderWebConsoleHtml(): string {
           sourcePollTimer = null;
         }
         if (!streamPollTimer) {
+          // Continue to event source cleanup
+        } else {
+          clearInterval(streamPollTimer);
+          streamPollTimer = null;
+        }
+        if (!streamEventSource) {
           return;
         }
-        clearInterval(streamPollTimer);
-        streamPollTimer = null;
+        streamEventSource.close();
+        streamEventSource = null;
       });
 
       const waEnvSnippet = [
@@ -1182,6 +1271,55 @@ export function renderWebConsoleHtml(): string {
         return $("sessionId").value.trim();
       }
 
+      $("mapBind").addEventListener("click", async () => {
+        const whatsAppJid = mapWhatsAppJid.value.trim();
+        const authSessionId = (mapAuthSessionId.value.trim() || selectedOAuthSession() || whatsAppJid).trim();
+        if (!whatsAppJid || !authSessionId) {
+          updateMapSummary("Both WhatsApp JID and Auth Session ID are required.", "error");
+          return;
+        }
+        const response = await runButtonAction($("mapBind"), "IDENTITY_MAP_BIND", () =>
+          api("POST", "/v1/identity/mappings", { whatsAppJid, authSessionId })
+        );
+        pushLog("IDENTITY_MAP_BIND", response);
+        if (response.ok) {
+          updateMapSummary("Mapped " + whatsAppJid + " -> " + authSessionId, "success");
+        } else {
+          updateMapSummary("Mapping failed (" + response.status + ")", "error");
+        }
+      });
+
+      $("mapResolve").addEventListener("click", async () => {
+        const whatsAppJid = mapWhatsAppJid.value.trim();
+        if (!whatsAppJid) {
+          updateMapSummary("WhatsApp JID is required for resolve.", "error");
+          return;
+        }
+        const response = await runButtonAction($("mapResolve"), "IDENTITY_MAP_RESOLVE", () =>
+          api("GET", "/v1/identity/resolve?whatsAppJid=" + encodeURIComponent(whatsAppJid))
+        );
+        pushLog("IDENTITY_MAP_RESOLVE", response);
+        if (response.ok && response.data?.authSessionId) {
+          mapAuthSessionId.value = String(response.data.authSessionId);
+          updateMapSummary("Resolved " + whatsAppJid + " -> " + response.data.authSessionId, "success");
+        } else {
+          updateMapSummary("No mapping found for " + whatsAppJid, "warn");
+        }
+      });
+
+      $("mapList").addEventListener("click", async () => {
+        const response = await runButtonAction($("mapList"), "IDENTITY_MAP_LIST", () =>
+          api("GET", "/v1/identity/mappings")
+        );
+        pushLog("IDENTITY_MAP_LIST", response);
+        if (response.ok) {
+          const count = Array.isArray(response.data?.mappings) ? response.data.mappings.length : 0;
+          updateMapSummary("Loaded " + count + " mapping(s).", "success");
+        } else {
+          updateMapSummary("Failed to list mappings (" + response.status + ")", "error");
+        }
+      });
+
       $("oauthConnect").addEventListener("click", async () => {
         const sessionId = selectedOAuthSession();
         if (!sessionId) return setStatus("Session ID is required.", "error");
@@ -1298,6 +1436,9 @@ export function renderWebConsoleHtml(): string {
       });
 
       pushLog("READY", "Web console loaded. Use controls above.");
+      mapAuthSessionId.value = selectedOAuthSession();
+      mapWhatsAppJid.value = $("sessionId").value.trim() || "owner@s.whatsapp.net";
+      updateMapSummary("No mapping action yet.", "idle");
       void (async () => {
         const sessionId = selectedOAuthSession();
         if (!sessionId) {
@@ -1333,7 +1474,7 @@ export function renderWebConsoleHtml(): string {
         try {
           await pollInteractionStreamSilently();
         } finally {
-          startInteractionStreamPoll();
+          startInteractionStreamSse();
         }
       })();
     </script>

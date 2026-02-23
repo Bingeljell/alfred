@@ -16,6 +16,9 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("/v1/whatsapp/live/status");
     expect(html).toContain("/v1/whatsapp/live/connect");
     expect(html).toContain("/v1/whatsapp/live/disconnect");
+    expect(html).toContain("/v1/identity/mappings");
+    expect(html).toContain("/v1/identity/resolve");
+    expect(html).toContain("/v1/stream/events/subscribe");
     expect(html).toContain("Job Controls");
     expect(html).toContain("OAuth (OpenAI)");
     expect(html).toContain("Live WhatsApp (Baileys)");
@@ -40,6 +43,9 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("id=\"sourceRefresh\"");
     expect(html).toContain("id=\"streamRefresh\"");
     expect(html).toContain("id=\"logInteractionStream\"");
+    expect(html).toContain("id=\"mapBind\"");
+    expect(html).toContain("id=\"mapResolve\"");
+    expect(html).toContain("id=\"mapList\"");
     expect(html).toContain("Log source changes");
     expect(html).toContain("updateSourceSnapshot");
     expect(html).toContain("/v1/stream/events");

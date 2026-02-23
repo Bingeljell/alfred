@@ -26,6 +26,7 @@ type ConversationState = {
 export class ConversationStore {
   private readonly filePath: string;
   private readonly maxEvents: number;
+  private readonly listeners = new Set<(event: ConversationRecord) => void>();
 
   constructor(stateDir: string, maxEvents = 5000) {
     this.filePath = path.join(stateDir, "builtins", "conversations.json");
@@ -70,6 +71,7 @@ export class ConversationStore {
       state.events = state.events.slice(state.events.length - this.maxEvents);
     }
     await this.write(state);
+    this.emit(record);
     return record;
   }
 
@@ -90,6 +92,13 @@ export class ConversationStore {
       return state.events;
     }
     return state.events.slice(state.events.length - bounded);
+  }
+
+  subscribe(listener: (event: ConversationRecord) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   private async read(): Promise<ConversationState> {
@@ -146,5 +155,15 @@ export class ConversationStore {
     const temp = `${this.filePath}.tmp`;
     await fs.writeFile(temp, JSON.stringify(state, null, 2), "utf8");
     await fs.rename(temp, this.filePath);
+  }
+
+  private emit(event: ConversationRecord): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(event);
+      } catch {
+        // ignore observer errors
+      }
+    }
   }
 }

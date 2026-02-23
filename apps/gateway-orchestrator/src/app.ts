@@ -13,6 +13,7 @@ import { renderWebConsoleHtml } from "./ui/render_web_console";
 import { OAuthService } from "./auth/oauth_service";
 import { CodexAuthService, type CodexLoginStartMode } from "./codex/auth_service";
 import { ConversationStore } from "./builtins/conversation_store";
+import { IdentityProfileStore } from "./auth/identity_profile_store";
 
 const CancelParamsSchema = z.object({
   jobId: z.string().min(1)
@@ -26,6 +27,11 @@ const CallbackQuerySchema = z.object({
   state: z.string().min(1),
   code: z.string().optional(),
   error: z.string().optional()
+});
+
+const IdentityMappingBodySchema = z.object({
+  whatsAppJid: z.string().min(1),
+  authSessionId: z.string().min(1)
 });
 
 const QRCode = require("qrcode") as {
@@ -98,6 +104,7 @@ export function createGatewayApp(
     codexLoginMode?: CodexLoginStartMode;
     codexApiKey?: string;
     conversationStore?: ConversationStore;
+    identityProfileStore?: IdentityProfileStore;
     whatsAppLiveManager?: {
       status: () => unknown | Promise<unknown>;
       connect: () => Promise<unknown>;
@@ -119,7 +126,8 @@ export function createGatewayApp(
     options?.codexAuthService,
     options?.codexLoginMode,
     options?.codexApiKey,
-    options?.conversationStore
+    options?.conversationStore,
+    options?.identityProfileStore
   );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;
@@ -127,6 +135,7 @@ export function createGatewayApp(
   const codexAuthService = options?.codexAuthService;
   const whatsAppLiveManager = options?.whatsAppLiveManager;
   const conversationStore = options?.conversationStore;
+  const identityProfileStore = options?.identityProfileStore;
   const baileysInboundToken = options?.baileysInboundToken?.trim() ? options.baileysInboundToken.trim() : undefined;
   void dedupeStore.ensureReady();
   app.use(express.json());
@@ -156,6 +165,88 @@ export function createGatewayApp(
 
     const events = sessionId ? await conversationStore.listBySession(sessionId, limit) : await conversationStore.listRecent(limit);
     res.status(200).json({ events });
+  });
+
+  app.get("/v1/stream/events/subscribe", async (req, res) => {
+    if (!conversationStore) {
+      res.status(404).json({ error: "stream_not_configured" });
+      return;
+    }
+
+    const limitRaw = Number(req.query.limit ?? 40);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 40;
+    const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
+
+    res.setHeader("content-type", "text/event-stream");
+    res.setHeader("cache-control", "no-cache");
+    res.setHeader("connection", "keep-alive");
+    res.setHeader("x-accel-buffering", "no");
+
+    const initialEvents = sessionId ? await conversationStore.listBySession(sessionId, limit) : await conversationStore.listRecent(limit);
+    for (const event of initialEvents) {
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    }
+
+    const unsubscribe = conversationStore.subscribe((event) => {
+      if (sessionId && event.sessionId !== sessionId) {
+        return;
+      }
+      res.write(`data: ${JSON.stringify(event)}\n\n`);
+    });
+
+    const keepalive = setInterval(() => {
+      res.write(":keepalive\n\n");
+    }, 15000);
+
+    req.on("close", () => {
+      clearInterval(keepalive);
+      unsubscribe();
+      res.end();
+    });
+  });
+
+  app.get("/v1/identity/mappings", async (_req, res) => {
+    if (!identityProfileStore) {
+      res.status(404).json({ error: "identity_mapping_not_configured" });
+      return;
+    }
+
+    const mappings = await identityProfileStore.listMappings(500);
+    res.status(200).json({ mappings });
+  });
+
+  app.get("/v1/identity/resolve", async (req, res) => {
+    if (!identityProfileStore) {
+      res.status(404).json({ error: "identity_mapping_not_configured" });
+      return;
+    }
+    const whatsAppJid = typeof req.query.whatsAppJid === "string" ? req.query.whatsAppJid.trim() : "";
+    if (!whatsAppJid) {
+      res.status(400).json({ error: "missing_whatsapp_jid" });
+      return;
+    }
+
+    const mapping = await identityProfileStore.getMapping(whatsAppJid);
+    if (!mapping) {
+      res.status(404).json({ error: "identity_mapping_not_found", whatsAppJid });
+      return;
+    }
+    res.status(200).json(mapping);
+  });
+
+  app.post("/v1/identity/mappings", async (req, res) => {
+    if (!identityProfileStore) {
+      res.status(404).json({ error: "identity_mapping_not_configured" });
+      return;
+    }
+
+    try {
+      const input = IdentityMappingBodySchema.parse(req.body ?? {});
+      const saved = await identityProfileStore.setMapping(input.whatsAppJid, input.authSessionId);
+      res.status(200).json(saved);
+    } catch (error) {
+      res.status(400).json({ error: "invalid_identity_mapping", detail: String(error) });
+    }
   });
 
   app.post("/v1/messages/inbound", async (req, res) => {

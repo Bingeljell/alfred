@@ -11,6 +11,7 @@ import { normalizeBaileysInbound } from "./whatsapp/normalize_baileys";
 import { OAuthService } from "./auth/oauth_service";
 import { CodexAuthService, type CodexLoginStartMode } from "./codex/auth_service";
 import { ConversationStore } from "./builtins/conversation_store";
+import { IdentityProfileStore } from "./auth/identity_profile_store";
 
 export class GatewayService {
   constructor(
@@ -25,7 +26,8 @@ export class GatewayService {
     private readonly codexAuthService?: CodexAuthService,
     private readonly codexLoginMode: CodexLoginStartMode = "chatgpt",
     private readonly codexApiKey?: string,
-    private readonly conversationStore?: ConversationStore
+    private readonly conversationStore?: ConversationStore,
+    private readonly identityProfileStore?: IdentityProfileStore
   ) {}
 
   async health(): Promise<{
@@ -51,11 +53,15 @@ export class GatewayService {
     const provider = String(inbound.metadata?.provider ?? "");
     const source = provider === "baileys" ? "whatsapp" : "gateway";
     const channel = provider === "baileys" ? "baileys" : "direct";
+    const authSessionId = await this.resolveAuthSessionId(inbound.sessionId, provider);
     await this.recordConversation(inbound.sessionId, "inbound", inbound.text ?? "", {
       source,
       channel,
       kind: inbound.requestJob ? "job" : "chat",
-      metadata: inbound.metadata
+      metadata: {
+        ...(inbound.metadata && typeof inbound.metadata === "object" ? inbound.metadata : {}),
+        authSessionId
+      }
     });
 
     if (inbound.requestJob) {
@@ -87,11 +93,14 @@ export class GatewayService {
     if (inbound.text) {
       const command = parseCommand(inbound.text);
       if (command) {
-        const response = await this.executeCommand(inbound.sessionId, command);
+        const response = await this.executeCommand(inbound.sessionId, command, authSessionId);
         await this.recordConversation(inbound.sessionId, "outbound", response, {
           source: "gateway",
           channel: "internal",
-          kind: "command"
+          kind: "command",
+          metadata: {
+            authSessionId
+          }
         });
         return {
           accepted: true,
@@ -100,11 +109,14 @@ export class GatewayService {
         };
       }
 
-      const response = await this.executeChatTurn(inbound.sessionId, inbound.text);
+      const response = await this.executeChatTurn(authSessionId, inbound.text);
       await this.recordConversation(inbound.sessionId, "outbound", response, {
         source: "gateway",
         channel: "internal",
-        kind: "chat"
+        kind: "chat",
+        metadata: {
+          authSessionId
+        }
       });
       return {
         accepted: true,
@@ -177,7 +189,7 @@ export class GatewayService {
     };
   }
 
-  private async executeCommand(sessionId: string, command: ParsedCommand): Promise<string> {
+  private async executeCommand(sessionId: string, command: ParsedCommand, authSessionId = sessionId): Promise<string> {
     switch (command.kind) {
       case "remind_add": {
         if (!this.reminderStore) {
@@ -308,7 +320,7 @@ export class GatewayService {
           return "OAuth is not configured.";
         }
 
-        const started = await this.oauthService.startOpenAiConnect(sessionId);
+        const started = await this.oauthService.startOpenAiConnect(authSessionId);
         return `Open this link to connect OpenAI (${started.mode}): ${started.authorizationUrl}`;
       }
 
@@ -328,7 +340,7 @@ export class GatewayService {
           return "OAuth is not configured.";
         }
 
-        const status = await this.oauthService.statusOpenAi(sessionId);
+        const status = await this.oauthService.statusOpenAi(authSessionId);
         if (!status.connected) {
           return "OpenAI OAuth is not connected for this session.";
         }
@@ -364,7 +376,7 @@ export class GatewayService {
           return "OAuth is not configured.";
         }
 
-        const removed = await this.oauthService.disconnectOpenAi(sessionId);
+        const removed = await this.oauthService.disconnectOpenAi(authSessionId);
         return removed ? "OpenAI OAuth token removed for this session." : "No OpenAI OAuth token found for this session.";
       }
 
@@ -449,6 +461,18 @@ export class GatewayService {
       await this.conversationStore.add(sessionId, direction, text, options);
     } catch {
       // Observability is best-effort; never block user flows.
+    }
+  }
+
+  private async resolveAuthSessionId(channelSessionId: string, provider: string): Promise<string> {
+    if (provider !== "baileys" || !this.identityProfileStore) {
+      return channelSessionId;
+    }
+
+    try {
+      return await this.identityProfileStore.resolveAuthSession(channelSessionId);
+    } catch {
+      return channelSessionId;
     }
   }
 }

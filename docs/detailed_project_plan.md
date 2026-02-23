@@ -175,6 +175,8 @@ Deliverables:
 - Operator observability pass: source-level status cards and change-feed logging in `/ui` for Gateway/Auth/WhatsApp/Memory.
 - Operator observability pass (continued): persisted unified interaction stream endpoint (`/v1/stream/events`) consumed by `/ui` for cross-channel inbound/outbound/system tracing.
 - Runtime durability: preserve WhatsApp linked-device auth across gateway stop/start cycles by avoiding implicit logout on process shutdown.
+- Operator observability pass (continued): add SSE stream subscription (`/v1/stream/events/subscribe`) with poll fallback for lower-latency UI updates.
+- Identity/session routing: persist WhatsApp JID to auth-profile mapping and use mapped auth session IDs for WhatsApp-triggered OAuth/LLM routing.
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.

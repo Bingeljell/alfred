@@ -108,6 +108,8 @@ Acceptance criteria:
 - Web UI includes source-at-a-glance cards and change logs for Gateway/Auth/WhatsApp/Memory so operators can track cross-service state without tailing terminal output.
 - Unified interaction stream is available in `/ui` from persisted backend events (inbound/outbound/system) across direct API, WhatsApp ingress, and worker-delivered notifications.
 - Gateway shutdown now preserves Baileys linked-device auth state (no forced logout), so restarting the process should not require re-linking by default.
+- Stream transport supports real-time server-sent events (`/v1/stream/events/subscribe`) with automatic poll fallback in `/ui`.
+- Identity mapping is persisted (`whatsapp_jid -> authSessionId`) so WhatsApp messages can route to the intended auth profile/session for OAuth-backed LLM calls.
 
 Testing:
 - Automated: route-level/UI render tests for live WhatsApp endpoints plus unit coverage for Baileys runtime filtering/token authorization.

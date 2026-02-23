@@ -12,6 +12,7 @@ import { TaskStore } from "./builtins/task_store";
 import { ApprovalStore } from "./builtins/approval_store";
 import { startReminderDispatcher } from "./builtins/reminder_dispatcher";
 import { ConversationStore } from "./builtins/conversation_store";
+import { IdentityProfileStore } from "./auth/identity_profile_store";
 import { OAuthService } from "./auth/oauth_service";
 import { OpenAIResponsesService } from "./llm/openai_responses_service";
 import { CodexAppServerClient } from "./codex/app_server_client";
@@ -34,6 +35,7 @@ async function main(): Promise<void> {
   const taskStore = new TaskStore(config.stateDir);
   const approvalStore = new ApprovalStore(config.stateDir);
   const conversationStore = new ConversationStore(config.stateDir);
+  const identityProfileStore = new IdentityProfileStore(config.stateDir);
   const oauthService = new OAuthService({
     stateDir: config.stateDir,
     publicBaseUrl: config.publicBaseUrl,
@@ -95,6 +97,7 @@ async function main(): Promise<void> {
   await taskStore.ensureReady();
   await approvalStore.ensureReady();
   await conversationStore.ensureReady();
+  await identityProfileStore.ensureReady();
   await oauthService.ensureReady();
   if (codexAuthService) {
     try {
@@ -175,6 +178,7 @@ async function main(): Promise<void> {
     codexLoginMode: config.codexAuthLoginMode,
     codexApiKey: config.openAiApiKey,
     conversationStore,
+    identityProfileStore,
     whatsAppLiveManager: whatsAppLiveRuntime,
     baileysInboundToken: config.whatsAppBaileysInboundToken
   });

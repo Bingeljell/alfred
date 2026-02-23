@@ -35,4 +35,22 @@ describe("ConversationStore", () => {
     expect(bySession[0]?.direction).toBe("inbound");
     expect(bySession[1]?.direction).toBe("outbound");
   });
+
+  it("notifies subscribers on appended events", async () => {
+    const stateDir = path.join(os.tmpdir(), `alfred-conversations-sub-${Date.now()}`);
+    const store = new ConversationStore(stateDir, 100);
+    await store.ensureReady();
+
+    const seen: string[] = [];
+    const unsubscribe = store.subscribe((event) => {
+      seen.push(event.text);
+    });
+
+    await store.add("s2@s.whatsapp.net", "inbound", "first");
+    await store.add("s2@s.whatsapp.net", "outbound", "second");
+    unsubscribe();
+    await store.add("s2@s.whatsapp.net", "outbound", "third");
+
+    expect(seen).toEqual(["first", "second"]);
+  });
 });
