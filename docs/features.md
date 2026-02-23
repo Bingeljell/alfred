@@ -90,19 +90,20 @@ Testing:
 - Automated: reminder scheduling tests.
 - Manual: create reminder and verify trigger behavior.
 
-## 7) Dual Test Interfaces (Web Now, WhatsApp Path Next)
+## 7) Dual Test Interfaces (Web + Live WhatsApp)
 
 Description:
-- Provide a simple browser console for fast end-to-end testing now while keeping WhatsApp-compatible ingress for future real channel rollout.
+- Provide a simple browser console for fast end-to-end testing and a live Baileys WhatsApp runtime for real device-linked validation.
 
 Acceptance criteria:
 - `GET /ui` serves a local test console for chat, async job, and memory endpoints.
 - Root route redirects to `/ui` for quick local access.
-- Same gateway APIs remain usable by Baileys simulation and future WhatsApp production connector.
+- Live runtime endpoints (`/v1/whatsapp/live/status`, `/v1/whatsapp/live/connect`, `/v1/whatsapp/live/disconnect`) expose connection control and status.
+- Baileys inbound relay can be token-protected (`x-baileys-inbound-token`) to reduce spoofed ingress risk.
 
 Testing:
-- Automated: route-level test for `/ui` and root redirect; UI render test for required controls/endpoints.
-- Manual: use browser console to submit chat/job/memory actions and verify responses/log output.
+- Automated: route-level/UI render tests for live WhatsApp endpoints plus unit coverage for Baileys runtime filtering/token authorization.
+- Manual: use browser console for chat/job/memory and run linked-device connect/status/disconnect flow with WhatsApp message send/receive verification.
 
 ## 8) OAuth Connection Layer (OpenAI First)
 

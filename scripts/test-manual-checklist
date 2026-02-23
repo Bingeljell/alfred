@@ -21,6 +21,21 @@ OAuth Manual Checklist
 7. Send `/auth disconnect` and verify `/auth status` reports disconnected.
 8. (Optional API key fallback) set `OPENAI_API_KEY`, keep Codex auth disconnected, then send normal chat and verify model output still appears.
 
+Live WhatsApp (Baileys) Manual Checklist
+1. Set `.env` for live WhatsApp:
+   - `WHATSAPP_PROVIDER=baileys`
+   - `WHATSAPP_BAILEYS_AUTO_CONNECT=false`
+   - `WHATSAPP_BAILEYS_AUTH_DIR=./state/whatsapp/baileys_auth`
+   - `WHATSAPP_BAILEYS_INBOUND_TOKEN=<strong-random-token>`
+2. Start gateway + worker and open `/ui`.
+3. Click `Live Status` and confirm API is configured (not 404).
+4. Click `Live Connect`; if QR is required, check `WA_LIVE_CONNECT`/`WA_LIVE_STATUS` payload for `qr`.
+5. Scan QR in WhatsApp Linked Devices and verify `Live Status` shows connected with `meId`.
+6. Send a WhatsApp message from your phone and verify gateway logs show inbound processing.
+7. Trigger a reminder/job update and verify outbound text is delivered to the linked WhatsApp account.
+8. Click `Live Disconnect` and verify status reports disconnected.
+9. Security check: send `POST /v1/whatsapp/baileys/inbound` without `x-baileys-inbound-token` and confirm 401.
+
 Phase 1 Manual Checklist
 1. Start gateway: npm run dev:gateway
 2. Start worker: npm run dev:worker

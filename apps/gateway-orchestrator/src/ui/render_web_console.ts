@@ -265,6 +265,14 @@ export function renderWebConsoleHtml(): string {
           </div>
         </div>
         <div class="hint auth-summary" id="authSummary" data-state="unknown">Auth: unknown</div>
+
+        <h2>Live WhatsApp (Baileys)</h2>
+        <div class="actions">
+          <button class="secondary" id="waLiveStatus">Live Status</button>
+          <button class="secondary" id="waLiveConnect">Live Connect</button>
+          <button class="secondary" id="waLiveDisconnect">Live Disconnect</button>
+        </div>
+        <div class="hint auth-summary" id="waLiveSummary" data-state="unknown">WhatsApp: not checked</div>
       </section>
 
       <section class="panel" style="grid-column: 1 / -1;">
@@ -285,6 +293,7 @@ export function renderWebConsoleHtml(): string {
       const log = $("log");
       const statusLine = $("statusLine");
       const authSummary = $("authSummary");
+      const waLiveSummary = $("waLiveSummary");
       const logNewestFirst = $("logNewestFirst");
 
       function stamp() {
@@ -377,6 +386,23 @@ export function renderWebConsoleHtml(): string {
           ? "Connected: " + identity + plan + " | last login: " + lastLoginAt + " | last disconnect: " + lastDisconnectAt
           : "Disconnected | last login: " + lastLoginAt + " | last disconnect: " + lastDisconnectAt;
         authSummary.dataset.state = connected ? "connected" : "disconnected";
+      }
+
+      function renderWaLiveSummary(status) {
+        if (!status || typeof status !== "object") {
+          waLiveSummary.textContent = "WhatsApp: unavailable";
+          waLiveSummary.dataset.state = "disconnected";
+          return;
+        }
+
+        const connected = status.connected === true;
+        const state = status.state ? String(status.state) : "unknown";
+        const me = status.meId ? String(status.meId) : "n/a";
+        const qr = status.qr ? "qr_ready" : "no_qr";
+        const lastError = status.lastError ? String(status.lastError) : "none";
+        waLiveSummary.textContent =
+          "WhatsApp " + (connected ? "connected" : "not connected") + " | state: " + state + " | me: " + me + " | " + qr + " | lastError: " + lastError;
+        waLiveSummary.dataset.state = connected ? "connected" : "disconnected";
       }
 
       $("sendChat").addEventListener("click", async () => {
@@ -573,6 +599,33 @@ export function renderWebConsoleHtml(): string {
         setStatus("Last action: OAUTH_DISCONNECT (" + response.status + ")", response.ok ? "success" : "error");
       });
 
+      $("waLiveStatus").addEventListener("click", async () => {
+        const response = await runButtonAction($("waLiveStatus"), "WA_LIVE_STATUS", () =>
+          api("GET", "/v1/whatsapp/live/status")
+        );
+        pushLog("WA_LIVE_STATUS", response);
+        renderWaLiveSummary(response.data);
+        setStatus("Last action: WA_LIVE_STATUS (" + response.status + ")", response.ok ? "success" : "error");
+      });
+
+      $("waLiveConnect").addEventListener("click", async () => {
+        const response = await runButtonAction($("waLiveConnect"), "WA_LIVE_CONNECT", () =>
+          api("POST", "/v1/whatsapp/live/connect", {})
+        );
+        pushLog("WA_LIVE_CONNECT", response);
+        renderWaLiveSummary(response.data);
+        setStatus("Last action: WA_LIVE_CONNECT (" + response.status + ")", response.ok ? "success" : "error");
+      });
+
+      $("waLiveDisconnect").addEventListener("click", async () => {
+        const response = await runButtonAction($("waLiveDisconnect"), "WA_LIVE_DISCONNECT", () =>
+          api("POST", "/v1/whatsapp/live/disconnect", {})
+        );
+        pushLog("WA_LIVE_DISCONNECT", response);
+        renderWaLiveSummary(response.data);
+        setStatus("Last action: WA_LIVE_DISCONNECT (" + response.status + ")", response.ok ? "success" : "error");
+      });
+
       $("logClear").addEventListener("click", async () => {
         await runButtonAction($("logClear"), "CLEAR_LOG", async () => {
           log.textContent = "";
@@ -593,6 +646,12 @@ export function renderWebConsoleHtml(): string {
         if (response.data?.connected === false) {
           setStatus("Codex auth unavailable; chat may use API key fallback if configured.", "error");
         }
+      })();
+
+      void (async () => {
+        const response = await api("GET", "/v1/whatsapp/live/status");
+        pushLog("WA_LIVE_STATUS_BOOT", response);
+        renderWaLiveSummary(response.data);
       })();
     </script>
   </body>

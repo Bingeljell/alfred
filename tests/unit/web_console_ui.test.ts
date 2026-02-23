@@ -13,13 +13,18 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("/v1/auth/openai/status");
     expect(html).toContain("/v1/auth/openai/rate-limits");
     expect(html).toContain("/v1/auth/openai/disconnect");
+    expect(html).toContain("/v1/whatsapp/live/status");
+    expect(html).toContain("/v1/whatsapp/live/connect");
+    expect(html).toContain("/v1/whatsapp/live/disconnect");
     expect(html).toContain("Job Controls");
     expect(html).toContain("OAuth (OpenAI)");
+    expect(html).toContain("Live WhatsApp (Baileys)");
     expect(html).toContain("SEND_CHAT_REQUEST");
     expect(html).toContain(".status[data-state=\"busy\"]");
     expect(html).toContain("id=\"logNewestFirst\"");
     expect(html).toContain("Newest first");
     expect(html).toContain("id=\"authSummary\"");
+    expect(html).toContain("id=\"waLiveSummary\"");
     expect(html).toContain("runButtonAction");
   });
 });
