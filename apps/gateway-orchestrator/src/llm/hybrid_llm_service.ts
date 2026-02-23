@@ -11,6 +11,8 @@ export class HybridLlmService {
   }
 
   async generateText(sessionId: string, input: string): Promise<ResponsesResult | null> {
+    let codexError: unknown;
+
     if (this.codex) {
       try {
         const codex = await this.codex.generateText(sessionId, input);
@@ -21,15 +23,26 @@ export class HybridLlmService {
             authMode: codex.authMode
           };
         }
-      } catch {
-        // Fall through to Responses fallback.
+      } catch (error) {
+        codexError = error;
       }
     }
 
     if (!this.responses) {
+      if (codexError) {
+        throw codexError;
+      }
       return null;
     }
 
-    return this.responses.generateText(sessionId, input);
+    const fallback = await this.responses.generateText(sessionId, input);
+    if (fallback) {
+      return fallback;
+    }
+    if (codexError) {
+      throw codexError;
+    }
+
+    return null;
   }
 }

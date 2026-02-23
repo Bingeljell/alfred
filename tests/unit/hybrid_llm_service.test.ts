@@ -53,4 +53,23 @@ describe("HybridLlmService", () => {
     const result = await hybrid.generateText("owner@s.whatsapp.net", "hello");
     expect(result?.text).toBe("from fallback");
   });
+
+  it("throws codex error when fallback has no credential/result", async () => {
+    const codex = {
+      generateText: async () => {
+        throw new Error("codex failed hard");
+      }
+    } as unknown as CodexChatService;
+
+    const responses = {
+      generateText: async () => null
+    } as unknown as OpenAIResponsesService;
+
+    const hybrid = new HybridLlmService({
+      codex,
+      responses
+    });
+
+    await expect(hybrid.generateText("owner@s.whatsapp.net", "hello")).rejects.toThrow("codex failed hard");
+  });
 });

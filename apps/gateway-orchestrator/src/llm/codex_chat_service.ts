@@ -19,6 +19,7 @@ type TurnCompletion = {
   turnId: string;
   status: "completed" | "interrupted" | "failed" | "inProgress";
   text?: string;
+  errorMessage?: string;
 };
 
 export class CodexChatService {
@@ -91,6 +92,10 @@ export class CodexChatService {
 
     const completion = await this.waitForTurnCompletion(threadId, started.turn.id);
     if (completion.status !== "completed") {
+      const detail = completion.errorMessage?.trim();
+      if (detail) {
+        throw new Error(`codex_turn_${completion.status}:${detail}`);
+      }
       throw new Error(`codex_turn_${completion.status}`);
     }
 
@@ -135,13 +140,14 @@ export class CodexChatService {
           const params = (event.params ?? {}) as {
             threadId?: string;
             turnId?: string;
-            item?: { type?: string; text?: string };
+            item?: { type?: string; text?: string; content?: Array<{ type?: string; text?: string }> };
           };
           if (params.threadId !== threadId || params.turnId !== turnId) {
             return;
           }
-          if (params.item?.type === "agentMessage" && typeof params.item.text === "string") {
-            capturedText += params.item.text;
+          const next = extractAssistantItemText(params.item);
+          if (next) {
+            capturedText += next;
           }
           return;
         }
@@ -152,10 +158,24 @@ export class CodexChatService {
 
         const params = (event.params ?? {}) as {
           threadId?: string;
-          turn?: { id?: string; status?: TurnCompletion["status"] };
+          turn?: {
+            id?: string;
+            status?: TurnCompletion["status"];
+            error?: { message?: string };
+            items?: Array<{ type?: string; text?: string; content?: Array<{ type?: string; text?: string }> }>;
+          };
         };
         if (params.threadId !== threadId || params.turn?.id !== turnId) {
           return;
+        }
+
+        if (!capturedText && Array.isArray(params.turn?.items)) {
+          for (const item of params.turn.items) {
+            const text = extractAssistantItemText(item);
+            if (text) {
+              capturedText += text;
+            }
+          }
         }
 
         clearTimeout(timer);
@@ -164,9 +184,51 @@ export class CodexChatService {
           threadId,
           turnId,
           status: params.turn?.status ?? "failed",
-          text: capturedText
+          text: capturedText,
+          errorMessage: params.turn?.error?.message
         });
       });
     });
   }
+}
+
+function extractAssistantItemText(item?: {
+  type?: string;
+  text?: string;
+  content?: Array<{ type?: string; text?: string }>;
+}): string {
+  if (!item || typeof item !== "object") {
+    return "";
+  }
+
+  const itemType = typeof item.type === "string" ? item.type.toLowerCase() : "";
+  if (itemType !== "assistantmessage" && itemType !== "agentmessage") {
+    return "";
+  }
+
+  const directText = typeof item.text === "string" ? item.text.trim() : "";
+  if (directText) {
+    return directText;
+  }
+
+  if (!Array.isArray(item.content)) {
+    return "";
+  }
+
+  const parts: string[] = [];
+  for (const entry of item.content) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const entryType = typeof entry.type === "string" ? entry.type.toLowerCase() : "";
+    if (entryType !== "text" && entryType !== "output_text") {
+      continue;
+    }
+    const value = typeof entry.text === "string" ? entry.text.trim() : "";
+    if (value) {
+      parts.push(value);
+    }
+  }
+
+  return parts.join("\n");
 }

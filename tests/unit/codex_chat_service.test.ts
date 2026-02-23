@@ -195,4 +195,81 @@ describe("CodexChatService", () => {
     expect(turnStartCount).toBe(2);
     expect(await threadStore.get("owner@s.whatsapp.net")).toBe("thread-fresh-1");
   });
+
+  it("extracts assistant message content array text when direct item.text is absent", async () => {
+    const listeners = new Set<(event: { method: string; params: unknown }) => void>();
+
+    const fakeClient = {
+      ensureStarted: async () => undefined,
+      onNotification: (listener: (event: { method: string; params: unknown }) => void) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      request: async (method: string) => {
+        if (method === "thread/start") {
+          return { thread: { id: "thread-2" } };
+        }
+        if (method === "turn/start") {
+          setTimeout(() => {
+            for (const listener of listeners) {
+              listener({
+                method: "item/completed",
+                params: {
+                  threadId: "thread-2",
+                  turnId: "turn-3",
+                  item: {
+                    type: "assistantMessage",
+                    content: [
+                      {
+                        type: "text",
+                        text: "hello from content"
+                      }
+                    ]
+                  }
+                }
+              });
+            }
+
+            for (const listener of listeners) {
+              listener({
+                method: "turn/completed",
+                params: {
+                  threadId: "thread-2",
+                  turn: {
+                    id: "turn-3",
+                    status: "completed"
+                  }
+                }
+              });
+            }
+          }, 10);
+
+          return { turn: { id: "turn-3" } };
+        }
+        throw new Error(`unexpected method ${method}`);
+      }
+    } as const;
+
+    const fakeAuth = {
+      readStatus: async () => ({
+        connected: true,
+        authMode: "chatgpt" as const,
+        requiresOpenaiAuth: true
+      })
+    } as unknown as CodexAuthService;
+
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-codex-chat-unit-content-"));
+    const threadStore = new CodexThreadStore(stateDir);
+    const service = new CodexChatService({
+      client: fakeClient as never,
+      auth: fakeAuth,
+      threadStore,
+      timeoutMs: 2000
+    });
+
+    const result = await service.generateText("owner@s.whatsapp.net", "hello");
+    expect(result?.text).toBe("hello from content");
+  });
 });
