@@ -44,10 +44,13 @@ Live WhatsApp (Baileys) Manual Checklist
 12. Scan QR in WhatsApp Linked Devices and verify `Live Status` shows connected with `meId`.
 13. Send a WhatsApp message from your phone and verify gateway logs show inbound processing.
    - Message must start with `/alfred ` (example: `/alfred what time is it?`).
-14. Trigger a reminder/job update and verify outbound text is delivered to the linked WhatsApp account.
-15. Restart gateway and verify WhatsApp remains linked (no forced logout/relink required).
-16. Click `Live Disconnect` and verify status reports disconnected.
-17. Security check: send `POST /v1/whatsapp/baileys/inbound` without `x-baileys-inbound-token` and confirm 401.
+14. Click `Live Status` and verify sync counters move as expected:
+   - `accepted` increases for valid live `/alfred ...` messages.
+   - `ignored` increases for dropped non-live traffic (history/backfill/duplicates).
+15. Trigger a reminder/job update and verify outbound text is delivered to the linked WhatsApp account.
+16. Restart gateway and verify WhatsApp remains linked (no forced logout/relink required).
+17. Click `Live Disconnect` and verify status reports disconnected.
+18. Security check: send `POST /v1/whatsapp/baileys/inbound` without `x-baileys-inbound-token` and confirm 401.
 
 Phase 1 Manual Checklist
 1. Start gateway: npm run dev:gateway

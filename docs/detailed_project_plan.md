@@ -177,6 +177,7 @@ Deliverables:
 - Runtime durability: preserve WhatsApp linked-device auth across gateway stop/start cycles by avoiding implicit logout on process shutdown.
 - Operator observability pass (continued): add SSE stream subscription (`/v1/stream/events/subscribe`) with poll fallback for lower-latency UI updates.
 - Identity/session routing: persist WhatsApp JID to auth-profile mapping and use mapped auth session IDs for WhatsApp-triggered OAuth/LLM routing.
+- WhatsApp context discipline: filter non-live/history-sync inbound traffic (`messages.upsert` non-`notify`, stale timestamps, duplicate message IDs) before LLM routing, with visible accepted/ignored counters in live status.
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.

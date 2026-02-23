@@ -110,6 +110,8 @@ Acceptance criteria:
 - Gateway shutdown now preserves Baileys linked-device auth state (no forced logout), so restarting the process should not require re-linking by default.
 - Stream transport supports real-time server-sent events (`/v1/stream/events/subscribe`) with automatic poll fallback in `/ui`.
 - Identity mapping is persisted (`whatsapp_jid -> authSessionId`) so WhatsApp messages can route to the intended auth profile/session for OAuth-backed LLM calls.
+- Inbound history-sync noise is filtered before chat routing by ignoring non-`notify` upserts, stale pre-live timestamps, and duplicate message IDs.
+- Live WhatsApp status includes accepted/ignored inbound counters and sync mode so operators can verify context-bloat protection behavior.
 
 Testing:
 - Automated: route-level/UI render tests for live WhatsApp endpoints plus unit coverage for Baileys runtime filtering/token authorization.
