@@ -1,5 +1,6 @@
 # Changelog
 
+- **2026-02-23** > apps/gateway-orchestrator/src/builtins/conversation_store.ts > ConversationStore > Added file-backed conversation event store scaffold for per-session chat history persistence groundwork (refresh-safe transcript replay).
 - **2026-02-23** > apps/gateway-orchestrator/src/config.ts, apps/gateway-orchestrator/src/server.ts, apps/worker/src/server.ts, .env.example, scripts/test-manual-checklist > loadDotEnvFile and runtime startup env bootstrap > Added `.env` file loading for gateway/worker startup, introduced committed `.env.example` template, and documented `.env`-first manual test startup.
 - **2026-02-23** > apps/gateway-orchestrator/src/auth/oauth_codec.ts, apps/gateway-orchestrator/src/auth/oauth_store.ts, apps/gateway-orchestrator/src/auth/oauth_service.ts > OAuthSecretCodec/OAuthStore/OAuthService > Added OAuth state+token persistence with optional encryption, mock/live modes, callback completion, status, and disconnect flows.
 - **2026-02-23** > apps/gateway-orchestrator/src/config.ts, apps/gateway-orchestrator/src/server.ts > loadConfig and runtime wiring > Added OAuth/public URL configuration and gateway startup wiring for OAuth service initialization.
