@@ -27,6 +27,15 @@ const CallbackQuerySchema = z.object({
   error: z.string().optional()
 });
 
+export function isAuthorizedBaileysInbound(expectedToken: string | undefined, providedHeader: unknown): boolean {
+  if (!expectedToken) {
+    return true;
+  }
+
+  const provided = typeof providedHeader === "string" ? providedHeader.trim() : "";
+  return provided === expectedToken;
+}
+
 export function createGatewayApp(
   store: FileBackedQueueStore,
   options?: {
@@ -42,6 +51,12 @@ export function createGatewayApp(
     codexAuthService?: CodexAuthService;
     codexLoginMode?: CodexLoginStartMode;
     codexApiKey?: string;
+    whatsAppLiveManager?: {
+      status: () => unknown | Promise<unknown>;
+      connect: () => Promise<unknown>;
+      disconnect: () => Promise<unknown>;
+    };
+    baileysInboundToken?: string;
   }
 ) {
   const app = express();
@@ -62,6 +77,8 @@ export function createGatewayApp(
   const memoryService = options?.memoryService;
   const oauthService = options?.oauthService;
   const codexAuthService = options?.codexAuthService;
+  const whatsAppLiveManager = options?.whatsAppLiveManager;
+  const baileysInboundToken = options?.baileysInboundToken?.trim() ? options.baileysInboundToken.trim() : undefined;
   void dedupeStore.ensureReady();
   app.use(express.json());
 
@@ -88,6 +105,11 @@ export function createGatewayApp(
   });
 
   app.post("/v1/whatsapp/baileys/inbound", async (req, res) => {
+    if (!isAuthorizedBaileysInbound(baileysInboundToken, req.headers["x-baileys-inbound-token"])) {
+      res.status(401).json({ error: "unauthorized_baileys_inbound" });
+      return;
+    }
+
     try {
       const result = await service.handleBaileysInbound(req.body, dedupeStore);
       if (result.duplicate) {
@@ -97,6 +119,44 @@ export function createGatewayApp(
       res.status(result.mode === "async-job" ? 202 : 200).json(result);
     } catch (error) {
       res.status(400).json({ error: "invalid_baileys_inbound", detail: String(error) });
+    }
+  });
+
+  app.get("/v1/whatsapp/live/status", async (_req, res) => {
+    if (!whatsAppLiveManager) {
+      res.status(404).json({ error: "whatsapp_live_not_configured" });
+      return;
+    }
+
+    const status = await whatsAppLiveManager.status();
+    res.status(200).json(status);
+  });
+
+  app.post("/v1/whatsapp/live/connect", async (_req, res) => {
+    if (!whatsAppLiveManager) {
+      res.status(404).json({ error: "whatsapp_live_not_configured" });
+      return;
+    }
+
+    try {
+      const status = await whatsAppLiveManager.connect();
+      res.status(200).json(status);
+    } catch (error) {
+      res.status(400).json({ error: "whatsapp_live_connect_failed", detail: String(error) });
+    }
+  });
+
+  app.post("/v1/whatsapp/live/disconnect", async (_req, res) => {
+    if (!whatsAppLiveManager) {
+      res.status(404).json({ error: "whatsapp_live_not_configured" });
+      return;
+    }
+
+    try {
+      const status = await whatsAppLiveManager.disconnect();
+      res.status(200).json(status);
+    } catch (error) {
+      res.status(400).json({ error: "whatsapp_live_disconnect_failed", detail: String(error) });
     }
   });
 

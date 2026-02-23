@@ -4,7 +4,7 @@ import { FileBackedQueueStore } from "./local_queue_store";
 import { MessageDedupeStore } from "./whatsapp/dedupe_store";
 import { OutboundNotificationStore } from "./notification_store";
 import { startNotificationDispatcher } from "./notification_dispatcher";
-import { StdoutWhatsAppAdapter } from "../../../packages/provider-adapters/src";
+import { BaileysAdapter, StdoutWhatsAppAdapter, type WhatsAppAdapter } from "../../../packages/provider-adapters/src";
 import { MemoryService } from "../../../packages/memory/src";
 import { ReminderStore } from "./builtins/reminder_store";
 import { NoteStore } from "./builtins/note_store";
@@ -19,6 +19,7 @@ import { CodexAuthStateStore } from "./codex/auth_state_store";
 import { CodexThreadStore } from "./codex/thread_store";
 import { CodexChatService } from "./llm/codex_chat_service";
 import { HybridLlmService } from "./llm/hybrid_llm_service";
+import { BaileysRuntime } from "./whatsapp/baileys_runtime";
 
 async function main(): Promise<void> {
   loadDotEnvFile();
@@ -76,6 +77,8 @@ async function main(): Promise<void> {
   }
 
   let llmService: HybridLlmService;
+  let whatsAppAdapter: WhatsAppAdapter = new StdoutWhatsAppAdapter();
+  let whatsAppLiveRuntime: BaileysRuntime | undefined;
   const memoryService = new MemoryService({
     rootDir: process.cwd(),
     stateDir: config.stateDir
@@ -106,6 +109,29 @@ async function main(): Promise<void> {
     responses: responsesService
   });
 
+  if (config.whatsAppProvider === "baileys") {
+    const inboundUrl = `http://127.0.0.1:${config.port}/v1/whatsapp/baileys/inbound`;
+    const inboundToken = config.whatsAppBaileysInboundToken?.trim() ? config.whatsAppBaileysInboundToken.trim() : undefined;
+
+    whatsAppLiveRuntime = new BaileysRuntime({
+      authDir: config.whatsAppBaileysAuthDir,
+      maxTextChars: config.whatsAppBaileysMaxTextChars,
+      reconnectDelayMs: config.whatsAppBaileysReconnectDelayMs,
+      onInbound: async (payload) => {
+        await fetch(inboundUrl, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(inboundToken ? { "x-baileys-inbound-token": inboundToken } : {})
+          },
+          body: JSON.stringify(payload)
+        });
+      }
+    });
+
+    whatsAppAdapter = new BaileysAdapter(whatsAppLiveRuntime);
+  }
+
   const app = createGatewayApp(store, {
     dedupeStore,
     notificationStore,
@@ -118,12 +144,13 @@ async function main(): Promise<void> {
     llmService,
     codexAuthService,
     codexLoginMode: config.codexAuthLoginMode,
-    codexApiKey: config.openAiApiKey
+    codexApiKey: config.openAiApiKey,
+    whatsAppLiveManager: whatsAppLiveRuntime,
+    baileysInboundToken: config.whatsAppBaileysInboundToken
   });
-  const adapter = new StdoutWhatsAppAdapter();
   const dispatcher = startNotificationDispatcher({
     store: notificationStore,
-    adapter,
+    adapter: whatsAppAdapter,
     pollIntervalMs: config.notificationPollMs
   });
   const reminderDispatcher = startReminderDispatcher({
@@ -137,10 +164,19 @@ async function main(): Promise<void> {
     console.log(`[gateway] listening on :${config.port} using state dir ${config.stateDir}`);
   });
 
+  if (whatsAppLiveRuntime && config.whatsAppBaileysAutoConnect) {
+    void whatsAppLiveRuntime.connect().catch(() => {
+      // Runtime status endpoints expose error details for troubleshooting.
+    });
+  }
+
   const shutdown = async () => {
     await dispatcher.stop();
     await reminderDispatcher.stop();
     await memoryService.stop();
+    if (whatsAppLiveRuntime) {
+      await whatsAppLiveRuntime.stop();
+    }
     if (codexAuthService) {
       await codexAuthService.stop();
     }

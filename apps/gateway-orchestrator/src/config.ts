@@ -48,6 +48,23 @@ const EnvSchema = z.object({
     .transform((v) => (v ? Number(v) : 20000))
     .pipe(z.number().int().min(1000).max(120000)),
   OPENAI_API_KEY: z.string().optional(),
+  WHATSAPP_PROVIDER: z.enum(["stdout", "baileys"]).optional().default("stdout"),
+  WHATSAPP_BAILEYS_AUTO_CONNECT: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : false)),
+  WHATSAPP_BAILEYS_AUTH_DIR: z.string().optional(),
+  WHATSAPP_BAILEYS_INBOUND_TOKEN: z.string().optional(),
+  WHATSAPP_BAILEYS_MAX_TEXT_CHARS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 4000))
+    .pipe(z.number().int().min(200).max(16000)),
+  WHATSAPP_BAILEYS_RECONNECT_DELAY_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 3000))
+    .pipe(z.number().int().min(500).max(60000)),
   CODEX_APP_SERVER_ENABLED: z
     .string()
     .optional()
@@ -88,6 +105,12 @@ export type AppConfig = {
   openAiResponsesModel: string;
   openAiResponsesTimeoutMs: number;
   openAiApiKey?: string;
+  whatsAppProvider: "stdout" | "baileys";
+  whatsAppBaileysAutoConnect: boolean;
+  whatsAppBaileysAuthDir: string;
+  whatsAppBaileysInboundToken?: string;
+  whatsAppBaileysMaxTextChars: number;
+  whatsAppBaileysReconnectDelayMs: number;
   codexAppServerEnabled: boolean;
   codexAppServerCommand: string;
   codexAppServerClientName: string;
@@ -132,6 +155,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     openAiResponsesModel: parsed.OPENAI_RESPONSES_MODEL,
     openAiResponsesTimeoutMs: parsed.OPENAI_RESPONSES_TIMEOUT_MS,
     openAiApiKey: parsed.OPENAI_API_KEY,
+    whatsAppProvider: parsed.WHATSAPP_PROVIDER,
+    whatsAppBaileysAutoConnect: parsed.WHATSAPP_BAILEYS_AUTO_CONNECT,
+    whatsAppBaileysAuthDir: path.resolve(parsed.WHATSAPP_BAILEYS_AUTH_DIR ?? path.join(parsed.STATE_DIR, "whatsapp", "baileys_auth")),
+    whatsAppBaileysInboundToken: parsed.WHATSAPP_BAILEYS_INBOUND_TOKEN,
+    whatsAppBaileysMaxTextChars: parsed.WHATSAPP_BAILEYS_MAX_TEXT_CHARS,
+    whatsAppBaileysReconnectDelayMs: parsed.WHATSAPP_BAILEYS_RECONNECT_DELAY_MS,
     codexAppServerEnabled: parsed.CODEX_APP_SERVER_ENABLED,
     codexAppServerCommand: parsed.CODEX_APP_SERVER_COMMAND,
     codexAppServerClientName: parsed.CODEX_APP_SERVER_CLIENT_NAME,
