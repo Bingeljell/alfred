@@ -59,6 +59,12 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  WHATSAPP_BAILEYS_ALLOW_SELF_FROM_ME: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : false)),
+  WHATSAPP_BAILEYS_REQUIRE_PREFIX: z.string().optional().default("/alfred"),
+  WHATSAPP_BAILEYS_ALLOWED_SENDERS: z.string().optional(),
   WHATSAPP_BAILEYS_MAX_TEXT_CHARS: z
     .string()
     .optional()
@@ -114,6 +120,9 @@ export type AppConfig = {
   whatsAppBaileysAuthDir: string;
   whatsAppBaileysInboundToken?: string;
   whatsAppBaileysPrintQr: boolean;
+  whatsAppBaileysAllowSelfFromMe: boolean;
+  whatsAppBaileysRequirePrefix?: string;
+  whatsAppBaileysAllowedSenders: string[];
   whatsAppBaileysMaxTextChars: number;
   whatsAppBaileysReconnectDelayMs: number;
   codexAppServerEnabled: boolean;
@@ -165,6 +174,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     whatsAppBaileysAuthDir: path.resolve(parsed.WHATSAPP_BAILEYS_AUTH_DIR ?? path.join(parsed.STATE_DIR, "whatsapp", "baileys_auth")),
     whatsAppBaileysInboundToken: parsed.WHATSAPP_BAILEYS_INBOUND_TOKEN,
     whatsAppBaileysPrintQr: parsed.WHATSAPP_BAILEYS_PRINT_QR,
+    whatsAppBaileysAllowSelfFromMe: parsed.WHATSAPP_BAILEYS_ALLOW_SELF_FROM_ME,
+    whatsAppBaileysRequirePrefix: parsed.WHATSAPP_BAILEYS_REQUIRE_PREFIX.trim() || undefined,
+    whatsAppBaileysAllowedSenders: (parsed.WHATSAPP_BAILEYS_ALLOWED_SENDERS ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0),
     whatsAppBaileysMaxTextChars: parsed.WHATSAPP_BAILEYS_MAX_TEXT_CHARS,
     whatsAppBaileysReconnectDelayMs: parsed.WHATSAPP_BAILEYS_RECONNECT_DELAY_MS,
     codexAppServerEnabled: parsed.CODEX_APP_SERVER_ENABLED,

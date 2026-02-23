@@ -98,4 +98,53 @@ describe("BaileysRuntime", () => {
     expect(received[0]?.remoteJid).toBe("67890@s.whatsapp.net");
     expect(received[0]?.text).toBe("12345678");
   });
+
+  it("enforces sender allowlist and required prefix; supports self messages when enabled", async () => {
+    const fake = createFakeSocket();
+    const received: Array<{ remoteJid: string; text: string }> = [];
+    const runtime = new BaileysRuntime({
+      authDir: "/tmp/baileys-auth",
+      allowSelfFromMe: true,
+      requirePrefix: "/alfred",
+      allowedSenders: ["11111@s.whatsapp.net"],
+      onInbound: async (message) => {
+        received.push({
+          remoteJid: message.key.remoteJid,
+          text: message.message?.conversation ?? ""
+        });
+      },
+      moduleLoader: async () => ({
+        default: () => fake.socket,
+        fetchLatestBaileysVersion: async () => ({ version: [1, 0, 0] as [number, number, number] }),
+        useMultiFileAuthState: async () => ({ state: {}, saveCreds: async () => undefined })
+      })
+    });
+
+    await runtime.connect();
+    fake.emit("messages.upsert", {
+      messages: [
+        {
+          key: { id: "a1", remoteJid: "99999@s.whatsapp.net", fromMe: false },
+          message: { conversation: "/alfred ignored-not-allowlisted" }
+        },
+        {
+          key: { id: "a2", remoteJid: "11111@s.whatsapp.net", fromMe: false },
+          message: { conversation: "no-prefix" }
+        },
+        {
+          key: { id: "a3", remoteJid: "11111@s.whatsapp.net", fromMe: false },
+          message: { conversation: "/alfred run report" }
+        },
+        {
+          key: { id: "a4", remoteJid: "11111@s.whatsapp.net", fromMe: true },
+          message: { conversation: "/alfred self check" }
+        }
+      ]
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(received).toHaveLength(2);
+    expect(received[0]?.text).toBe("run report");
+    expect(received[1]?.text).toBe("self check");
+  });
 });

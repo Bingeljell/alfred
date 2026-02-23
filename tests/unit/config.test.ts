@@ -14,6 +14,9 @@ describe("loadConfig", () => {
     expect(config.whatsAppProvider).toBe("stdout");
     expect(config.whatsAppBaileysAutoConnect).toBe(false);
     expect(config.whatsAppBaileysPrintQr).toBe(true);
+    expect(config.whatsAppBaileysAllowSelfFromMe).toBe(false);
+    expect(config.whatsAppBaileysRequirePrefix).toBe("/alfred");
+    expect(config.whatsAppBaileysAllowedSenders).toEqual([]);
     expect(config.whatsAppBaileysMaxTextChars).toBe(4000);
     expect(config.codexAppServerEnabled).toBe(false);
     expect(config.codexAuthLoginMode).toBe("chatgpt");
@@ -37,6 +40,9 @@ describe("loadConfig", () => {
       WHATSAPP_BAILEYS_AUTH_DIR: "./tmp/wa-auth",
       WHATSAPP_BAILEYS_INBOUND_TOKEN: "secret-token",
       WHATSAPP_BAILEYS_PRINT_QR: "false",
+      WHATSAPP_BAILEYS_ALLOW_SELF_FROM_ME: "true",
+      WHATSAPP_BAILEYS_REQUIRE_PREFIX: "/bot",
+      WHATSAPP_BAILEYS_ALLOWED_SENDERS: "111@s.whatsapp.net,222@s.whatsapp.net",
       WHATSAPP_BAILEYS_MAX_TEXT_CHARS: "2048",
       WHATSAPP_BAILEYS_RECONNECT_DELAY_MS: "2500",
       CODEX_APP_SERVER_ENABLED: "true",
@@ -59,6 +65,9 @@ describe("loadConfig", () => {
     expect(config.whatsAppBaileysAuthDir.endsWith("tmp/wa-auth")).toBe(true);
     expect(config.whatsAppBaileysInboundToken).toBe("secret-token");
     expect(config.whatsAppBaileysPrintQr).toBe(false);
+    expect(config.whatsAppBaileysAllowSelfFromMe).toBe(true);
+    expect(config.whatsAppBaileysRequirePrefix).toBe("/bot");
+    expect(config.whatsAppBaileysAllowedSenders).toEqual(["111@s.whatsapp.net", "222@s.whatsapp.net"]);
     expect(config.whatsAppBaileysMaxTextChars).toBe(2048);
     expect(config.whatsAppBaileysReconnectDelayMs).toBe(2500);
     expect(config.codexAppServerEnabled).toBe(true);

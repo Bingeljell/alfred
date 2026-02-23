@@ -100,6 +100,8 @@ Acceptance criteria:
 - Root route redirects to `/ui` for quick local access.
 - Live runtime endpoints (`/v1/whatsapp/live/status`, `/v1/whatsapp/live/connect`, `/v1/whatsapp/live/disconnect`) expose connection control and status.
 - Baileys inbound relay can be token-protected (`x-baileys-inbound-token`) to reduce spoofed ingress risk.
+- Live inbound messages can be gated by required command prefix (default `/alfred`) and optional sender allowlist.
+- Optional single-number test mode can allow `fromMe` messages when explicitly enabled.
 
 Testing:
 - Automated: route-level/UI render tests for live WhatsApp endpoints plus unit coverage for Baileys runtime filtering/token authorization.

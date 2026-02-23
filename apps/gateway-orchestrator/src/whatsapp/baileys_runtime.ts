@@ -118,6 +118,9 @@ export class BaileysRuntime implements BaileysTransport {
   private readonly maxTextChars: number;
   private readonly reconnectDelayMs: number;
   private readonly printQrInTerminal: boolean;
+  private readonly allowSelfFromMe: boolean;
+  private readonly requirePrefix?: string;
+  private readonly allowedSenders: Set<string>;
   private readonly loadModule: () => Promise<BaileysModule>;
 
   private socket: BaileysSocket | null = null;
@@ -146,6 +149,9 @@ export class BaileysRuntime implements BaileysTransport {
     maxTextChars?: number;
     reconnectDelayMs?: number;
     printQrInTerminal?: boolean;
+    allowSelfFromMe?: boolean;
+    requirePrefix?: string;
+    allowedSenders?: string[];
     moduleLoader?: () => Promise<BaileysModule>;
   }) {
     this.authDir = options.authDir;
@@ -153,6 +159,9 @@ export class BaileysRuntime implements BaileysTransport {
     this.maxTextChars = options.maxTextChars ?? 4000;
     this.reconnectDelayMs = options.reconnectDelayMs ?? 3000;
     this.printQrInTerminal = options.printQrInTerminal ?? true;
+    this.allowSelfFromMe = options.allowSelfFromMe ?? false;
+    this.requirePrefix = options.requirePrefix?.trim() || undefined;
+    this.allowedSenders = new Set((options.allowedSenders ?? []).map((item) => item.trim()).filter((item) => item.length > 0));
     this.loadModule = options.moduleLoader ?? defaultModuleLoader;
   }
 
@@ -363,7 +372,13 @@ export class BaileysRuntime implements BaileysTransport {
       const fromMe = key?.fromMe === true;
       const remoteJid = typeof key?.remoteJid === "string" ? key.remoteJid : "";
       const id = typeof key?.id === "string" ? key.id : "";
-      if (fromMe || !remoteJid || !id || !isAllowedRemoteJid(remoteJid)) {
+      if (!remoteJid || !id || !isAllowedRemoteJid(remoteJid)) {
+        continue;
+      }
+      if (fromMe && !this.allowSelfFromMe) {
+        continue;
+      }
+      if (!fromMe && this.allowedSenders.size > 0 && !this.allowedSenders.has(remoteJid)) {
         continue;
       }
 
@@ -377,13 +392,18 @@ export class BaileysRuntime implements BaileysTransport {
         continue;
       }
 
+      const inboundText = this.applyRequiredPrefix(normalizedText);
+      if (!inboundText) {
+        continue;
+      }
+
       const payloadMessage: BaileysInboundMessage = {
         key: {
           id,
           remoteJid
         },
         message: {
-          conversation: normalizedText
+          conversation: inboundText
         },
         pushName: typeof message.pushName === "string" ? message.pushName : undefined,
         messageTimestamp: typeof message.messageTimestamp === "number" ? message.messageTimestamp : undefined
@@ -416,5 +436,29 @@ export class BaileysRuntime implements BaileysTransport {
     }
     clearTimeout(this.reconnectTimer);
     this.reconnectTimer = null;
+  }
+
+  private applyRequiredPrefix(text: string): string {
+    if (!this.requirePrefix) {
+      return text;
+    }
+
+    const prefix = this.requirePrefix.trim();
+    if (!prefix) {
+      return text;
+    }
+
+    const lowerText = text.toLowerCase();
+    const lowerPrefix = prefix.toLowerCase();
+    if (!lowerText.startsWith(lowerPrefix)) {
+      return "";
+    }
+
+    let stripped = text.slice(prefix.length).trimStart();
+    if (stripped.startsWith(":") || stripped.startsWith("-")) {
+      stripped = stripped.slice(1).trimStart();
+    }
+
+    return stripped;
   }
 }

@@ -118,6 +118,9 @@ async function main(): Promise<void> {
       maxTextChars: config.whatsAppBaileysMaxTextChars,
       reconnectDelayMs: config.whatsAppBaileysReconnectDelayMs,
       printQrInTerminal: config.whatsAppBaileysPrintQr,
+      allowSelfFromMe: config.whatsAppBaileysAllowSelfFromMe,
+      requirePrefix: config.whatsAppBaileysRequirePrefix,
+      allowedSenders: config.whatsAppBaileysAllowedSenders,
       onInbound: async (payload) => {
         await fetch(inboundUrl, {
           method: "POST",

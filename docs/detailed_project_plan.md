@@ -121,6 +121,7 @@ Deliverables:
 - Async status updates while chat lane remains responsive.
 - Live connection controls (`status/connect/disconnect`) and persisted auth/session path under `state/`.
 - Optional inbound token enforcement for provider-to-gateway relay security.
+- Prefix-gated inbound command processing (`/alfred`) with optional sender allowlist and explicit self-message mode for one-number testing.
 
 Definition of done:
 - Real/sandbox messages can trigger jobs without blocking chat.
