@@ -177,6 +177,58 @@ export function renderWebConsoleHtml(): string {
       .auth-summary[data-state="disconnected"] {
         color: #b42318;
       }
+      .setup-box {
+        margin-top: 10px;
+        border: 1px dashed var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        background: #fffdf8;
+      }
+      .setup-box h3 {
+        margin: 0 0 8px;
+        font-size: 13px;
+      }
+      .setup-steps {
+        margin: 0;
+        padding-left: 18px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .setup-steps li {
+        margin-bottom: 4px;
+      }
+      .state-badge {
+        display: inline-block;
+        border-radius: 999px;
+        padding: 3px 8px;
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+        border: 1px solid var(--line);
+        background: #f3f4f6;
+        color: #1f2937;
+      }
+      .state-badge[data-state="connected"] {
+        background: #dcfce7;
+        border-color: #86efac;
+        color: #166534;
+      }
+      .state-badge[data-state="connecting"] {
+        background: #ffedd5;
+        border-color: #fdba74;
+        color: #9a3412;
+      }
+      .state-badge[data-state="disconnected"] {
+        background: #fee2e2;
+        border-color: #fca5a5;
+        color: #991b1b;
+      }
+      .mono {
+        font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
+      }
+      #waQrRaw {
+        min-height: 88px;
+      }
       @media (max-width: 1000px) {
         .layout { grid-template-columns: 1fr; }
       }
@@ -268,11 +320,29 @@ export function renderWebConsoleHtml(): string {
 
         <h2>Live WhatsApp (Baileys)</h2>
         <div class="actions">
+          <span class="state-badge" id="waLiveBadge" data-state="unknown">unknown</span>
+        </div>
+        <div class="actions">
           <button class="secondary" id="waLiveStatus">Live Status</button>
           <button class="secondary" id="waLiveConnect">Live Connect</button>
           <button class="secondary" id="waLiveDisconnect">Live Disconnect</button>
+          <button class="secondary" id="waCopyEnv">Copy .env Setup</button>
         </div>
         <div class="hint auth-summary" id="waLiveSummary" data-state="unknown">WhatsApp: not checked</div>
+        <div class="setup-box">
+          <h3>WhatsApp Setup Flow</h3>
+          <ol class="setup-steps">
+            <li>Set provider to <span class="mono">baileys</span> and restart gateway.</li>
+            <li>Click <strong>Live Connect</strong>.</li>
+            <li>Scan QR from gateway logs (or raw QR below).</li>
+            <li>Send a test message prefixed with <span class="mono">/alfred</span>.</li>
+          </ol>
+          <div class="hint" id="waSetupNext">Next step: click <strong>Live Status</strong> to confirm runtime is configured.</div>
+          <details>
+            <summary class="hint">Raw QR (advanced)</summary>
+            <textarea id="waQrRaw" readonly placeholder="QR payload appears here when available"></textarea>
+          </details>
+        </div>
       </section>
 
       <section class="panel" style="grid-column: 1 / -1;">
@@ -294,6 +364,9 @@ export function renderWebConsoleHtml(): string {
       const statusLine = $("statusLine");
       const authSummary = $("authSummary");
       const waLiveSummary = $("waLiveSummary");
+      const waLiveBadge = $("waLiveBadge");
+      const waSetupNext = $("waSetupNext");
+      const waQrRaw = $("waQrRaw");
       const logNewestFirst = $("logNewestFirst");
 
       function stamp() {
@@ -392,6 +465,20 @@ export function renderWebConsoleHtml(): string {
         if (!status || typeof status !== "object") {
           waLiveSummary.textContent = "WhatsApp: unavailable";
           waLiveSummary.dataset.state = "disconnected";
+          waLiveBadge.textContent = "unavailable";
+          waLiveBadge.dataset.state = "disconnected";
+          waSetupNext.textContent = "Next step: set WHATSAPP_PROVIDER=baileys, restart gateway, then click Live Status.";
+          waQrRaw.value = "";
+          return;
+        }
+
+        if (status.error === "whatsapp_live_not_configured") {
+          waLiveSummary.textContent = "WhatsApp live runtime is not configured in this process.";
+          waLiveSummary.dataset.state = "disconnected";
+          waLiveBadge.textContent = "not configured";
+          waLiveBadge.dataset.state = "disconnected";
+          waSetupNext.textContent = "Next step: set WHATSAPP_PROVIDER=baileys in .env, restart gateway, then click Live Connect.";
+          waQrRaw.value = "";
           return;
         }
 
@@ -403,7 +490,30 @@ export function renderWebConsoleHtml(): string {
         waLiveSummary.textContent =
           "WhatsApp " + (connected ? "connected" : "not connected") + " | state: " + state + " | me: " + me + " | " + qr + " | lastError: " + lastError;
         waLiveSummary.dataset.state = connected ? "connected" : "disconnected";
+        waLiveBadge.textContent = state;
+        waLiveBadge.dataset.state = connected ? "connected" : state === "connecting" ? "connecting" : "disconnected";
+
+        if (connected) {
+          waSetupNext.textContent = "Connected. Send a WhatsApp message starting with /alfred to test command/chat handling.";
+        } else if (status.qr) {
+          waSetupNext.textContent = "QR is ready. Scan it from WhatsApp Linked Devices now.";
+        } else if (state === "connecting") {
+          waSetupNext.textContent = "Connecting. Wait for QR to appear (check gateway logs if print QR is enabled).";
+        } else {
+          waSetupNext.textContent = "Not connected. Click Live Connect to start WhatsApp linking.";
+        }
+        waQrRaw.value = status.qr ? String(status.qr) : "";
       }
+
+      const waEnvSnippet = [
+        "WHATSAPP_PROVIDER=baileys",
+        "WHATSAPP_BAILEYS_AUTO_CONNECT=false",
+        "WHATSAPP_BAILEYS_AUTH_DIR=./state/whatsapp/baileys_auth",
+        "WHATSAPP_BAILEYS_INBOUND_TOKEN=replace_with_strong_token",
+        "WHATSAPP_BAILEYS_PRINT_QR=true",
+        "WHATSAPP_BAILEYS_REQUIRE_PREFIX=/alfred",
+        "WHATSAPP_BAILEYS_ALLOW_SELF_FROM_ME=true"
+      ].join("\\n");
 
       $("sendChat").addEventListener("click", async () => {
         const sessionId = $("sessionId").value.trim();
@@ -624,6 +734,21 @@ export function renderWebConsoleHtml(): string {
         pushLog("WA_LIVE_DISCONNECT", response);
         renderWaLiveSummary(response.data);
         setStatus("Last action: WA_LIVE_DISCONNECT (" + response.status + ")", response.ok ? "success" : "error");
+      });
+
+      $("waCopyEnv").addEventListener("click", async () => {
+        try {
+          if (navigator.clipboard?.writeText) {
+            await navigator.clipboard.writeText(waEnvSnippet);
+            setStatus("Copied WhatsApp .env setup snippet to clipboard.", "success");
+          } else {
+            pushLog("WA_ENV_SETUP", waEnvSnippet);
+            setStatus("Clipboard unavailable. Printed .env setup snippet in console output.", "error");
+          }
+        } catch {
+          pushLog("WA_ENV_SETUP", waEnvSnippet);
+          setStatus("Copy failed. Printed .env setup snippet in console output.", "error");
+        }
       });
 
       $("logClear").addEventListener("click", async () => {

@@ -19,6 +19,11 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("Job Controls");
     expect(html).toContain("OAuth (OpenAI)");
     expect(html).toContain("Live WhatsApp (Baileys)");
+    expect(html).toContain("WhatsApp Setup Flow");
+    expect(html).toContain("id=\"waLiveBadge\"");
+    expect(html).toContain("id=\"waSetupNext\"");
+    expect(html).toContain("id=\"waCopyEnv\"");
+    expect(html).toContain("WHATSAPP_PROVIDER=baileys");
     expect(html).toContain("SEND_CHAT_REQUEST");
     expect(html).toContain(".status[data-state=\"busy\"]");
     expect(html).toContain("id=\"logNewestFirst\"");
