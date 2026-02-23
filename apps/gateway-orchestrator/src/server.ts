@@ -20,6 +20,7 @@ import { CodexThreadStore } from "./codex/thread_store";
 import { CodexChatService } from "./llm/codex_chat_service";
 import { HybridLlmService } from "./llm/hybrid_llm_service";
 import { BaileysRuntime } from "./whatsapp/baileys_runtime";
+import { maybeSendBaileysChatReply } from "./whatsapp/live_inbound_relay";
 
 async function main(): Promise<void> {
   loadDotEnvFile();
@@ -122,7 +123,7 @@ async function main(): Promise<void> {
       requirePrefix: config.whatsAppBaileysRequirePrefix,
       allowedSenders: config.whatsAppBaileysAllowedSenders,
       onInbound: async (payload) => {
-        await fetch(inboundUrl, {
+        const response = await fetch(inboundUrl, {
           method: "POST",
           headers: {
             "content-type": "application/json",
@@ -130,6 +131,27 @@ async function main(): Promise<void> {
           },
           body: JSON.stringify(payload)
         });
+
+        if (!response.ok) {
+          return;
+        }
+
+        let result: unknown;
+        try {
+          result = await response.json();
+        } catch {
+          return;
+        }
+
+        if (!whatsAppLiveRuntime) {
+          return;
+        }
+
+        try {
+          await maybeSendBaileysChatReply(whatsAppLiveRuntime, payload, result);
+        } catch {
+          // Reply dispatch is best-effort; runtime status captures transport faults.
+        }
       }
     });
 
