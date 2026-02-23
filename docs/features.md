@@ -107,13 +107,14 @@ Testing:
 ## 8) OAuth Connection Layer (OpenAI First)
 
 Description:
-- Add OAuth-first LLM connection flow with local mock mode for development and a live mode path for production credentials.
+- Add OAuth-first LLM connection flow with Codex app-server as the primary ChatGPT auth backend and API key fallback.
 
 Acceptance criteria:
-- Web/API endpoint can start OAuth and return an authorization URL bound to a session-specific state token.
-- Callback endpoint validates state and stores per-session token material for later provider use.
-- WhatsApp command path supports `/auth connect`, `/auth status`, and `/auth disconnect`.
-- Regular chat turns can call OpenAI Responses with session OAuth token first and API key fallback when configured.
+- Web/API endpoint can start Codex login and return an authorization URL (`account/login/start`).
+- Auth status and plan visibility are available from `account/read`.
+- Rate limit visibility is available from `account/rateLimits/read`.
+- WhatsApp command path supports `/auth connect`, `/auth status`, `/auth limits`, and `/auth disconnect`.
+- Regular chat turns route to Codex turns when ChatGPT auth is connected, with API key fallback when unavailable.
 
 Testing:
 - Automated: OAuth service unit tests, command parsing tests, and integration flow for connect/status/disconnect.

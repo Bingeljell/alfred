@@ -10,13 +10,16 @@ Web Console Manual Checklist
 6. Run Memory Search/Sync/Status actions and confirm responses are shown in the log panel.
 
 OAuth Manual Checklist
-1. In `/ui`, click OAuth Connect and approve on the mock authorize page.
-2. Back in `/ui`, click OAuth Status and confirm connected mode/status is returned.
-3. Send `/auth status` through chat endpoint and confirm connected response.
-4. Send a normal chat prompt (not slash command) and verify model output appears (not `ack:`).
-5. Send `/auth disconnect` and verify `/auth status` reports not connected.
-6. (Optional API key fallback) set `OPENAI_API_KEY`, keep OAuth disconnected, then send normal chat and verify model output still appears.
-7. (Optional live mode) set `OAUTH_OPENAI_MODE=live` and provider env vars, then repeat start/callback/status flow.
+1. Set `.env` for Codex auth path:
+   - `CODEX_APP_SERVER_ENABLED=true`
+   - `CODEX_AUTH_LOGIN_MODE=chatgpt`
+2. In `/ui`, click OAuth Connect and finish ChatGPT login in the opened browser tab.
+3. Back in `/ui`, click OAuth Status and confirm connected email/plan.
+4. Click Rate Limits and confirm limit usage payload is returned.
+5. Send `/auth status` and `/auth limits` through chat endpoint and confirm responses.
+6. Send a normal chat prompt (not slash command) and verify model output appears (not `ack:`).
+7. Send `/auth disconnect` and verify `/auth status` reports disconnected.
+8. (Optional API key fallback) set `OPENAI_API_KEY`, keep Codex auth disconnected, then send normal chat and verify model output still appears.
 
 Phase 1 Manual Checklist
 1. Start gateway: npm run dev:gateway

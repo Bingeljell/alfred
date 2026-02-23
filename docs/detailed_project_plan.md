@@ -163,9 +163,10 @@ Definition of done:
 ## Phase 6: MVP Hardening for Low-cost Host
 
 Deliverables:
-- OAuth Phase 6.1: OpenAI connect/status/disconnect with local mock authorize flow and callback handling.
-- OAuth entry points from both web console controls and WhatsApp chat commands (`/auth connect`, `/auth status`, `/auth disconnect`).
-- OpenAI Responses runtime wiring for normal chat turns with per-session OAuth token preference and API key fallback.
+- OAuth Phase 6.1: Codex app-server connect/status/disconnect with ChatGPT login flow (`account/login/start`).
+- OAuth entry points from both web console controls and WhatsApp chat commands (`/auth connect`, `/auth status`, `/auth limits`, `/auth disconnect`).
+- OpenAI Responses runtime wiring for API-key fallback when Codex auth is unavailable.
+- Codex thread runtime wiring for normal chat turns with OAuth-first routing and session-thread persistence.
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.
