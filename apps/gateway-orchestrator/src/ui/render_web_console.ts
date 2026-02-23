@@ -414,6 +414,17 @@ export function renderWebConsoleHtml(): string {
       });
 
       pushLog("READY", "Web console loaded. Use controls above.");
+      void (async () => {
+        const sessionId = selectedOAuthSession();
+        if (!sessionId) {
+          return;
+        }
+        const response = await api("GET", "/v1/auth/openai/status?sessionId=" + encodeURIComponent(sessionId));
+        pushLog("OAUTH_STATUS_BOOT", response);
+        if (response.data?.connected === false) {
+          setStatus("Codex auth unavailable; chat may use API key fallback if configured.");
+        }
+      })();
     </script>
   </body>
 </html>`;

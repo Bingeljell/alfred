@@ -54,17 +54,40 @@ export class CodexChatService {
       return null;
     }
 
-    const threadId = await this.resolveThreadId(sessionId);
-    const started = await this.client.request<TurnStartResponse>("turn/start", {
-      threadId,
-      input: [
-        {
-          type: "text",
-          text: input,
-          text_elements: []
-        }
-      ]
-    });
+    let threadId = await this.resolveThreadId(sessionId);
+    let started: TurnStartResponse;
+    try {
+      started = await this.client.request<TurnStartResponse>("turn/start", {
+        threadId,
+        input: [
+          {
+            type: "text",
+            text: input,
+            text_elements: []
+          }
+        ]
+      });
+    } catch (error) {
+      // Thread IDs may become stale across process restarts; retry once with a fresh thread.
+      const detail = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      const isThreadError = detail.includes("thread");
+      if (!isThreadError) {
+        throw error;
+      }
+
+      await this.threadStore.delete(sessionId);
+      threadId = await this.resolveThreadId(sessionId);
+      started = await this.client.request<TurnStartResponse>("turn/start", {
+        threadId,
+        input: [
+          {
+            type: "text",
+            text: input,
+            text_elements: []
+          }
+        ]
+      });
+    }
 
     const completion = await this.waitForTurnCompletion(threadId, started.turn.id);
     if (completion.status !== "completed") {
