@@ -113,6 +113,7 @@ Acceptance criteria:
 - Web/API endpoint can start OAuth and return an authorization URL bound to a session-specific state token.
 - Callback endpoint validates state and stores per-session token material for later provider use.
 - WhatsApp command path supports `/auth connect`, `/auth status`, and `/auth disconnect`.
+- Regular chat turns can call OpenAI Responses with session OAuth token first and API key fallback when configured.
 
 Testing:
 - Automated: OAuth service unit tests, command parsing tests, and integration flow for connect/status/disconnect.

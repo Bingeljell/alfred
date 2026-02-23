@@ -13,8 +13,10 @@ OAuth Manual Checklist
 1. In `/ui`, click OAuth Connect and approve on the mock authorize page.
 2. Back in `/ui`, click OAuth Status and confirm connected mode/status is returned.
 3. Send `/auth status` through chat endpoint and confirm connected response.
-4. Send `/auth disconnect` and verify `/auth status` reports not connected.
-5. (Optional live mode) set `OAUTH_OPENAI_MODE=live` and provider env vars, then repeat start/callback/status flow.
+4. Send a normal chat prompt (not slash command) and verify model output appears (not `ack:`).
+5. Send `/auth disconnect` and verify `/auth status` reports not connected.
+6. (Optional API key fallback) set `OPENAI_API_KEY`, keep OAuth disconnected, then send normal chat and verify model output still appears.
+7. (Optional live mode) set `OAUTH_OPENAI_MODE=live` and provider env vars, then repeat start/callback/status flow.
 
 Phase 1 Manual Checklist
 1. Start gateway: npm run dev:gateway

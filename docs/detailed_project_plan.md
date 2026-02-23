@@ -165,6 +165,7 @@ Definition of done:
 Deliverables:
 - OAuth Phase 6.1: OpenAI connect/status/disconnect with local mock authorize flow and callback handling.
 - OAuth entry points from both web console controls and WhatsApp chat commands (`/auth connect`, `/auth status`, `/auth disconnect`).
+- OpenAI Responses runtime wiring for normal chat turns with per-session OAuth token preference and API key fallback.
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.
