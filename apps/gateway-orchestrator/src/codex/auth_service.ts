@@ -3,6 +3,7 @@ import {
   type AppServerNotification,
   type ChatgptTokensRefreshResponse
 } from "./app_server_client";
+import { CodexAuthStateStore, type CodexAuthTelemetry } from "./auth_state_store";
 
 export type CodexLoginStartMode = "chatgpt" | "chatgptAuthTokens" | "apiKey";
 
@@ -40,16 +41,21 @@ type RateLimitsResult = {
 
 export class CodexAuthService {
   private readonly client: CodexAppServerClient;
+  private readonly stateStore?: CodexAuthStateStore;
   private lastLoginCompleted: { loginId: string | null; success: boolean; error: string | null } | null = null;
 
-  constructor(client: CodexAppServerClient) {
+  constructor(client: CodexAppServerClient, options?: { stateStore?: CodexAuthStateStore }) {
     this.client = client;
+    this.stateStore = options?.stateStore;
     this.client.onNotification((event) => {
       this.onNotification(event);
     });
   }
 
   async ensureReady(): Promise<void> {
+    if (this.stateStore) {
+      await this.stateStore.ensureReady();
+    }
     await this.client.ensureStarted();
   }
 
@@ -60,30 +66,41 @@ export class CodexAuthService {
   }
 
   async readStatus(refreshToken = false): Promise<CodexAuthStatus> {
-    const result = await this.client.request<AccountReadResponse>("account/read", { refreshToken });
-    if (!result.account) {
-      return {
-        connected: false,
-        authMode: null,
-        requiresOpenaiAuth: result.requiresOpenaiAuth
-      };
-    }
+    try {
+      const result = await this.client.request<AccountReadResponse>("account/read", { refreshToken });
+      let status: CodexAuthStatus;
+      if (!result.account) {
+        status = {
+          connected: false,
+          authMode: null,
+          requiresOpenaiAuth: result.requiresOpenaiAuth
+        };
+      } else if (result.account.type === "chatgpt") {
+        status = {
+          connected: true,
+          authMode: "chatgpt",
+          email: result.account.email,
+          planType: result.account.planType,
+          requiresOpenaiAuth: result.requiresOpenaiAuth
+        };
+      } else {
+        status = {
+          connected: true,
+          authMode: "apiKey",
+          requiresOpenaiAuth: result.requiresOpenaiAuth
+        };
+      }
 
-    if (result.account.type === "chatgpt") {
-      return {
-        connected: true,
-        authMode: "chatgpt",
-        email: result.account.email,
-        planType: result.account.planType,
-        requiresOpenaiAuth: result.requiresOpenaiAuth
-      };
+      if (this.stateStore) {
+        await this.stateStore.recordStatusSnapshot(status);
+      }
+      return status;
+    } catch (error) {
+      if (this.stateStore) {
+        await this.stateStore.recordStatusError(error instanceof Error ? error.message : String(error));
+      }
+      throw error;
     }
-
-    return {
-      connected: true,
-      authMode: "apiKey",
-      requiresOpenaiAuth: result.requiresOpenaiAuth
-    };
   }
 
   async startLogin(mode: CodexLoginStartMode, apiKey?: string): Promise<{
@@ -131,6 +148,9 @@ export class CodexAuthService {
 
   async logout(): Promise<void> {
     await this.client.request("account/logout");
+    if (this.stateStore) {
+      await this.stateStore.recordDisconnect();
+    }
   }
 
   async readRateLimits(): Promise<RateLimitsResult> {
@@ -139,6 +159,13 @@ export class CodexAuthService {
 
   lastLoginResult(): { loginId: string | null; success: boolean; error: string | null } | null {
     return this.lastLoginCompleted;
+  }
+
+  async telemetry(): Promise<CodexAuthTelemetry | null> {
+    if (!this.stateStore) {
+      return null;
+    }
+    return this.stateStore.readTelemetry();
   }
 
   async stop(): Promise<void> {
@@ -161,5 +188,9 @@ export class CodexAuthService {
       success: Boolean(params.success),
       error: typeof params.error === "string" ? params.error : null
     };
+
+    if (this.stateStore) {
+      void this.stateStore.recordLogin(this.lastLoginCompleted);
+    }
   }
 }

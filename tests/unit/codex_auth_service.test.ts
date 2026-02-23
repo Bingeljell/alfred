@@ -1,5 +1,9 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { CodexAuthService } from "../../apps/gateway-orchestrator/src/codex/auth_service";
+import { CodexAuthStateStore } from "../../apps/gateway-orchestrator/src/codex/auth_state_store";
 
 describe("CodexAuthService", () => {
   it("maps chatgpt account status and login start response", async () => {
@@ -78,5 +82,72 @@ describe("CodexAuthService", () => {
     const status = await auth.readStatus();
     expect(status.connected).toBe(false);
     expect(status.authMode).toBeNull();
+  });
+
+  it("persists login/disconnect/status telemetry across service instances", async () => {
+    let notificationListener: ((event: { method: string; params?: unknown }) => void) | undefined;
+    let connected = true;
+
+    const fakeClient = {
+      ensureStarted: async () => undefined,
+      onNotification: (listener: (event: { method: string; params?: unknown }) => void) => {
+        notificationListener = listener;
+        return () => undefined;
+      },
+      setChatgptAuthTokensRefreshHandler: () => undefined,
+      stop: async () => undefined,
+      request: async (method: string) => {
+        if (method === "account/read") {
+          return connected
+            ? {
+                account: {
+                  type: "chatgpt",
+                  email: "user@example.com",
+                  planType: "team"
+                },
+                requiresOpenaiAuth: true
+              }
+            : {
+                account: null,
+                requiresOpenaiAuth: true
+              };
+        }
+        if (method === "account/logout") {
+          connected = false;
+          return {};
+        }
+        return {};
+      }
+    } as const;
+
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-codex-auth-telemetry-"));
+    const stateStore = new CodexAuthStateStore(stateDir);
+    const auth = new CodexAuthService(fakeClient as never, { stateStore });
+    await auth.ensureReady();
+
+    notificationListener?.({
+      method: "account/login/completed",
+      params: {
+        loginId: "login-1",
+        success: true,
+        error: null
+      }
+    });
+
+    await auth.readStatus();
+    await auth.logout();
+
+    const telemetry = await auth.telemetry();
+    expect(telemetry?.lastLogin?.loginId).toBe("login-1");
+    expect(telemetry?.lastLogin?.success).toBe(true);
+    expect(telemetry?.lastStatusCheckedAt).toBeTruthy();
+    expect(telemetry?.lastDisconnectAt).toBeTruthy();
+    expect(telemetry?.lastKnownConnected).toBe(false);
+
+    const reloaded = new CodexAuthService(fakeClient as never, { stateStore: new CodexAuthStateStore(stateDir) });
+    await reloaded.ensureReady();
+    const persisted = await reloaded.telemetry();
+    expect(persisted?.lastLogin?.loginId).toBe("login-1");
+    expect(persisted?.lastDisconnectAt).toBeTruthy();
   });
 });

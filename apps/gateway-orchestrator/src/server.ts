@@ -15,6 +15,7 @@ import { OAuthService } from "./auth/oauth_service";
 import { OpenAIResponsesService } from "./llm/openai_responses_service";
 import { CodexAppServerClient } from "./codex/app_server_client";
 import { CodexAuthService } from "./codex/auth_service";
+import { CodexAuthStateStore } from "./codex/auth_state_store";
 import { CodexThreadStore } from "./codex/thread_store";
 import { CodexChatService } from "./llm/codex_chat_service";
 import { HybridLlmService } from "./llm/hybrid_llm_service";
@@ -61,7 +62,8 @@ async function main(): Promise<void> {
       clientName: config.codexAppServerClientName,
       clientVersion: config.codexAppServerClientVersion
     });
-    codexAuthService = new CodexAuthService(codexClient);
+    const authStateStore = new CodexAuthStateStore(config.stateDir);
+    codexAuthService = new CodexAuthService(codexClient, { stateStore: authStateStore });
     const threadStore = new CodexThreadStore(config.stateDir);
     codexChatService = new CodexChatService({
       client: codexClient,

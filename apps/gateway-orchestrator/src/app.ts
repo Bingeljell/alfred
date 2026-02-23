@@ -250,11 +250,13 @@ export function createGatewayApp(
     if (codexAuthService) {
       try {
         const status = await codexAuthService.readStatus(false);
-        const lastLogin = codexAuthService.lastLoginResult();
+        const telemetry = await codexAuthService.telemetry();
+        const lastLogin = telemetry?.lastLogin ?? codexAuthService.lastLoginResult();
         res.status(200).json({
           provider: "openai-codex",
           ...status,
-          lastLogin
+          lastLogin,
+          telemetry
         });
       } catch (error) {
         res.status(400).json({ error: "codex_auth_status_failed", detail: String(error) });
