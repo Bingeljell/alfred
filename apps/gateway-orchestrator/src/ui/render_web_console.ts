@@ -382,7 +382,6 @@ export function renderWebConsoleHtml(): string {
       </section>
     </main>
 
-    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       const log = $("log");
@@ -537,13 +536,18 @@ export function renderWebConsoleHtml(): string {
         } else {
           waSetupNext.textContent = "Not connected. Click Live Connect to start WhatsApp linking.";
         }
-        renderWaQrPreview(status.qr, { connected, state });
+        renderWaQrPreview(status.qr, {
+          connected,
+          state,
+          qrImageDataUrl: typeof status.qrImageDataUrl === "string" ? status.qrImageDataUrl : ""
+        });
       }
 
       function renderWaQrPreview(qrValue, context) {
         const raw = qrValue ? String(qrValue) : "";
         const connected = context?.connected === true;
         const state = context?.state ? String(context.state) : "unknown";
+        const qrImageDataUrl = context?.qrImageDataUrl ? String(context.qrImageDataUrl) : "";
         waQrRaw.value = raw;
 
         if (!raw) {
@@ -559,30 +563,16 @@ export function renderWebConsoleHtml(): string {
           return;
         }
 
-        if (!window.QRCode || typeof window.QRCode.toDataURL !== "function") {
+        if (!qrImageDataUrl) {
           waQrImage.style.display = "none";
           waQrImage.removeAttribute("src");
-          waQrHint.textContent = "QR renderer not loaded. Use raw QR as fallback or refresh the page.";
+          waQrHint.textContent = "QR image unavailable right now. Use raw QR as fallback, then retry Live Connect.";
           return;
         }
 
-        window.QRCode.toDataURL(raw, {
-          errorCorrectionLevel: "M",
-          margin: 1,
-          width: 320,
-          color: { dark: "#111827", light: "#ffffff" }
-        }, (error, dataUrl) => {
-          if (error || !dataUrl) {
-            waQrImage.style.display = "none";
-            waQrImage.removeAttribute("src");
-            waQrHint.textContent = "Could not render QR image. Use raw QR as fallback.";
-            return;
-          }
-
-          waQrImage.src = dataUrl;
-          waQrImage.style.display = "block";
-          waQrHint.textContent = "Scan now from WhatsApp Linked Devices. This QR can expire quickly.";
-        });
+        waQrImage.src = qrImageDataUrl;
+        waQrImage.style.display = "block";
+        waQrHint.textContent = "Scan now from WhatsApp Linked Devices. This QR can expire quickly.";
       }
 
       async function fetchWaLiveStatusSilently() {

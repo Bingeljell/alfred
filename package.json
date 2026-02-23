@@ -16,6 +16,7 @@
   "dependencies": {
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "express": "^5.2.1",
+    "qrcode": "^1.5.4",
     "supertest": "^7.2.2",
     "zod": "^4.3.6"
   },

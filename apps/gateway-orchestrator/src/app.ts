@@ -27,6 +27,51 @@ const CallbackQuerySchema = z.object({
   error: z.string().optional()
 });
 
+const QRCode = require("qrcode") as {
+  toDataURL: (
+    text: string,
+    options?: {
+      errorCorrectionLevel?: "L" | "M" | "Q" | "H";
+      margin?: number;
+      width?: number;
+      color?: { dark?: string; light?: string };
+    }
+  ) => Promise<string>;
+};
+
+export async function withQrImageData(status: unknown): Promise<unknown> {
+  if (!status || typeof status !== "object") {
+    return status;
+  }
+
+  const statusRecord = status as Record<string, unknown>;
+  const qr = typeof statusRecord.qr === "string" ? statusRecord.qr : "";
+  if (!qr) {
+    return {
+      ...statusRecord,
+      qrImageDataUrl: null
+    };
+  }
+
+  try {
+    const qrImageDataUrl = await QRCode.toDataURL(qr, {
+      errorCorrectionLevel: "M",
+      margin: 1,
+      width: 320,
+      color: { dark: "#111827", light: "#ffffff" }
+    });
+    return {
+      ...statusRecord,
+      qrImageDataUrl
+    };
+  } catch {
+    return {
+      ...statusRecord,
+      qrImageDataUrl: null
+    };
+  }
+}
+
 export function isAuthorizedBaileysInbound(expectedToken: string | undefined, providedHeader: unknown): boolean {
   if (!expectedToken) {
     return true;
@@ -129,7 +174,8 @@ export function createGatewayApp(
     }
 
     const status = await whatsAppLiveManager.status();
-    res.status(200).json(status);
+    const withQrImage = await withQrImageData(status);
+    res.status(200).json(withQrImage);
   });
 
   app.post("/v1/whatsapp/live/connect", async (_req, res) => {
@@ -140,7 +186,8 @@ export function createGatewayApp(
 
     try {
       const status = await whatsAppLiveManager.connect();
-      res.status(200).json(status);
+      const withQrImage = await withQrImageData(status);
+      res.status(200).json(withQrImage);
     } catch (error) {
       res.status(400).json({ error: "whatsapp_live_connect_failed", detail: String(error) });
     }
@@ -154,7 +201,8 @@ export function createGatewayApp(
 
     try {
       const status = await whatsAppLiveManager.disconnect();
-      res.status(200).json(status);
+      const withQrImage = await withQrImageData(status);
+      res.status(200).json(withQrImage);
     } catch (error) {
       res.status(400).json({ error: "whatsapp_live_disconnect_failed", detail: String(error) });
     }

@@ -26,7 +26,7 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("id=\"waQrImage\"");
     expect(html).toContain("id=\"waQrHint\"");
     expect(html).toContain("renderWaQrPreview");
-    expect(html).toContain("cdn.jsdelivr.net/npm/qrcode");
+    expect(html).toContain("qrImageDataUrl");
     expect(html).toContain("WA_LIVE_AUTO_POLL_MS");
     expect(html).toContain("startWaLiveAutoPoll");
     expect(html).toContain("WHATSAPP_PROVIDER=baileys");
