@@ -28,7 +28,16 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("renderWaQrPreview");
     expect(html).toContain("qrImageDataUrl");
     expect(html).toContain("WA_LIVE_AUTO_POLL_MS");
+    expect(html).toContain("SOURCE_AUTO_POLL_MS");
     expect(html).toContain("startWaLiveAutoPoll");
+    expect(html).toContain("startSourceAutoPoll");
+    expect(html).toContain("id=\"sourceGatewayCard\"");
+    expect(html).toContain("id=\"sourceAuthCard\"");
+    expect(html).toContain("id=\"sourceWaCard\"");
+    expect(html).toContain("id=\"sourceMemoryCard\"");
+    expect(html).toContain("id=\"sourceRefresh\"");
+    expect(html).toContain("Log source changes");
+    expect(html).toContain("updateSourceSnapshot");
     expect(html).toContain("WHATSAPP_PROVIDER=baileys");
     expect(html).toContain("SEND_CHAT_REQUEST");
     expect(html).toContain(".status[data-state=\"busy\"]");

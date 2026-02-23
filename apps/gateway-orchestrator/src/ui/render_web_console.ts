@@ -171,6 +171,59 @@ export function renderWebConsoleHtml(): string {
       .status[data-state="error"] {
         color: #b42318;
       }
+      .source-strip {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        margin-bottom: 10px;
+        background: #fffdf8;
+      }
+      .source-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+      }
+      .source-card {
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 8px;
+        background: #fff;
+      }
+      .source-card[data-state="ok"] {
+        background: #ecfdf3;
+        border-color: #86efac;
+      }
+      .source-card[data-state="warn"] {
+        background: #fff7ed;
+        border-color: #fdba74;
+      }
+      .source-card[data-state="error"] {
+        background: #fef2f2;
+        border-color: #fca5a5;
+      }
+      .source-name {
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.2px;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      .source-value {
+        font-size: 12px;
+        font-weight: 600;
+        margin-top: 3px;
+      }
+      .source-meta {
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 3px;
+      }
+      .source-tools {
+        margin-top: 8px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
       .auth-summary[data-state="connected"] {
         color: #166534;
       }
@@ -251,6 +304,11 @@ export function renderWebConsoleHtml(): string {
       }
       @media (max-width: 1000px) {
         .layout { grid-template-columns: 1fr; }
+      }
+      @media (max-width: 680px) {
+        .source-grid {
+          grid-template-columns: 1fr;
+        }
       }
     </style>
   </head>
@@ -371,6 +429,37 @@ export function renderWebConsoleHtml(): string {
 
       <section class="panel" style="grid-column: 1 / -1;">
         <h2>Console Output</h2>
+        <div class="source-strip">
+          <div class="source-grid">
+            <div class="source-card" id="sourceGatewayCard" data-state="unknown">
+              <div class="source-name">Gateway</div>
+              <div class="source-value" id="sourceGatewayValue">Unknown</div>
+              <div class="source-meta" id="sourceGatewayMeta">waiting for poll</div>
+            </div>
+            <div class="source-card" id="sourceAuthCard" data-state="unknown">
+              <div class="source-name">Auth</div>
+              <div class="source-value" id="sourceAuthValue">Unknown</div>
+              <div class="source-meta" id="sourceAuthMeta">waiting for poll</div>
+            </div>
+            <div class="source-card" id="sourceWaCard" data-state="unknown">
+              <div class="source-name">WhatsApp</div>
+              <div class="source-value" id="sourceWaValue">Unknown</div>
+              <div class="source-meta" id="sourceWaMeta">waiting for poll</div>
+            </div>
+            <div class="source-card" id="sourceMemoryCard" data-state="unknown">
+              <div class="source-name">Memory</div>
+              <div class="source-value" id="sourceMemoryValue">Unknown</div>
+              <div class="source-meta" id="sourceMemoryMeta">waiting for poll</div>
+            </div>
+          </div>
+          <div class="source-tools">
+            <label class="inline-control" for="logSourceEvents">
+              <input type="checkbox" id="logSourceEvents" checked />
+              Log source changes
+            </label>
+            <button class="secondary" id="sourceRefresh">Refresh Sources</button>
+          </div>
+        </div>
         <div class="toolbar">
           <label class="inline-control" for="logNewestFirst">
             <input type="checkbox" id="logNewestFirst" checked />
@@ -394,9 +483,26 @@ export function renderWebConsoleHtml(): string {
       const waQrImage = $("waQrImage");
       const waQrHint = $("waQrHint");
       const logNewestFirst = $("logNewestFirst");
+      const logSourceEvents = $("logSourceEvents");
+      const sourceGatewayCard = $("sourceGatewayCard");
+      const sourceGatewayValue = $("sourceGatewayValue");
+      const sourceGatewayMeta = $("sourceGatewayMeta");
+      const sourceAuthCard = $("sourceAuthCard");
+      const sourceAuthValue = $("sourceAuthValue");
+      const sourceAuthMeta = $("sourceAuthMeta");
+      const sourceWaCard = $("sourceWaCard");
+      const sourceWaValue = $("sourceWaValue");
+      const sourceWaMeta = $("sourceWaMeta");
+      const sourceMemoryCard = $("sourceMemoryCard");
+      const sourceMemoryValue = $("sourceMemoryValue");
+      const sourceMemoryMeta = $("sourceMemoryMeta");
       const WA_LIVE_AUTO_POLL_MS = 2000;
+      const SOURCE_AUTO_POLL_MS = 5000;
       let waLivePollInFlight = false;
       let waLivePollTimer = null;
+      let sourcePollInFlight = false;
+      let sourcePollTimer = null;
+      const sourceFingerprints = Object.create(null);
 
       function stamp() {
         return new Date().toISOString();
@@ -411,6 +517,27 @@ export function renderWebConsoleHtml(): string {
           log.textContent += line + "\\n";
           log.scrollTop = log.scrollHeight;
         }
+      }
+
+      function clockStamp() {
+        return new Date().toLocaleTimeString([], { hour12: false });
+      }
+
+      function updateSourceCard(card, valueNode, metaNode, next) {
+        card.dataset.state = next.state;
+        valueNode.textContent = next.value;
+        metaNode.textContent = next.meta + " @ " + clockStamp();
+      }
+
+      function updateSourceSnapshot(sourceKey, card, valueNode, metaNode, next, snapshot) {
+        updateSourceCard(card, valueNode, metaNode, next);
+        const fingerprint = JSON.stringify(snapshot);
+        const previous = sourceFingerprints[sourceKey];
+        sourceFingerprints[sourceKey] = fingerprint;
+        if (previous === fingerprint || !logSourceEvents.checked) {
+          return;
+        }
+        pushLog("SOURCE_" + sourceKey.toUpperCase(), snapshot);
       }
 
       async function api(method, url, body) {
@@ -475,6 +602,18 @@ export function renderWebConsoleHtml(): string {
         if (!status || typeof status !== "object") {
           authSummary.textContent = "Auth: unavailable";
           authSummary.dataset.state = "disconnected";
+          updateSourceSnapshot(
+            "auth",
+            sourceAuthCard,
+            sourceAuthValue,
+            sourceAuthMeta,
+            {
+              state: "error",
+              value: "Unavailable",
+              meta: "Auth status is missing"
+            },
+            { connected: false, reason: "missing_status" }
+          );
           return;
         }
 
@@ -488,6 +627,126 @@ export function renderWebConsoleHtml(): string {
           ? "Connected: " + identity + plan + " | last login: " + lastLoginAt + " | last disconnect: " + lastDisconnectAt
           : "Disconnected | last login: " + lastLoginAt + " | last disconnect: " + lastDisconnectAt;
         authSummary.dataset.state = connected ? "connected" : "disconnected";
+        updateSourceSnapshot(
+          "auth",
+          sourceAuthCard,
+          sourceAuthValue,
+          sourceAuthMeta,
+          {
+            state: connected ? "ok" : "warn",
+            value: connected ? "Connected" : "Disconnected",
+            meta: (status.provider ? String(status.provider) : "unknown-provider") + (status.mode ? " | " + String(status.mode) : "")
+          },
+          {
+            connected,
+            provider: status.provider ?? "unknown",
+            mode: status.mode ?? status.authMode ?? "unknown",
+            email: status.email ?? "n/a",
+            planType: status.planType ?? "n/a"
+          }
+        );
+      }
+
+      function updateGatewaySourceFromHealth(response) {
+        if (!response || typeof response !== "object") {
+          updateSourceSnapshot(
+            "gateway",
+            sourceGatewayCard,
+            sourceGatewayValue,
+            sourceGatewayMeta,
+            { state: "error", value: "Unavailable", meta: "health response missing" },
+            { ok: false, reason: "missing_response" }
+          );
+          return;
+        }
+
+        if (!response.ok) {
+          updateSourceSnapshot(
+            "gateway",
+            sourceGatewayCard,
+            sourceGatewayValue,
+            sourceGatewayMeta,
+            { state: "error", value: "Unhealthy", meta: "HTTP " + response.status },
+            { ok: false, status: response.status }
+          );
+          return;
+        }
+
+        const queue = response.data?.queue || {};
+        updateSourceSnapshot(
+          "gateway",
+          sourceGatewayCard,
+          sourceGatewayValue,
+          sourceGatewayMeta,
+          {
+            state: "ok",
+            value: String(response.data?.status || "ok"),
+            meta:
+              "queued " +
+              String(queue.queued ?? 0) +
+              " | running " +
+              String(queue.running ?? 0) +
+              " | failed " +
+              String(queue.failed ?? 0)
+          },
+          {
+            ok: true,
+            status: response.data?.status ?? "ok",
+            queue: {
+              queued: queue.queued ?? 0,
+              running: queue.running ?? 0,
+              failed: queue.failed ?? 0
+            }
+          }
+        );
+      }
+
+      function updateMemorySourceFromStatus(response) {
+        if (!response || typeof response !== "object") {
+          updateSourceSnapshot(
+            "memory",
+            sourceMemoryCard,
+            sourceMemoryValue,
+            sourceMemoryMeta,
+            { state: "error", value: "Unavailable", meta: "memory response missing" },
+            { ok: false, reason: "missing_response" }
+          );
+          return;
+        }
+
+        if (!response.ok) {
+          updateSourceSnapshot(
+            "memory",
+            sourceMemoryCard,
+            sourceMemoryValue,
+            sourceMemoryMeta,
+            { state: "warn", value: "Not Ready", meta: "HTTP " + response.status },
+            { ok: false, status: response.status }
+          );
+          return;
+        }
+
+        const data = response.data || {};
+        const indexed = Number(data.indexedFileCount ?? 0);
+        const chunks = Number(data.chunkCount ?? 0);
+        const dirty = data.dirty === true;
+        updateSourceSnapshot(
+          "memory",
+          sourceMemoryCard,
+          sourceMemoryValue,
+          sourceMemoryMeta,
+          {
+            state: dirty ? "warn" : "ok",
+            value: "Files " + indexed + " | Chunks " + chunks,
+            meta: "dirty: " + (dirty ? "yes" : "no")
+          },
+          {
+            ok: true,
+            indexedFileCount: indexed,
+            chunkCount: chunks,
+            dirty
+          }
+        );
       }
 
       function renderWaLiveSummary(status) {
@@ -498,6 +757,14 @@ export function renderWebConsoleHtml(): string {
           waLiveBadge.dataset.state = "disconnected";
           waSetupNext.textContent = "Next step: set WHATSAPP_PROVIDER=baileys, restart gateway, then click Live Status.";
           renderWaQrPreview("");
+          updateSourceSnapshot(
+            "whatsapp",
+            sourceWaCard,
+            sourceWaValue,
+            sourceWaMeta,
+            { state: "error", value: "Unavailable", meta: "status missing" },
+            { configured: false, reason: "missing_status" }
+          );
           return;
         }
 
@@ -508,6 +775,14 @@ export function renderWebConsoleHtml(): string {
           waLiveBadge.dataset.state = "disconnected";
           waSetupNext.textContent = "Next step: set WHATSAPP_PROVIDER=baileys in .env, restart gateway, then click Live Connect.";
           renderWaQrPreview("");
+          updateSourceSnapshot(
+            "whatsapp",
+            sourceWaCard,
+            sourceWaValue,
+            sourceWaMeta,
+            { state: "warn", value: "Not Configured", meta: "enable WHATSAPP_PROVIDER=baileys" },
+            { configured: false, error: "whatsapp_live_not_configured" }
+          );
           return;
         }
 
@@ -541,6 +816,24 @@ export function renderWebConsoleHtml(): string {
           state,
           qrImageDataUrl: typeof status.qrImageDataUrl === "string" ? status.qrImageDataUrl : ""
         });
+        updateSourceSnapshot(
+          "whatsapp",
+          sourceWaCard,
+          sourceWaValue,
+          sourceWaMeta,
+          {
+            state: connected ? "ok" : state === "connecting" ? "warn" : "error",
+            value: connected ? "Connected" : state,
+            meta: "me: " + me + " | lastError: " + lastError
+          },
+          {
+            configured: true,
+            connected,
+            state,
+            meId: me,
+            lastError
+          }
+        );
       }
 
       function renderWaQrPreview(qrValue, context) {
@@ -597,12 +890,58 @@ export function renderWebConsoleHtml(): string {
         }, WA_LIVE_AUTO_POLL_MS);
       }
 
-      window.addEventListener("beforeunload", () => {
-        if (!waLivePollTimer) {
+      async function pollSourcesSilently() {
+        if (sourcePollInFlight) {
           return;
         }
-        clearInterval(waLivePollTimer);
-        waLivePollTimer = null;
+        sourcePollInFlight = true;
+        try {
+          const sessionId = selectedOAuthSession();
+          const healthPromise = api("GET", "/health");
+          const memoryPromise = api("GET", "/v1/memory/status");
+          const authPromise = sessionId
+            ? api("GET", "/v1/auth/openai/status?sessionId=" + encodeURIComponent(sessionId))
+            : Promise.resolve({ ok: false, status: 400, data: { error: "missing_session_id" } });
+
+          const [healthResponse, memoryResponse, authResponse] = await Promise.all([healthPromise, memoryPromise, authPromise]);
+          updateGatewaySourceFromHealth(healthResponse);
+          updateMemorySourceFromStatus(memoryResponse);
+          renderAuthSummary(authResponse.data);
+        } catch (error) {
+          updateSourceSnapshot(
+            "gateway",
+            sourceGatewayCard,
+            sourceGatewayValue,
+            sourceGatewayMeta,
+            { state: "error", value: "Unavailable", meta: "source poll failed" },
+            { ok: false, error: String(error) }
+          );
+        } finally {
+          sourcePollInFlight = false;
+        }
+      }
+
+      function startSourceAutoPoll() {
+        if (sourcePollTimer) {
+          clearInterval(sourcePollTimer);
+        }
+        sourcePollTimer = setInterval(() => {
+          void pollSourcesSilently();
+        }, SOURCE_AUTO_POLL_MS);
+      }
+
+      window.addEventListener("beforeunload", () => {
+        if (!waLivePollTimer) {
+          // Continue to source timer cleanup
+        } else {
+          clearInterval(waLivePollTimer);
+          waLivePollTimer = null;
+        }
+        if (!sourcePollTimer) {
+          return;
+        }
+        clearInterval(sourcePollTimer);
+        sourcePollTimer = null;
       });
 
       const waEnvSnippet = [
@@ -854,6 +1193,14 @@ export function renderWebConsoleHtml(): string {
         }
       });
 
+      $("sourceRefresh").addEventListener("click", async () => {
+        await runButtonAction($("sourceRefresh"), "SOURCE_REFRESH", async () => {
+          await pollSourcesSilently();
+          return { ok: true, status: 200, data: { refreshed: true } };
+        });
+        setStatus("Source snapshot refreshed.", "success");
+      });
+
       $("logClear").addEventListener("click", async () => {
         await runButtonAction($("logClear"), "CLEAR_LOG", async () => {
           log.textContent = "";
@@ -883,6 +1230,14 @@ export function renderWebConsoleHtml(): string {
           renderWaLiveSummary(response.data);
         } finally {
           startWaLiveAutoPoll();
+        }
+      })();
+
+      void (async () => {
+        try {
+          await pollSourcesSilently();
+        } finally {
+          startSourceAutoPoll();
         }
       })();
     </script>

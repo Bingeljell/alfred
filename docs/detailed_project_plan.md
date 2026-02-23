@@ -172,6 +172,7 @@ Deliverables:
 - Codex thread runtime wiring for normal chat turns with OAuth-first routing and session-thread persistence.
 - Live WhatsApp linking hardening: auto-refresh QR/status in UI and cap QR generation attempts per connect window before manual re-init.
 - Live WhatsApp linking reliability: backend-generated QR image payloads (no CDN dependency) returned via live status/connect endpoints.
+- Operator observability pass: source-level status cards and change-feed logging in `/ui` for Gateway/Auth/WhatsApp/Memory.
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.

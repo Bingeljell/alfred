@@ -105,6 +105,7 @@ Acceptance criteria:
 - Linking QR behavior is guarded with a capped generation window (`WHATSAPP_BAILEYS_MAX_QR_GENERATIONS`, default `3`) so runaway QR churn stops until the operator re-initiates connect.
 - Web UI auto-refreshes live WhatsApp status so QR image/raw payload update without repeated manual status clicks.
 - QR image payload is rendered by the gateway (`qrImageDataUrl`) so linking does not rely on browser CDN script availability.
+- Web UI includes source-at-a-glance cards and change logs for Gateway/Auth/WhatsApp/Memory so operators can track cross-service state without tailing terminal output.
 
 Testing:
 - Automated: route-level/UI render tests for live WhatsApp endpoints plus unit coverage for Baileys runtime filtering/token authorization.
