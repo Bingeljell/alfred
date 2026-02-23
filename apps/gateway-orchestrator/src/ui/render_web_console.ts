@@ -133,6 +133,15 @@ export function renderWebConsoleHtml(): string {
         font-size: 12px;
         color: var(--warn);
       }
+      .status[data-state="busy"] {
+        color: var(--accent);
+      }
+      .status[data-state="success"] {
+        color: #166534;
+      }
+      .status[data-state="error"] {
+        color: #b42318;
+      }
       @media (max-width: 1000px) {
         .layout { grid-template-columns: 1fr; }
       }
@@ -260,8 +269,27 @@ export function renderWebConsoleHtml(): string {
         return { ok: res.ok, status: res.status, data };
       }
 
-      function setStatus(text) {
+      function setStatus(text, state = "idle") {
         statusLine.textContent = text;
+        statusLine.dataset.state = state;
+      }
+
+      const sendChatBtn = $("sendChat");
+      const sendJobBtn = $("sendJob");
+
+      function setSendingUi(active) {
+        sendChatBtn.disabled = active;
+        sendJobBtn.disabled = active;
+      }
+
+      async function withSendingUi(label, fn) {
+        setSendingUi(true);
+        setStatus(label + " in progress...", "busy");
+        try {
+          return await fn();
+        } finally {
+          setSendingUi(false);
+        }
       }
 
       $("sendChat").addEventListener("click", async () => {
@@ -270,28 +298,40 @@ export function renderWebConsoleHtml(): string {
         const mode = $("mode").value;
 
         if (!sessionId || !text.trim()) {
-          setStatus("Session and message are required.");
+          setStatus("Session and message are required.", "error");
           return;
         }
 
-        let response;
-        if (mode === "baileys") {
-          response = await api("POST", "/v1/whatsapp/baileys/inbound", {
-            key: { id: "web-" + Date.now(), remoteJid: sessionId },
-            message: { conversation: text }
-          });
-        } else {
-          response = await api("POST", "/v1/messages/inbound", {
-            sessionId,
-            text,
-            requestJob: false
-          });
-        }
+        pushLog("SEND_CHAT_REQUEST", {
+          sessionId,
+          mode,
+          chars: text.length
+        });
 
-        pushLog("SEND_CHAT", response);
-        setStatus("Last action: SEND_CHAT (" + response.status + ")");
-        if (response.data?.jobId) {
-          $("jobId").value = response.data.jobId;
+        try {
+          const response = await withSendingUi("SEND_CHAT", async () => {
+            if (mode === "baileys") {
+              return api("POST", "/v1/whatsapp/baileys/inbound", {
+                key: { id: "web-" + Date.now(), remoteJid: sessionId },
+                message: { conversation: text }
+              });
+            }
+
+            return api("POST", "/v1/messages/inbound", {
+              sessionId,
+              text,
+              requestJob: false
+            });
+          });
+
+          pushLog("SEND_CHAT", response);
+          setStatus("Last action: SEND_CHAT (" + response.status + ")", response.ok ? "success" : "error");
+          if (response.data?.jobId) {
+            $("jobId").value = response.data.jobId;
+          }
+        } catch (error) {
+          pushLog("SEND_CHAT_ERROR", String(error));
+          setStatus("SEND_CHAT failed before response.", "error");
         }
       });
 
@@ -301,28 +341,40 @@ export function renderWebConsoleHtml(): string {
         const mode = $("mode").value;
 
         if (!sessionId || !text.trim()) {
-          setStatus("Session and message are required.");
+          setStatus("Session and message are required.", "error");
           return;
         }
 
-        let response;
-        if (mode === "baileys") {
-          response = await api("POST", "/v1/whatsapp/baileys/inbound", {
-            key: { id: "web-job-" + Date.now(), remoteJid: sessionId },
-            message: { conversation: "/job " + text }
-          });
-        } else {
-          response = await api("POST", "/v1/messages/inbound", {
-            sessionId,
-            text,
-            requestJob: true
-          });
-        }
+        pushLog("SEND_JOB_REQUEST", {
+          sessionId,
+          mode,
+          chars: text.length
+        });
 
-        pushLog("SEND_JOB", response);
-        setStatus("Last action: SEND_JOB (" + response.status + ")");
-        if (response.data?.jobId) {
-          $("jobId").value = response.data.jobId;
+        try {
+          const response = await withSendingUi("SEND_JOB", async () => {
+            if (mode === "baileys") {
+              return api("POST", "/v1/whatsapp/baileys/inbound", {
+                key: { id: "web-job-" + Date.now(), remoteJid: sessionId },
+                message: { conversation: "/job " + text }
+              });
+            }
+
+            return api("POST", "/v1/messages/inbound", {
+              sessionId,
+              text,
+              requestJob: true
+            });
+          });
+
+          pushLog("SEND_JOB", response);
+          setStatus("Last action: SEND_JOB (" + response.status + ")", response.ok ? "success" : "error");
+          if (response.data?.jobId) {
+            $("jobId").value = response.data.jobId;
+          }
+        } catch (error) {
+          pushLog("SEND_JOB_ERROR", String(error));
+          setStatus("SEND_JOB failed before response.", "error");
         }
       });
 
@@ -397,7 +449,7 @@ export function renderWebConsoleHtml(): string {
         const response = await api("GET", "/v1/auth/openai/status?sessionId=" + encodeURIComponent(sessionId));
         pushLog("OAUTH_STATUS", response);
         if (response.data?.connected === false) {
-          setStatus("Codex auth unavailable; chat may use API key fallback if configured.");
+          setStatus("Codex auth unavailable; chat may use API key fallback if configured.", "error");
         }
       });
 
@@ -422,7 +474,7 @@ export function renderWebConsoleHtml(): string {
         const response = await api("GET", "/v1/auth/openai/status?sessionId=" + encodeURIComponent(sessionId));
         pushLog("OAUTH_STATUS_BOOT", response);
         if (response.data?.connected === false) {
-          setStatus("Codex auth unavailable; chat may use API key fallback if configured.");
+          setStatus("Codex auth unavailable; chat may use API key fallback if configured.", "error");
         }
       })();
     </script>

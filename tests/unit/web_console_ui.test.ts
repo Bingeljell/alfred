@@ -15,5 +15,7 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("/v1/auth/openai/disconnect");
     expect(html).toContain("Job Controls");
     expect(html).toContain("OAuth (OpenAI)");
+    expect(html).toContain("SEND_CHAT_REQUEST");
+    expect(html).toContain(".status[data-state=\"busy\"]");
   });
 });
