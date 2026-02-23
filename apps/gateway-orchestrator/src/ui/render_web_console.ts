@@ -302,6 +302,9 @@ export function renderWebConsoleHtml(): string {
       #waQrRaw {
         min-height: 88px;
       }
+      #sessionTranscript {
+        max-height: 260px;
+      }
       @media (max-width: 1000px) {
         .layout { grid-template-columns: 1fr; }
       }
@@ -351,6 +354,11 @@ export function renderWebConsoleHtml(): string {
         </div>
         <div class="hint">Quick commands: <span class="pill">/task add ...</span><span class="pill">/note add ...</span><span class="pill">/remind &lt;ISO&gt; ...</span><span class="pill">/auth connect</span><span class="pill">/auth status</span><span class="pill">/auth limits</span><span class="pill">send ...</span><span class="pill">approve &lt;token&gt;</span></div>
         <div class="status" id="statusLine"></div>
+        <h2>Persisted Transcript</h2>
+        <div class="actions">
+          <button class="secondary" id="transcriptRefresh">Refresh Transcript</button>
+        </div>
+        <pre id="sessionTranscript"></pre>
       </section>
 
       <section class="panel">
@@ -510,6 +518,7 @@ export function renderWebConsoleHtml(): string {
     <script>
       const $ = (id) => document.getElementById(id);
       const log = $("log");
+      const sessionTranscript = $("sessionTranscript");
       const statusLine = $("statusLine");
       const authSummary = $("authSummary");
       const mapSummary = $("mapSummary");
@@ -541,6 +550,7 @@ export function renderWebConsoleHtml(): string {
       const WA_LIVE_AUTO_POLL_MS = 2000;
       const SOURCE_AUTO_POLL_MS = 5000;
       const STREAM_AUTO_POLL_MS = 1500;
+      const TRANSCRIPT_AUTO_POLL_MS = 4000;
       let waLivePollInFlight = false;
       let waLivePollTimer = null;
       let sourcePollInFlight = false;
@@ -549,6 +559,8 @@ export function renderWebConsoleHtml(): string {
       let streamPollTimer = null;
       let streamEventSource = null;
       let streamUsingSse = false;
+      let transcriptPollInFlight = false;
+      let transcriptPollTimer = null;
       const sourceFingerprints = Object.create(null);
       const seenStreamEventIds = new Set();
 
@@ -1117,6 +1129,62 @@ export function renderWebConsoleHtml(): string {
         };
       }
 
+      function renderSessionTranscript(events, sessionId) {
+        if (!sessionId) {
+          sessionTranscript.textContent = "Set a Session ID to load persisted transcript.";
+          return;
+        }
+        if (!Array.isArray(events) || events.length === 0) {
+          sessionTranscript.textContent = "No persisted transcript yet for " + sessionId + ".";
+          return;
+        }
+
+        const lines = events.map((event) => {
+          const at = event?.createdAt ? String(event.createdAt).slice(11, 19) : "--:--:--";
+          const direction = event?.direction === "outbound" ? "assistant" : event?.direction === "inbound" ? "user" : "system";
+          const text = event?.text ? String(event.text).replace(/\s+/g, " ").trim() : "";
+          return "[" + at + "] " + direction + ": " + text;
+        });
+        sessionTranscript.textContent = lines.join("\n");
+        sessionTranscript.scrollTop = sessionTranscript.scrollHeight;
+      }
+
+      async function pollTranscriptSilently() {
+        if (transcriptPollInFlight) {
+          return;
+        }
+        transcriptPollInFlight = true;
+        try {
+          const sessionId = $("sessionId").value.trim();
+          if (!sessionId) {
+            renderSessionTranscript([], "");
+            return;
+          }
+          const response = await api(
+            "GET",
+            "/v1/stream/events?sessionId=" +
+              encodeURIComponent(sessionId) +
+              "&kinds=chat,command&limit=80&noisy=true"
+          );
+          if (!response.ok) {
+            return;
+          }
+          const events = Array.isArray(response.data?.events) ? response.data.events : [];
+          renderSessionTranscript(events, sessionId);
+        } finally {
+          transcriptPollInFlight = false;
+        }
+      }
+
+      function startTranscriptAutoPoll() {
+        if (transcriptPollTimer) {
+          clearInterval(transcriptPollTimer);
+        }
+        transcriptPollTimer = setInterval(() => {
+          void pollTranscriptSilently();
+        }, TRANSCRIPT_AUTO_POLL_MS);
+      }
+
       window.addEventListener("beforeunload", () => {
         if (!waLivePollTimer) {
           // Continue to source timer cleanup
@@ -1137,10 +1205,16 @@ export function renderWebConsoleHtml(): string {
           streamPollTimer = null;
         }
         if (!streamEventSource) {
+          // Continue to transcript cleanup
+        } else {
+          streamEventSource.close();
+          streamEventSource = null;
+        }
+        if (!transcriptPollTimer) {
           return;
         }
-        streamEventSource.close();
-        streamEventSource = null;
+        clearInterval(transcriptPollTimer);
+        transcriptPollTimer = null;
       });
 
       const waEnvSnippet = [
@@ -1473,6 +1547,14 @@ export function renderWebConsoleHtml(): string {
         setStatus("Interaction stream refreshed.", "success");
       });
 
+      $("transcriptRefresh").addEventListener("click", async () => {
+        await runButtonAction($("transcriptRefresh"), "TRANSCRIPT_REFRESH", async () => {
+          await pollTranscriptSilently();
+          return { ok: true, status: 200, data: { refreshed: true } };
+        });
+        setStatus("Persisted transcript refreshed.", "success");
+      });
+
       $("includeNoisyStream").addEventListener("change", async () => {
         seenStreamEventIds.clear();
         await runButtonAction($("streamRefresh"), "STREAM_MODE_UPDATE", async () => {
@@ -1492,6 +1574,15 @@ export function renderWebConsoleHtml(): string {
           return { ok: true, status: 200, data: { cleared: true } };
         });
         setStatus("Console cleared.", "success");
+      });
+
+      $("sessionId").addEventListener("change", () => {
+        const nextSession = $("sessionId").value.trim();
+        mapWhatsAppJid.value = nextSession || "owner@s.whatsapp.net";
+        if (!$("oauthSession").value.trim()) {
+          mapAuthSessionId.value = nextSession;
+        }
+        void pollTranscriptSilently();
       });
 
       pushLog("READY", "Web console loaded. Use controls above.");
@@ -1534,6 +1625,14 @@ export function renderWebConsoleHtml(): string {
           await pollInteractionStreamSilently();
         } finally {
           startInteractionStreamSse();
+        }
+      })();
+
+      void (async () => {
+        try {
+          await pollTranscriptSilently();
+        } finally {
+          startTranscriptAutoPoll();
         }
       })();
     </script>

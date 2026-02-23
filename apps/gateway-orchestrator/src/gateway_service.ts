@@ -423,7 +423,7 @@ export class GatewayService {
   }
 
   private async executeChatTurn(sessionId: string, text: string, authPreference: LlmAuthPreference): Promise<string> {
-    const prepared = await this.prepareMemoryAugmentedInput(text);
+    const prepared = await this.prepareChatInput(sessionId, text);
     if (!this.llmService) {
       return "No model backend is configured. Connect ChatGPT OAuth or set OPENAI_API_KEY.";
     }
@@ -537,10 +537,25 @@ export class GatewayService {
     return `Model request failed: ${detail}`;
   }
 
-  private async prepareMemoryAugmentedInput(input: string): Promise<{ prompt: string; sources: string[] }> {
+  private async prepareChatInput(sessionId: string, input: string): Promise<{ prompt: string; sources: string[] }> {
     const trimmed = input.trim();
-    if (!this.memoryService || !trimmed) {
+    if (!trimmed) {
       return { prompt: input, sources: [] };
+    }
+
+    const historyLines = await this.buildRecentConversationContext(sessionId, trimmed);
+
+    if (!this.memoryService) {
+      if (historyLines.length === 0) {
+        return { prompt: input, sources: [] };
+      }
+      const promptWithoutMemory = [
+        "You are answering using recent persisted conversation context when relevant.",
+        "Recent conversation context (oldest first):",
+        historyLines.join("\n"),
+        `User message: ${trimmed}`
+      ].join("\n\n");
+      return { prompt: promptWithoutMemory, sources: [] };
     }
 
     let results: MemoryResult[] = [];
@@ -553,25 +568,82 @@ export class GatewayService {
       return { prompt: input, sources: [] };
     }
 
-    if (results.length === 0) {
+    if (results.length === 0 && historyLines.length === 0) {
       return { prompt: input, sources: [] };
     }
 
-    const snippets = results.map((item, index) => {
-      const normalizedSnippet = item.snippet.replace(/\s+/g, " ").trim().slice(0, 320);
-      return `[${index + 1}] ${item.source}\n${normalizedSnippet}`;
-    });
-    const prompt = [
+    const promptParts = [
       "You are answering with optional memory context.",
-      "If memory snippets are relevant, use them and cite source as [path:start:end].",
-      "Memory snippets:",
-      snippets.join("\n\n"),
-      `User message: ${trimmed}`
-    ].join("\n\n");
+      "If memory snippets are relevant, use them and cite source as [path:start:end]."
+    ];
+    if (historyLines.length > 0) {
+      promptParts.push("Recent conversation context (oldest first):");
+      promptParts.push(historyLines.join("\n"));
+    }
+    if (results.length > 0) {
+      const snippets = results.map((item, index) => {
+        const normalizedSnippet = item.snippet.replace(/\s+/g, " ").trim().slice(0, 320);
+        return `[${index + 1}] ${item.source}\n${normalizedSnippet}`;
+      });
+      promptParts.push("Memory snippets:");
+      promptParts.push(snippets.join("\n\n"));
+    }
+    promptParts.push(`User message: ${trimmed}`);
+
+    const prompt = promptParts.join("\n\n");
 
     return {
       prompt,
       sources: results.map((item) => item.source)
     };
+  }
+
+  private async buildRecentConversationContext(sessionId: string, currentInput: string): Promise<string[]> {
+    if (!this.conversationStore) {
+      return [];
+    }
+
+    let events: Awaited<ReturnType<ConversationStore["listBySession"]>> = [];
+    try {
+      events = await this.conversationStore.listBySession(sessionId, 40);
+    } catch {
+      return [];
+    }
+
+    if (events.length === 0) {
+      return [];
+    }
+
+    const normalizedCurrent = currentInput.replace(/\s+/g, " ").trim().toLowerCase();
+    let currentInboundSkipped = false;
+    const reversed = [...events].reverse();
+    const selected: string[] = [];
+
+    for (const event of reversed) {
+      if (event.kind !== "chat" && event.kind !== "command") {
+        continue;
+      }
+      if (event.direction !== "inbound" && event.direction !== "outbound") {
+        continue;
+      }
+
+      const normalizedText = event.text.replace(/\s+/g, " ").trim();
+      if (!normalizedText) {
+        continue;
+      }
+
+      if (!currentInboundSkipped && event.direction === "inbound" && normalizedText.toLowerCase() === normalizedCurrent) {
+        currentInboundSkipped = true;
+        continue;
+      }
+
+      const role = event.direction === "inbound" ? "user" : "assistant";
+      selected.push(`${role}: ${normalizedText.slice(0, 280)}`);
+      if (selected.length >= 10) {
+        break;
+      }
+    }
+
+    return selected.reverse();
   }
 }

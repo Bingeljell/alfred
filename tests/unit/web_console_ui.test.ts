@@ -56,6 +56,11 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("WHATSAPP_PROVIDER=baileys");
     expect(html).toContain("SEND_CHAT_REQUEST");
     expect(html).toContain("selectedAuthPreference");
+    expect(html).toContain("Persisted Transcript");
+    expect(html).toContain("id=\"sessionTranscript\"");
+    expect(html).toContain("id=\"transcriptRefresh\"");
+    expect(html).toContain("pollTranscriptSilently");
+    expect(html).toContain("startTranscriptAutoPoll");
     expect(html).toContain(".status[data-state=\"busy\"]");
     expect(html).toContain("id=\"logNewestFirst\"");
     expect(html).toContain("Newest first");
