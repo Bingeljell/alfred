@@ -117,6 +117,7 @@ export class BaileysRuntime implements BaileysTransport {
   private readonly onInbound: (message: BaileysInboundMessage) => Promise<void>;
   private readonly maxTextChars: number;
   private readonly reconnectDelayMs: number;
+  private readonly printQrInTerminal: boolean;
   private readonly loadModule: () => Promise<BaileysModule>;
 
   private socket: BaileysSocket | null = null;
@@ -144,12 +145,14 @@ export class BaileysRuntime implements BaileysTransport {
     onInbound: (message: BaileysInboundMessage) => Promise<void>;
     maxTextChars?: number;
     reconnectDelayMs?: number;
+    printQrInTerminal?: boolean;
     moduleLoader?: () => Promise<BaileysModule>;
   }) {
     this.authDir = options.authDir;
     this.onInbound = options.onInbound;
     this.maxTextChars = options.maxTextChars ?? 4000;
     this.reconnectDelayMs = options.reconnectDelayMs ?? 3000;
+    this.printQrInTerminal = options.printQrInTerminal ?? true;
     this.loadModule = options.moduleLoader ?? defaultModuleLoader;
   }
 
@@ -242,7 +245,7 @@ export class BaileysRuntime implements BaileysTransport {
 
       const socket = module.default({
         auth: authState.state,
-        printQRInTerminal: false,
+        printQRInTerminal: this.printQrInTerminal,
         browser: ["Alfred", "Chrome", "1.0.0"],
         version: version.version
       });

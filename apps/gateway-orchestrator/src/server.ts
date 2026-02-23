@@ -117,6 +117,7 @@ async function main(): Promise<void> {
       authDir: config.whatsAppBaileysAuthDir,
       maxTextChars: config.whatsAppBaileysMaxTextChars,
       reconnectDelayMs: config.whatsAppBaileysReconnectDelayMs,
+      printQrInTerminal: config.whatsAppBaileysPrintQr,
       onInbound: async (payload) => {
         await fetch(inboundUrl, {
           method: "POST",

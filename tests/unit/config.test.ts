@@ -13,6 +13,7 @@ describe("loadConfig", () => {
     expect(config.openAiResponsesModel).toBe("gpt-4.1-mini");
     expect(config.whatsAppProvider).toBe("stdout");
     expect(config.whatsAppBaileysAutoConnect).toBe(false);
+    expect(config.whatsAppBaileysPrintQr).toBe(true);
     expect(config.whatsAppBaileysMaxTextChars).toBe(4000);
     expect(config.codexAppServerEnabled).toBe(false);
     expect(config.codexAuthLoginMode).toBe("chatgpt");
@@ -35,6 +36,7 @@ describe("loadConfig", () => {
       WHATSAPP_BAILEYS_AUTO_CONNECT: "true",
       WHATSAPP_BAILEYS_AUTH_DIR: "./tmp/wa-auth",
       WHATSAPP_BAILEYS_INBOUND_TOKEN: "secret-token",
+      WHATSAPP_BAILEYS_PRINT_QR: "false",
       WHATSAPP_BAILEYS_MAX_TEXT_CHARS: "2048",
       WHATSAPP_BAILEYS_RECONNECT_DELAY_MS: "2500",
       CODEX_APP_SERVER_ENABLED: "true",
@@ -56,6 +58,7 @@ describe("loadConfig", () => {
     expect(config.whatsAppBaileysAutoConnect).toBe(true);
     expect(config.whatsAppBaileysAuthDir.endsWith("tmp/wa-auth")).toBe(true);
     expect(config.whatsAppBaileysInboundToken).toBe("secret-token");
+    expect(config.whatsAppBaileysPrintQr).toBe(false);
     expect(config.whatsAppBaileysMaxTextChars).toBe(2048);
     expect(config.whatsAppBaileysReconnectDelayMs).toBe(2500);
     expect(config.codexAppServerEnabled).toBe(true);
