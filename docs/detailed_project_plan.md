@@ -178,6 +178,9 @@ Deliverables:
 - Operator observability pass (continued): add SSE stream subscription (`/v1/stream/events/subscribe`) with poll fallback for lower-latency UI updates.
 - Identity/session routing: persist WhatsApp JID to auth-profile mapping and use mapped auth session IDs for WhatsApp-triggered OAuth/LLM routing.
 - WhatsApp context discipline: filter non-live/history-sync inbound traffic (`messages.upsert` non-`notify`, stale timestamps, duplicate message IDs) before LLM routing, with visible accepted/ignored counters in live status.
+- Stream retention/noise controls: enforce bounded conversation stream persistence and short-window duplicate suppression, with optional noisy-event inclusion for diagnostics.
+- Operator auth-path control: allow per-request auth preference selection (`auto`, `oauth`, `api_key`) in `/ui` for deterministic fallback testing.
+- Memory-aware chat path: inject top cited memory hits into chat prompts and return explicit memory references for recall traceability.
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.

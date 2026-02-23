@@ -112,6 +112,8 @@ Acceptance criteria:
 - Identity mapping is persisted (`whatsapp_jid -> authSessionId`) so WhatsApp messages can route to the intended auth profile/session for OAuth-backed LLM calls.
 - Inbound history-sync noise is filtered before chat routing by ignoring non-`notify` upserts, stale pre-live timestamps, and duplicate message IDs.
 - Live WhatsApp status includes accepted/ignored inbound counters and sync mode so operators can verify context-bloat protection behavior.
+- Stream API supports low-noise mode by default (`chat`/`command`/`job`/`error`) with optional noisy-event inclusion in `/ui` for deeper diagnostics.
+- Stream persistence has retention and noise controls (`STREAM_MAX_EVENTS`, `STREAM_RETENTION_DAYS`, `STREAM_DEDUPE_WINDOW_MS`) to keep long-running state bounded.
 
 Testing:
 - Automated: route-level/UI render tests for live WhatsApp endpoints plus unit coverage for Baileys runtime filtering/token authorization.
@@ -128,6 +130,9 @@ Acceptance criteria:
 - Rate limit visibility is available from `account/rateLimits/read`.
 - WhatsApp command path supports `/auth connect`, `/auth status`, `/auth limits`, and `/auth disconnect`.
 - Regular chat turns route to Codex turns when ChatGPT auth is connected, with API key fallback when unavailable.
+- Web console supports explicit LLM auth preference selection per request (`auto`, `oauth`, `api_key`) so operators can force-test fallback paths intentionally.
+- When no backend credential is available, chat returns explicit guidance instead of silent `ack:` fallback.
+- Normal chat turns can inject top memory snippets into prompt context and append source references for auditable recall.
 
 Testing:
 - Automated: OAuth service unit tests, command parsing tests, and integration flow for connect/status/disconnect.
