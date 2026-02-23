@@ -226,6 +226,26 @@ export function renderWebConsoleHtml(): string {
       .mono {
         font-family: "IBM Plex Mono", "SFMono-Regular", monospace;
       }
+      .qr-preview {
+        margin-top: 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #ffffff;
+        padding: 10px;
+      }
+      .qr-preview img {
+        width: 240px;
+        height: 240px;
+        max-width: 100%;
+        display: none;
+        image-rendering: pixelated;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #ffffff;
+      }
+      .qr-preview .hint {
+        margin-top: 8px;
+      }
       #waQrRaw {
         min-height: 88px;
       }
@@ -334,10 +354,14 @@ export function renderWebConsoleHtml(): string {
           <ol class="setup-steps">
             <li>Set provider to <span class="mono">baileys</span> and restart gateway.</li>
             <li>Click <strong>Live Connect</strong>.</li>
-            <li>Scan QR from the status panel (raw QR below if needed).</li>
+            <li>Scan the QR image below immediately from WhatsApp Linked Devices.</li>
             <li>Send a test message prefixed with <span class="mono">/alfred</span>.</li>
           </ol>
           <div class="hint" id="waSetupNext">Next step: click <strong>Live Status</strong> to confirm runtime is configured.</div>
+          <div class="qr-preview">
+            <img id="waQrImage" alt="WhatsApp link QR code" />
+            <div class="hint" id="waQrHint">QR will appear here after you click Live Connect.</div>
+          </div>
           <details>
             <summary class="hint">Raw QR (advanced)</summary>
             <textarea id="waQrRaw" readonly placeholder="QR payload appears here when available"></textarea>
@@ -358,6 +382,7 @@ export function renderWebConsoleHtml(): string {
       </section>
     </main>
 
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
     <script>
       const $ = (id) => document.getElementById(id);
       const log = $("log");
@@ -367,6 +392,8 @@ export function renderWebConsoleHtml(): string {
       const waLiveBadge = $("waLiveBadge");
       const waSetupNext = $("waSetupNext");
       const waQrRaw = $("waQrRaw");
+      const waQrImage = $("waQrImage");
+      const waQrHint = $("waQrHint");
       const logNewestFirst = $("logNewestFirst");
 
       function stamp() {
@@ -468,7 +495,7 @@ export function renderWebConsoleHtml(): string {
           waLiveBadge.textContent = "unavailable";
           waLiveBadge.dataset.state = "disconnected";
           waSetupNext.textContent = "Next step: set WHATSAPP_PROVIDER=baileys, restart gateway, then click Live Status.";
-          waQrRaw.value = "";
+          renderWaQrPreview("");
           return;
         }
 
@@ -478,7 +505,7 @@ export function renderWebConsoleHtml(): string {
           waLiveBadge.textContent = "not configured";
           waLiveBadge.dataset.state = "disconnected";
           waSetupNext.textContent = "Next step: set WHATSAPP_PROVIDER=baileys in .env, restart gateway, then click Live Connect.";
-          waQrRaw.value = "";
+          renderWaQrPreview("");
           return;
         }
 
@@ -502,7 +529,52 @@ export function renderWebConsoleHtml(): string {
         } else {
           waSetupNext.textContent = "Not connected. Click Live Connect to start WhatsApp linking.";
         }
-        waQrRaw.value = status.qr ? String(status.qr) : "";
+        renderWaQrPreview(status.qr, { connected, state });
+      }
+
+      function renderWaQrPreview(qrValue, context) {
+        const raw = qrValue ? String(qrValue) : "";
+        const connected = context?.connected === true;
+        const state = context?.state ? String(context.state) : "unknown";
+        waQrRaw.value = raw;
+
+        if (!raw) {
+          waQrImage.style.display = "none";
+          waQrImage.removeAttribute("src");
+          if (connected) {
+            waQrHint.textContent = "Device is linked. A new QR appears only when you reconnect.";
+          } else if (state === "connecting") {
+            waQrHint.textContent = "Waiting for WhatsApp QR. Keep this page open and use Live Status if needed.";
+          } else {
+            waQrHint.textContent = "QR will appear here after you click Live Connect.";
+          }
+          return;
+        }
+
+        if (!window.QRCode || typeof window.QRCode.toDataURL !== "function") {
+          waQrImage.style.display = "none";
+          waQrImage.removeAttribute("src");
+          waQrHint.textContent = "QR renderer not loaded. Use raw QR as fallback or refresh the page.";
+          return;
+        }
+
+        window.QRCode.toDataURL(raw, {
+          errorCorrectionLevel: "M",
+          margin: 1,
+          width: 320,
+          color: { dark: "#111827", light: "#ffffff" }
+        }, (error, dataUrl) => {
+          if (error || !dataUrl) {
+            waQrImage.style.display = "none";
+            waQrImage.removeAttribute("src");
+            waQrHint.textContent = "Could not render QR image. Use raw QR as fallback.";
+            return;
+          }
+
+          waQrImage.src = dataUrl;
+          waQrImage.style.display = "block";
+          waQrHint.textContent = "Scan now from WhatsApp Linked Devices. This QR can expire quickly.";
+        });
       }
 
       const waEnvSnippet = [
