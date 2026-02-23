@@ -10,9 +10,20 @@ import { NoteStore } from "./builtins/note_store";
 import { TaskStore } from "./builtins/task_store";
 import { ApprovalStore } from "./builtins/approval_store";
 import { renderWebConsoleHtml } from "./ui/render_web_console";
+import { OAuthService } from "./auth/oauth_service";
 
 const CancelParamsSchema = z.object({
   jobId: z.string().min(1)
+});
+
+const SessionBodySchema = z.object({
+  sessionId: z.string().min(1)
+});
+
+const CallbackQuerySchema = z.object({
+  state: z.string().min(1),
+  code: z.string().optional(),
+  error: z.string().optional()
 });
 
 export function createGatewayApp(
@@ -25,6 +36,7 @@ export function createGatewayApp(
     noteStore?: NoteStore;
     taskStore?: TaskStore;
     approvalStore?: ApprovalStore;
+    oauthService?: OAuthService;
   }
 ) {
   const app = express();
@@ -34,10 +46,12 @@ export function createGatewayApp(
     options?.reminderStore,
     options?.noteStore,
     options?.taskStore,
-    options?.approvalStore
+    options?.approvalStore,
+    options?.oauthService
   );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;
+  const oauthService = options?.oauthService;
   void dedupeStore.ensureReady();
   app.use(express.json());
 
@@ -188,6 +202,96 @@ export function createGatewayApp(
     const date = typeof req.body.date === "string" ? req.body.date : undefined;
     const written = await memoryService.appendMemoryNote(req.body.text, date);
     res.status(201).json(written);
+  });
+
+  app.post("/v1/auth/openai/start", async (req, res) => {
+    if (!oauthService) {
+      res.status(404).json({ error: "oauth_not_configured" });
+      return;
+    }
+
+    try {
+      const input = SessionBodySchema.parse(req.body ?? {});
+      const started = await oauthService.startOpenAiConnect(input.sessionId);
+      res.status(200).json(started);
+    } catch (error) {
+      res.status(400).json({ error: "invalid_oauth_start_request", detail: String(error) });
+    }
+  });
+
+  app.get("/v1/auth/openai/status", async (req, res) => {
+    if (!oauthService) {
+      res.status(404).json({ error: "oauth_not_configured" });
+      return;
+    }
+
+    const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
+    if (!sessionId) {
+      res.status(400).json({ error: "missing_session_id" });
+      return;
+    }
+
+    const status = await oauthService.statusOpenAi(sessionId);
+    res.status(200).json(status);
+  });
+
+  app.post("/v1/auth/openai/disconnect", async (req, res) => {
+    if (!oauthService) {
+      res.status(404).json({ error: "oauth_not_configured" });
+      return;
+    }
+
+    try {
+      const input = SessionBodySchema.parse(req.body ?? {});
+      const removed = await oauthService.disconnectOpenAi(input.sessionId);
+      res.status(200).json({ disconnected: removed, sessionId: input.sessionId, provider: "openai" });
+    } catch (error) {
+      res.status(400).json({ error: "invalid_oauth_disconnect_request", detail: String(error) });
+    }
+  });
+
+  app.get("/v1/auth/openai/callback", async (req, res) => {
+    if (!oauthService) {
+      res.status(404).type("html").send("<h1>OAuth not configured</h1>");
+      return;
+    }
+
+    try {
+      const query = CallbackQuerySchema.parse(req.query ?? {});
+      const completed = await oauthService.completeOpenAiCallback(query);
+      res
+        .status(200)
+        .type("html")
+        .send(
+          `<html><body><h1>OAuth connected</h1><p>Session: ${completed.sessionId}</p><p>Provider: openai</p><p>You can close this tab.</p></body></html>`
+        );
+    } catch (error) {
+      res
+        .status(400)
+        .type("html")
+        .send(`<html><body><h1>OAuth failed</h1><p>${String(error)}</p><p>You can return to the console.</p></body></html>`);
+    }
+  });
+
+  app.get("/v1/auth/openai/mock/authorize", async (req, res) => {
+    if (!oauthService || oauthService.getOpenAiMode() !== "mock") {
+      res.status(404).type("html").send("<h1>Mock OAuth mode is disabled</h1>");
+      return;
+    }
+
+    const state = typeof req.query.state === "string" ? req.query.state : "";
+    if (!state) {
+      res.status(400).type("html").send("<h1>Missing state</h1>");
+      return;
+    }
+
+    const exists = await oauthService.hasPendingOpenAiState(state);
+    if (!exists) {
+      res.status(400).type("html").send("<h1>Invalid or expired OAuth state</h1>");
+      return;
+    }
+
+    res.status(200).type("html").send(oauthService.renderMockAuthorizePage(state));
   });
 
   return app;

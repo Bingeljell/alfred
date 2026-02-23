@@ -9,6 +9,9 @@ export type ParsedCommand =
   | { kind: "job_status"; id: string }
   | { kind: "job_cancel"; id: string }
   | { kind: "job_retry"; id: string }
+  | { kind: "auth_connect" }
+  | { kind: "auth_status" }
+  | { kind: "auth_disconnect" }
   | { kind: "side_effect_send"; text: string }
   | { kind: "approve"; token: string };
 
@@ -81,6 +84,18 @@ export function parseCommand(text: string): ParsedCommand | null {
     if (id) {
       return { kind: "job_retry", id };
     }
+  }
+
+  if (value.toLowerCase() === "/auth connect") {
+    return { kind: "auth_connect" };
+  }
+
+  if (value.toLowerCase() === "/auth status") {
+    return { kind: "auth_status" };
+  }
+
+  if (value.toLowerCase() === "/auth disconnect") {
+    return { kind: "auth_disconnect" };
   }
 
   if (value.toLowerCase().startsWith("send ")) {

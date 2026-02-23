@@ -11,6 +11,7 @@ import { NoteStore } from "./builtins/note_store";
 import { TaskStore } from "./builtins/task_store";
 import { ApprovalStore } from "./builtins/approval_store";
 import { startReminderDispatcher } from "./builtins/reminder_dispatcher";
+import { OAuthService } from "./auth/oauth_service";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -21,6 +22,20 @@ async function main(): Promise<void> {
   const noteStore = new NoteStore(config.stateDir);
   const taskStore = new TaskStore(config.stateDir);
   const approvalStore = new ApprovalStore(config.stateDir);
+  const oauthService = new OAuthService({
+    stateDir: config.stateDir,
+    publicBaseUrl: config.publicBaseUrl,
+    encryptionKey: config.oauthTokenEncryptionKey,
+    stateTtlMs: config.oauthStateTtlMs,
+    openai: {
+      mode: config.oauthOpenAiMode,
+      clientId: config.oauthOpenAiClientId,
+      clientSecret: config.oauthOpenAiClientSecret,
+      authorizeUrl: config.oauthOpenAiAuthorizeUrl,
+      tokenUrl: config.oauthOpenAiTokenUrl,
+      scope: config.oauthOpenAiScope
+    }
+  });
   const memoryService = new MemoryService({
     rootDir: process.cwd(),
     stateDir: config.stateDir
@@ -33,6 +48,7 @@ async function main(): Promise<void> {
   await noteStore.ensureReady();
   await taskStore.ensureReady();
   await approvalStore.ensureReady();
+  await oauthService.ensureReady();
   await memoryService.start();
 
   const app = createGatewayApp(store, {
@@ -42,7 +58,8 @@ async function main(): Promise<void> {
     reminderStore,
     noteStore,
     taskStore,
-    approvalStore
+    approvalStore,
+    oauthService
   });
   const adapter = new StdoutWhatsAppAdapter();
   const dispatcher = startNotificationDispatcher({

@@ -9,6 +9,10 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("/v1/messages/inbound");
     expect(html).toContain("/v1/whatsapp/baileys/inbound");
     expect(html).toContain("/v1/memory/search");
+    expect(html).toContain("/v1/auth/openai/start");
+    expect(html).toContain("/v1/auth/openai/status");
+    expect(html).toContain("/v1/auth/openai/disconnect");
     expect(html).toContain("Job Controls");
+    expect(html).toContain("OAuth (OpenAI)");
   });
 });

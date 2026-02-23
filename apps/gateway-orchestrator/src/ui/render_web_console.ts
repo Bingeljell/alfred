@@ -167,7 +167,7 @@ export function renderWebConsoleHtml(): string {
           <button class="secondary" id="sendJob">Send as Async Job</button>
           <button class="secondary" id="healthBtn">Health</button>
         </div>
-        <div class="hint">Quick commands: <span class="pill">/task add ...</span><span class="pill">/note add ...</span><span class="pill">/remind &lt;ISO&gt; ...</span><span class="pill">send ...</span><span class="pill">approve &lt;token&gt;</span></div>
+        <div class="hint">Quick commands: <span class="pill">/task add ...</span><span class="pill">/note add ...</span><span class="pill">/remind &lt;ISO&gt; ...</span><span class="pill">/auth connect</span><span class="pill">/auth status</span><span class="pill">send ...</span><span class="pill">approve &lt;token&gt;</span></div>
         <div class="status" id="statusLine"></div>
       </section>
 
@@ -200,6 +200,22 @@ export function renderWebConsoleHtml(): string {
               <button class="secondary" id="memorySearch">Search</button>
               <button class="secondary" id="memorySync">Sync</button>
               <button class="secondary" id="memoryStatus">Status</button>
+            </div>
+          </div>
+        </div>
+
+        <h2>OAuth (OpenAI)</h2>
+        <div class="row">
+          <div>
+            <label for="oauthSession">OAuth Session</label>
+            <input id="oauthSession" placeholder="defaults to Session ID above" />
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <div class="actions">
+              <button class="secondary" id="oauthConnect">Connect</button>
+              <button class="secondary" id="oauthStatus">Status</button>
+              <button class="secondary" id="oauthDisconnect">Disconnect</button>
             </div>
           </div>
         </div>
@@ -353,6 +369,39 @@ export function renderWebConsoleHtml(): string {
       $("memoryStatus").addEventListener("click", async () => {
         const response = await api("GET", "/v1/memory/status");
         pushLog("MEMORY_STATUS", response);
+      });
+
+      function selectedOAuthSession() {
+        const override = $("oauthSession").value.trim();
+        if (override) {
+          return override;
+        }
+        return $("sessionId").value.trim();
+      }
+
+      $("oauthConnect").addEventListener("click", async () => {
+        const sessionId = selectedOAuthSession();
+        if (!sessionId) return setStatus("Session ID is required.");
+        const response = await api("POST", "/v1/auth/openai/start", { sessionId: sessionId });
+        pushLog("OAUTH_CONNECT", response);
+        if (response.data?.authorizationUrl) {
+          setStatus("Opened OAuth authorize page in a new tab.");
+          window.open(response.data.authorizationUrl, "_blank", "noopener,noreferrer");
+        }
+      });
+
+      $("oauthStatus").addEventListener("click", async () => {
+        const sessionId = selectedOAuthSession();
+        if (!sessionId) return setStatus("Session ID is required.");
+        const response = await api("GET", "/v1/auth/openai/status?sessionId=" + encodeURIComponent(sessionId));
+        pushLog("OAUTH_STATUS", response);
+      });
+
+      $("oauthDisconnect").addEventListener("click", async () => {
+        const sessionId = selectedOAuthSession();
+        if (!sessionId) return setStatus("Session ID is required.");
+        const response = await api("POST", "/v1/auth/openai/disconnect", { sessionId: sessionId });
+        pushLog("OAUTH_DISCONNECT", response);
       });
 
       pushLog("READY", "Web console loaded. Use controls above.");

@@ -23,6 +23,12 @@ describe("parseCommand", () => {
     expect(list).toEqual({ kind: "note_list" });
   });
 
+  it("parses oauth commands", () => {
+    expect(parseCommand("/auth connect")).toEqual({ kind: "auth_connect" });
+    expect(parseCommand("/auth status")).toEqual({ kind: "auth_status" });
+    expect(parseCommand("/auth disconnect")).toEqual({ kind: "auth_disconnect" });
+  });
+
   it("returns null for unsupported input", () => {
     expect(parseCommand("hello world")).toBeNull();
   });

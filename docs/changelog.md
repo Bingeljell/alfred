@@ -1,5 +1,10 @@
 # Changelog
 
+- **2026-02-23** > apps/gateway-orchestrator/src/auth/oauth_codec.ts, apps/gateway-orchestrator/src/auth/oauth_store.ts, apps/gateway-orchestrator/src/auth/oauth_service.ts > OAuthSecretCodec/OAuthStore/OAuthService > Added OAuth state+token persistence with optional encryption, mock/live modes, callback completion, status, and disconnect flows.
+- **2026-02-23** > apps/gateway-orchestrator/src/config.ts, apps/gateway-orchestrator/src/server.ts > loadConfig and runtime wiring > Added OAuth/public URL configuration and gateway startup wiring for OAuth service initialization.
+- **2026-02-23** > apps/gateway-orchestrator/src/builtins/command_parser.ts, apps/gateway-orchestrator/src/gateway_service.ts > auth commands and execution paths > Added `/auth connect`, `/auth status`, `/auth disconnect` command support for WhatsApp/chat ingress.
+- **2026-02-23** > apps/gateway-orchestrator/src/app.ts, apps/gateway-orchestrator/src/ui/render_web_console.ts > OAuth API and UI controls > Added OAuth endpoints (`start/status/disconnect/callback/mock authorize`) and web console controls for local OAuth testing.
+- **2026-02-23** > tests/unit/oauth_service.test.ts, tests/integration/oauth_commands.test.ts, tests/unit/command_parser.test.ts, tests/unit/config.test.ts, tests/unit/gateway_app_ui_route.test.ts, tests/unit/web_console_ui.test.ts > OAuth test coverage > Added unit/integration coverage for OAuth service behavior, command flow, route registration, config parsing, and UI endpoint wiring.
 - **2026-02-23** > apps/gateway-orchestrator/src/ui/render_web_console.ts > renderWebConsoleHtml > Added browser-based test console UI for chat, async jobs, Baileys simulation, and memory operations.
 - **2026-02-23** > apps/gateway-orchestrator/src/app.ts, tests/unit/gateway_app_ui_route.test.ts, tests/unit/web_console_ui.test.ts > createGatewayApp and UI route tests > Added `/ui` HTML route, root redirect to `/ui`, and route/render tests for the new interface.
 - **2026-02-23** > scripts/test-manual-checklist > web console checklist section > Added manual browser-driven validation steps for the new test interface.

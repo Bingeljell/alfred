@@ -8,6 +8,7 @@ import { FileBackedQueueStore } from "./local_queue_store";
 import { OutboundNotificationStore } from "./notification_store";
 import { MessageDedupeStore } from "./whatsapp/dedupe_store";
 import { normalizeBaileysInbound } from "./whatsapp/normalize_baileys";
+import { OAuthService } from "./auth/oauth_service";
 
 export class GatewayService {
   constructor(
@@ -16,7 +17,8 @@ export class GatewayService {
     private readonly reminderStore?: ReminderStore,
     private readonly noteStore?: NoteStore,
     private readonly taskStore?: TaskStore,
-    private readonly approvalStore?: ApprovalStore
+    private readonly approvalStore?: ApprovalStore,
+    private readonly oauthService?: OAuthService
   ) {}
 
   async health(): Promise<{
@@ -246,6 +248,38 @@ export class GatewayService {
 
         await this.queueJobNotification(sessionId, job.id, "queued", `Job ${job.id} is queued (retry of ${command.id})`);
         return `Retry queued as job ${job.id}`;
+      }
+
+      case "auth_connect": {
+        if (!this.oauthService) {
+          return "OAuth is not configured.";
+        }
+
+        const started = await this.oauthService.startOpenAiConnect(sessionId);
+        return `Open this link to connect OpenAI (${started.mode}): ${started.authorizationUrl}`;
+      }
+
+      case "auth_status": {
+        if (!this.oauthService) {
+          return "OAuth is not configured.";
+        }
+
+        const status = await this.oauthService.statusOpenAi(sessionId);
+        if (!status.connected) {
+          return "OpenAI OAuth is not connected for this session.";
+        }
+
+        const expiry = status.expiresAt ? `, expires ${status.expiresAt}` : "";
+        return `OpenAI OAuth connected (${status.mode}, ${status.storageScheme}${expiry}).`;
+      }
+
+      case "auth_disconnect": {
+        if (!this.oauthService) {
+          return "OAuth is not configured.";
+        }
+
+        const removed = await this.oauthService.disconnectOpenAi(sessionId);
+        return removed ? "OpenAI OAuth token removed for this session." : "No OpenAI OAuth token found for this session.";
       }
 
       case "side_effect_send": {
