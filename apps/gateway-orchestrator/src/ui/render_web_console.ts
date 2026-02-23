@@ -333,6 +333,14 @@ export function renderWebConsoleHtml(): string {
               <option value="baileys">Baileys Simulated</option>
             </select>
           </div>
+          <div>
+            <label for="authPreference">LLM Auth Mode</label>
+            <select id="authPreference">
+              <option value="auto">Auto (Recommended)</option>
+              <option value="oauth">ChatGPT OAuth only</option>
+              <option value="api_key">API key only</option>
+            </select>
+          </div>
         </div>
         <label for="message">Message</label>
         <textarea id="message" placeholder="Try: /task add call dentist"></textarea>
@@ -480,6 +488,10 @@ export function renderWebConsoleHtml(): string {
               <input type="checkbox" id="logInteractionStream" checked />
               Log interaction stream
             </label>
+            <label class="inline-control" for="includeNoisyStream">
+              <input type="checkbox" id="includeNoisyStream" />
+              Include noisy stream events
+            </label>
             <button class="secondary" id="sourceRefresh">Refresh Sources</button>
             <button class="secondary" id="streamRefresh">Refresh Stream</button>
           </div>
@@ -510,6 +522,7 @@ export function renderWebConsoleHtml(): string {
       const logNewestFirst = $("logNewestFirst");
       const logSourceEvents = $("logSourceEvents");
       const logInteractionStream = $("logInteractionStream");
+      const includeNoisyStream = $("includeNoisyStream");
       const sourceGatewayCard = $("sourceGatewayCard");
       const sourceGatewayValue = $("sourceGatewayValue");
       const sourceGatewayMeta = $("sourceGatewayMeta");
@@ -522,6 +535,7 @@ export function renderWebConsoleHtml(): string {
       const sourceMemoryCard = $("sourceMemoryCard");
       const sourceMemoryValue = $("sourceMemoryValue");
       const sourceMemoryMeta = $("sourceMemoryMeta");
+      const authPreference = $("authPreference");
       const mapWhatsAppJid = $("mapWhatsAppJid");
       const mapAuthSessionId = $("mapAuthSessionId");
       const WA_LIVE_AUTO_POLL_MS = 2000;
@@ -614,6 +628,12 @@ export function renderWebConsoleHtml(): string {
             pushStreamEvent(event);
           }
         }
+      }
+
+      function streamEventsUrl(basePath) {
+        const noisy = includeNoisyStream.checked ? "true" : "false";
+        const separator = basePath.includes("?") ? "&" : "?";
+        return basePath + separator + "limit=80&noisy=" + noisy;
       }
 
       function updateMapSummary(text, state = "idle") {
@@ -1027,7 +1047,7 @@ export function renderWebConsoleHtml(): string {
         }
         streamPollInFlight = true;
         try {
-          const response = await api("GET", "/v1/stream/events?limit=80");
+          const response = await api("GET", streamEventsUrl("/v1/stream/events"));
           if (!response.ok) {
             return;
           }
@@ -1067,7 +1087,7 @@ export function renderWebConsoleHtml(): string {
           streamPollTimer = null;
         }
 
-        const url = "/v1/stream/events/subscribe?limit=80";
+        const url = streamEventsUrl("/v1/stream/events/subscribe");
         const source = new window.EventSource(url);
         streamEventSource = source;
         streamUsingSse = true;
@@ -1137,6 +1157,7 @@ export function renderWebConsoleHtml(): string {
         const sessionId = $("sessionId").value.trim();
         const text = $("message").value;
         const mode = $("mode").value;
+        const preferredAuthMode = selectedAuthPreference();
 
         if (!sessionId || !text.trim()) {
           setStatus("Session and message are required.", "error");
@@ -1146,6 +1167,7 @@ export function renderWebConsoleHtml(): string {
         pushLog("SEND_CHAT_REQUEST", {
           sessionId,
           mode,
+          authPreference: preferredAuthMode,
           chars: text.length
         });
 
@@ -1154,14 +1176,16 @@ export function renderWebConsoleHtml(): string {
             if (mode === "baileys") {
               return api("POST", "/v1/whatsapp/baileys/inbound", {
                 key: { id: "web-" + Date.now(), remoteJid: sessionId },
-                message: { conversation: text }
+                message: { conversation: text },
+                metadata: { authPreference: preferredAuthMode }
               });
             }
 
             return api("POST", "/v1/messages/inbound", {
               sessionId,
               text,
-              requestJob: false
+              requestJob: false,
+              metadata: { authPreference: preferredAuthMode }
             });
           });
 
@@ -1180,6 +1204,7 @@ export function renderWebConsoleHtml(): string {
         const sessionId = $("sessionId").value.trim();
         const text = $("message").value;
         const mode = $("mode").value;
+        const preferredAuthMode = selectedAuthPreference();
 
         if (!sessionId || !text.trim()) {
           setStatus("Session and message are required.", "error");
@@ -1189,6 +1214,7 @@ export function renderWebConsoleHtml(): string {
         pushLog("SEND_JOB_REQUEST", {
           sessionId,
           mode,
+          authPreference: preferredAuthMode,
           chars: text.length
         });
 
@@ -1197,14 +1223,16 @@ export function renderWebConsoleHtml(): string {
             if (mode === "baileys") {
               return api("POST", "/v1/whatsapp/baileys/inbound", {
                 key: { id: "web-job-" + Date.now(), remoteJid: sessionId },
-                message: { conversation: "/job " + text }
+                message: { conversation: "/job " + text },
+                metadata: { authPreference: preferredAuthMode }
               });
             }
 
             return api("POST", "/v1/messages/inbound", {
               sessionId,
               text,
-              requestJob: true
+              requestJob: true,
+              metadata: { authPreference: preferredAuthMode }
             });
           });
 
@@ -1279,6 +1307,14 @@ export function renderWebConsoleHtml(): string {
           return override;
         }
         return $("sessionId").value.trim();
+      }
+
+      function selectedAuthPreference() {
+        const value = authPreference.value;
+        if (value === "oauth" || value === "api_key") {
+          return value;
+        }
+        return "auto";
       }
 
       $("mapBind").addEventListener("click", async () => {
@@ -1435,6 +1471,19 @@ export function renderWebConsoleHtml(): string {
           return { ok: true, status: 200, data: { refreshed: true } };
         });
         setStatus("Interaction stream refreshed.", "success");
+      });
+
+      $("includeNoisyStream").addEventListener("change", async () => {
+        seenStreamEventIds.clear();
+        await runButtonAction($("streamRefresh"), "STREAM_MODE_UPDATE", async () => {
+          await pollInteractionStreamSilently();
+          return { ok: true, status: 200, data: { noisy: includeNoisyStream.checked } };
+        });
+        startInteractionStreamSse();
+        setStatus(
+          "Interaction stream mode updated (" + (includeNoisyStream.checked ? "including noisy events" : "noise-filtered") + ").",
+          "success"
+        );
       });
 
       $("logClear").addEventListener("click", async () => {

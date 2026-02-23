@@ -53,4 +53,36 @@ describe("ConversationStore", () => {
 
     expect(seen).toEqual(["first", "second"]);
   });
+
+  it("supports query filtering and suppresses noisy duplicates in window", async () => {
+    const stateDir = path.join(os.tmpdir(), `alfred-conversations-filter-${Date.now()}`);
+    const store = new ConversationStore(stateDir, { maxEvents: 100, retentionDays: 14, dedupeWindowMs: 10_000 });
+    await store.ensureReady();
+
+    await store.add("s3@s.whatsapp.net", "inbound", "same-text", {
+      source: "whatsapp",
+      channel: "baileys",
+      kind: "chat"
+    });
+    await store.add("s3@s.whatsapp.net", "inbound", "same-text", {
+      source: "whatsapp",
+      channel: "baileys",
+      kind: "chat"
+    });
+    await store.add("s3@s.whatsapp.net", "outbound", "job started", {
+      source: "gateway",
+      channel: "internal",
+      kind: "job"
+    });
+
+    const queried = await store.query({
+      sessionId: "s3@s.whatsapp.net",
+      kinds: ["chat"],
+      sources: ["whatsapp"],
+      limit: 10
+    });
+
+    expect(queried).toHaveLength(1);
+    expect(queried[0]?.text).toBe("same-text");
+  });
 });

@@ -70,4 +70,42 @@ describe("OpenAIResponsesService", () => {
     const result = await service.generateText("owner@s.whatsapp.net", "hello");
     expect(result).toBeNull();
   });
+
+  it("respects oauth-only preference", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "resp_3", output_text: "oauth forced" })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const oauth = {
+      getOpenAiAccessToken: vi.fn().mockResolvedValue("oauth-token-only")
+    } as unknown as OAuthService;
+
+    const service = new OpenAIResponsesService({
+      oauthService: oauth,
+      apiKey: "api-key-should-not-be-used"
+    });
+
+    const result = await service.generateText("owner@s.whatsapp.net", "hello", { authPreference: "oauth" });
+    expect(result?.authMode).toBe("oauth");
+    const [, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string> }];
+    expect(init.headers.authorization).toBe("Bearer oauth-token-only");
+
+    vi.unstubAllGlobals();
+  });
+
+  it("returns null for api-key-only preference when api key is missing", async () => {
+    const oauth = {
+      getOpenAiAccessToken: vi.fn().mockResolvedValue("oauth-token-ignored")
+    } as unknown as OAuthService;
+
+    const service = new OpenAIResponsesService({
+      oauthService: oauth,
+      enabled: true
+    });
+
+    const result = await service.generateText("owner@s.whatsapp.net", "hello", { authPreference: "api_key" });
+    expect(result).toBeNull();
+  });
 });

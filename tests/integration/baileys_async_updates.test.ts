@@ -67,7 +67,7 @@ describe("baileys async integration", () => {
     });
 
     expect(chat.mode).toBe("chat");
-    expect(chat.response).toBe("ack:what are you doing?");
+    expect(chat.response).toContain("No model backend is configured");
 
     const second = await service.handleBaileysInbound(
       {

@@ -6,6 +6,9 @@ describe("loadConfig", () => {
     const config = loadConfig({});
     expect(config.port).toBe(3000);
     expect(config.workerPollMs).toBe(250);
+    expect(config.streamMaxEvents).toBe(5000);
+    expect(config.streamRetentionDays).toBe(14);
+    expect(config.streamDedupeWindowMs).toBe(2500);
     expect(config.publicBaseUrl).toBe("http://localhost:3000");
     expect(config.oauthOpenAiMode).toBe("mock");
     expect(config.openAiResponsesEnabled).toBe(true);
@@ -28,6 +31,9 @@ describe("loadConfig", () => {
       PORT: "4010",
       STATE_DIR: "./tmp/state-a",
       WORKER_POLL_MS: "500",
+      STREAM_MAX_EVENTS: "8000",
+      STREAM_RETENTION_DAYS: "30",
+      STREAM_DEDUPE_WINDOW_MS: "1200",
       PUBLIC_BASE_URL: "http://localhost:4010/",
       OAUTH_OPENAI_MODE: "live",
       OAUTH_OPENAI_CLIENT_ID: "client",
@@ -54,6 +60,9 @@ describe("loadConfig", () => {
 
     expect(config.port).toBe(4010);
     expect(config.workerPollMs).toBe(500);
+    expect(config.streamMaxEvents).toBe(8000);
+    expect(config.streamRetentionDays).toBe(30);
+    expect(config.streamDedupeWindowMs).toBe(1200);
     expect(config.publicBaseUrl).toBe("http://localhost:4010");
     expect(config.oauthOpenAiMode).toBe("live");
     expect(config.oauthOpenAiClientId).toBe("client");

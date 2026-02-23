@@ -34,6 +34,25 @@ const IdentityMappingBodySchema = z.object({
   authSessionId: z.string().min(1)
 });
 
+const DEFAULT_STREAM_KINDS = ["chat", "command", "job", "error"] as const;
+const ConversationSourceValues = ["gateway", "whatsapp", "auth", "memory", "worker", "system"] as const;
+const ConversationChannelValues = ["direct", "baileys", "api", "internal"] as const;
+const ConversationKindValues = ["chat", "command", "job", "status", "error", "dedupe"] as const;
+const ConversationDirectionValues = ["inbound", "outbound", "system"] as const;
+
+function parseCsvFilter<T extends string>(raw: unknown, allowed: readonly T[]): T[] | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+
+  const allowedSet = new Set<string>(allowed);
+  const values = raw
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0 && allowedSet.has(item)) as T[];
+  return values.length > 0 ? values : undefined;
+}
+
 const QRCode = require("qrcode") as {
   toDataURL: (
     text: string,
@@ -99,7 +118,13 @@ export function createGatewayApp(
     taskStore?: TaskStore;
     approvalStore?: ApprovalStore;
     oauthService?: OAuthService;
-    llmService?: { generateText: (sessionId: string, input: string) => Promise<{ text: string } | null> };
+    llmService?: {
+      generateText: (
+        sessionId: string,
+        input: string,
+        options?: { authPreference?: "auto" | "oauth" | "api_key" }
+      ) => Promise<{ text: string } | null>;
+    };
     codexAuthService?: CodexAuthService;
     codexLoginMode?: CodexLoginStartMode;
     codexApiKey?: string;
@@ -127,7 +152,8 @@ export function createGatewayApp(
     options?.codexLoginMode,
     options?.codexApiKey,
     options?.conversationStore,
-    options?.identityProfileStore
+    options?.identityProfileStore,
+    options?.memoryService
   );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;
@@ -162,8 +188,26 @@ export function createGatewayApp(
     const limitRaw = Number(req.query.limit ?? 100);
     const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, Math.floor(limitRaw))) : 100;
     const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
+    const noisy =
+      typeof req.query.noisy === "string" &&
+      (req.query.noisy.toLowerCase() === "true" || req.query.noisy === "1");
+    const kinds = parseCsvFilter(req.query.kinds, ConversationKindValues) ?? (noisy ? undefined : [...DEFAULT_STREAM_KINDS]);
+    const sources = parseCsvFilter(req.query.sources, ConversationSourceValues);
+    const channels = parseCsvFilter(req.query.channels, ConversationChannelValues);
+    const directions = parseCsvFilter(req.query.directions, ConversationDirectionValues);
+    const text = typeof req.query.text === "string" ? req.query.text.trim() : "";
+    const since = typeof req.query.since === "string" ? req.query.since.trim() : "";
 
-    const events = sessionId ? await conversationStore.listBySession(sessionId, limit) : await conversationStore.listRecent(limit);
+    const events = await conversationStore.query({
+      sessionId: sessionId || undefined,
+      limit,
+      kinds,
+      sources,
+      channels,
+      directions,
+      text: text || undefined,
+      since: since || undefined
+    });
     res.status(200).json({ events });
   });
 
@@ -176,13 +220,37 @@ export function createGatewayApp(
     const limitRaw = Number(req.query.limit ?? 40);
     const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 40;
     const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
+    const noisy =
+      typeof req.query.noisy === "string" &&
+      (req.query.noisy.toLowerCase() === "true" || req.query.noisy === "1");
+    const kinds = parseCsvFilter(req.query.kinds, ConversationKindValues) ?? (noisy ? undefined : [...DEFAULT_STREAM_KINDS]);
+    const sources = parseCsvFilter(req.query.sources, ConversationSourceValues);
+    const channels = parseCsvFilter(req.query.channels, ConversationChannelValues);
+    const directions = parseCsvFilter(req.query.directions, ConversationDirectionValues);
+    const text = typeof req.query.text === "string" ? req.query.text.trim().toLowerCase() : "";
+    const since = typeof req.query.since === "string" ? req.query.since.trim() : "";
+    const sourceSet = sources ? new Set(sources) : null;
+    const channelSet = channels ? new Set(channels) : null;
+    const kindSet = kinds ? new Set(kinds) : null;
+    const directionSet = directions ? new Set(directions) : null;
+    const sinceUnixMs = since ? Date.parse(since) : Number.NaN;
+    const sinceEnabled = Number.isFinite(sinceUnixMs);
 
     res.setHeader("content-type", "text/event-stream");
     res.setHeader("cache-control", "no-cache");
     res.setHeader("connection", "keep-alive");
     res.setHeader("x-accel-buffering", "no");
 
-    const initialEvents = sessionId ? await conversationStore.listBySession(sessionId, limit) : await conversationStore.listRecent(limit);
+    const initialEvents = await conversationStore.query({
+      sessionId: sessionId || undefined,
+      limit,
+      kinds,
+      sources,
+      channels,
+      directions,
+      text: text || undefined,
+      since: since || undefined
+    });
     for (const event of initialEvents) {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     }
@@ -190,6 +258,27 @@ export function createGatewayApp(
     const unsubscribe = conversationStore.subscribe((event) => {
       if (sessionId && event.sessionId !== sessionId) {
         return;
+      }
+      if (sourceSet && !sourceSet.has(event.source)) {
+        return;
+      }
+      if (channelSet && !channelSet.has(event.channel)) {
+        return;
+      }
+      if (kindSet && !kindSet.has(event.kind)) {
+        return;
+      }
+      if (directionSet && !directionSet.has(event.direction)) {
+        return;
+      }
+      if (text && !event.text.toLowerCase().includes(text)) {
+        return;
+      }
+      if (sinceEnabled) {
+        const eventUnixMs = Date.parse(event.createdAt);
+        if (Number.isFinite(eventUnixMs) && eventUnixMs < sinceUnixMs) {
+          return;
+        }
       }
       res.write(`data: ${JSON.stringify(event)}\n\n`);
     });

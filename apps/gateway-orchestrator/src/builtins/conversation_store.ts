@@ -23,14 +23,46 @@ type ConversationState = {
   events: ConversationRecord[];
 };
 
+export type ConversationQuery = {
+  sessionId?: string;
+  limit?: number;
+  sources?: ConversationSource[];
+  channels?: ConversationChannel[];
+  kinds?: ConversationKind[];
+  directions?: ConversationDirection[];
+  text?: string;
+  since?: string;
+};
+
 export class ConversationStore {
   private readonly filePath: string;
   private readonly maxEvents: number;
+  private readonly retentionMs: number;
+  private readonly dedupeWindowMs: number;
   private readonly listeners = new Set<(event: ConversationRecord) => void>();
 
-  constructor(stateDir: string, maxEvents = 5000) {
+  constructor(
+    stateDir: string,
+    options?:
+      | number
+      | {
+          maxEvents?: number;
+          retentionDays?: number;
+          dedupeWindowMs?: number;
+        }
+  ) {
     this.filePath = path.join(stateDir, "builtins", "conversations.json");
-    this.maxEvents = maxEvents;
+    if (typeof options === "number") {
+      this.maxEvents = options;
+      this.retentionMs = 14 * 24 * 60 * 60 * 1000;
+      this.dedupeWindowMs = 2500;
+      return;
+    }
+
+    this.maxEvents = options?.maxEvents ?? 5000;
+    const retentionDays = Math.max(1, options?.retentionDays ?? 14);
+    this.retentionMs = retentionDays * 24 * 60 * 60 * 1000;
+    this.dedupeWindowMs = Math.max(0, options?.dedupeWindowMs ?? 2500);
   }
 
   async ensureReady(): Promise<void> {
@@ -53,7 +85,7 @@ export class ConversationStore {
       metadata?: Record<string, unknown>;
     }
   ): Promise<ConversationRecord> {
-    const state = await this.read();
+    const { state, changed } = await this.readAndPrune();
     const record: ConversationRecord = {
       id: randomUUID(),
       sessionId,
@@ -66,6 +98,14 @@ export class ConversationStore {
       createdAt: new Date().toISOString()
     };
 
+    if (this.isNoisyDuplicate(state.events, record)) {
+      const latest = state.events[state.events.length - 1];
+      if (changed) {
+        await this.write(state);
+      }
+      return latest;
+    }
+
     state.events.push(record);
     if (state.events.length > this.maxEvents) {
       state.events = state.events.slice(state.events.length - this.maxEvents);
@@ -76,22 +116,65 @@ export class ConversationStore {
   }
 
   async listBySession(sessionId: string, limit = 100): Promise<ConversationRecord[]> {
-    const bounded = Number.isFinite(limit) ? Math.max(1, Math.min(500, Math.floor(limit))) : 100;
-    const state = await this.read();
-    const events = state.events.filter((item) => item.sessionId === sessionId);
-    if (events.length <= bounded) {
-      return events;
-    }
-    return events.slice(events.length - bounded);
+    return this.query({
+      sessionId,
+      limit
+    });
   }
 
   async listRecent(limit = 100): Promise<ConversationRecord[]> {
-    const bounded = Number.isFinite(limit) ? Math.max(1, Math.min(500, Math.floor(limit))) : 100;
-    const state = await this.read();
-    if (state.events.length <= bounded) {
-      return state.events;
+    return this.query({
+      limit
+    });
+  }
+
+  async query(query: ConversationQuery): Promise<ConversationRecord[]> {
+    const bounded = Number.isFinite(query.limit ?? 100) ? Math.max(1, Math.min(500, Math.floor(query.limit ?? 100))) : 100;
+    const { state, changed } = await this.readAndPrune();
+    if (changed) {
+      await this.write(state);
     }
-    return state.events.slice(state.events.length - bounded);
+
+    const sourceSet = query.sources && query.sources.length > 0 ? new Set(query.sources) : null;
+    const channelSet = query.channels && query.channels.length > 0 ? new Set(query.channels) : null;
+    const kindSet = query.kinds && query.kinds.length > 0 ? new Set(query.kinds) : null;
+    const directionSet = query.directions && query.directions.length > 0 ? new Set(query.directions) : null;
+    const textFilter = query.text?.trim().toLowerCase() ?? "";
+    const sinceUnixMs = query.since ? Date.parse(query.since) : Number.NaN;
+    const sinceActive = Number.isFinite(sinceUnixMs);
+
+    const filtered = state.events.filter((event) => {
+      if (query.sessionId && event.sessionId !== query.sessionId) {
+        return false;
+      }
+      if (sourceSet && !sourceSet.has(event.source)) {
+        return false;
+      }
+      if (channelSet && !channelSet.has(event.channel)) {
+        return false;
+      }
+      if (kindSet && !kindSet.has(event.kind)) {
+        return false;
+      }
+      if (directionSet && !directionSet.has(event.direction)) {
+        return false;
+      }
+      if (textFilter && !event.text.toLowerCase().includes(textFilter)) {
+        return false;
+      }
+      if (sinceActive) {
+        const eventUnixMs = Date.parse(event.createdAt);
+        if (Number.isFinite(eventUnixMs) && eventUnixMs < sinceUnixMs) {
+          return false;
+        }
+      }
+      return true;
+    });
+
+    if (filtered.length <= bounded) {
+      return filtered;
+    }
+    return filtered.slice(filtered.length - bounded);
   }
 
   subscribe(listener: (event: ConversationRecord) => void): () => void {
@@ -151,6 +234,19 @@ export class ConversationStore {
     return { events: normalized };
   }
 
+  private async readAndPrune(): Promise<{ state: ConversationState; changed: boolean }> {
+    const state = await this.read();
+    const retained = this.pruneEvents(state.events);
+    const changed = retained.length !== state.events.length;
+    if (!changed) {
+      return { state, changed: false };
+    }
+    return {
+      state: { events: retained },
+      changed: true
+    };
+  }
+
   private async write(state: ConversationState): Promise<void> {
     const temp = `${this.filePath}.tmp`;
     await fs.writeFile(temp, JSON.stringify(state, null, 2), "utf8");
@@ -165,5 +261,51 @@ export class ConversationStore {
         // ignore observer errors
       }
     }
+  }
+
+  private pruneEvents(events: ConversationRecord[]): ConversationRecord[] {
+    if (events.length === 0) {
+      return events;
+    }
+
+    const cutoff = Date.now() - this.retentionMs;
+    const retained = events.filter((event) => {
+      const createdAtUnixMs = Date.parse(event.createdAt);
+      if (!Number.isFinite(createdAtUnixMs)) {
+        return true;
+      }
+      return createdAtUnixMs >= cutoff;
+    });
+
+    if (retained.length <= this.maxEvents) {
+      return retained;
+    }
+    return retained.slice(retained.length - this.maxEvents);
+  }
+
+  private isNoisyDuplicate(events: ConversationRecord[], incoming: ConversationRecord): boolean {
+    if (this.dedupeWindowMs <= 0 || events.length === 0) {
+      return false;
+    }
+
+    const latest = events[events.length - 1];
+    const latestUnixMs = Date.parse(latest.createdAt);
+    const incomingUnixMs = Date.parse(incoming.createdAt);
+    if (!Number.isFinite(latestUnixMs) || !Number.isFinite(incomingUnixMs)) {
+      return false;
+    }
+
+    if (incomingUnixMs - latestUnixMs > this.dedupeWindowMs) {
+      return false;
+    }
+
+    return (
+      latest.sessionId === incoming.sessionId &&
+      latest.direction === incoming.direction &&
+      latest.source === incoming.source &&
+      latest.channel === incoming.channel &&
+      latest.kind === incoming.kind &&
+      latest.text === incoming.text
+    );
   }
 }

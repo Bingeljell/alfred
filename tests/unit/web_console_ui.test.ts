@@ -20,6 +20,8 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("/v1/identity/resolve");
     expect(html).toContain("/v1/stream/events/subscribe");
     expect(html).toContain("Job Controls");
+    expect(html).toContain("id=\"authPreference\"");
+    expect(html).toContain("LLM Auth Mode");
     expect(html).toContain("OAuth (OpenAI)");
     expect(html).toContain("Live WhatsApp (Baileys)");
     expect(html).toContain("WhatsApp Setup Flow");
@@ -43,14 +45,17 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("id=\"sourceRefresh\"");
     expect(html).toContain("id=\"streamRefresh\"");
     expect(html).toContain("id=\"logInteractionStream\"");
+    expect(html).toContain("id=\"includeNoisyStream\"");
     expect(html).toContain("id=\"mapBind\"");
     expect(html).toContain("id=\"mapResolve\"");
     expect(html).toContain("id=\"mapList\"");
     expect(html).toContain("Log source changes");
     expect(html).toContain("updateSourceSnapshot");
     expect(html).toContain("/v1/stream/events");
+    expect(html).toContain("streamEventsUrl");
     expect(html).toContain("WHATSAPP_PROVIDER=baileys");
     expect(html).toContain("SEND_CHAT_REQUEST");
+    expect(html).toContain("selectedAuthPreference");
     expect(html).toContain(".status[data-state=\"busy\"]");
     expect(html).toContain("id=\"logNewestFirst\"");
     expect(html).toContain("Newest first");

@@ -12,6 +12,9 @@ import { OAuthService } from "./auth/oauth_service";
 import { CodexAuthService, type CodexLoginStartMode } from "./codex/auth_service";
 import { ConversationStore } from "./builtins/conversation_store";
 import { IdentityProfileStore } from "./auth/identity_profile_store";
+import type { MemoryResult, MemoryService } from "../../../packages/memory/src";
+
+type LlmAuthPreference = "auto" | "oauth" | "api_key";
 
 export class GatewayService {
   constructor(
@@ -22,12 +25,19 @@ export class GatewayService {
     private readonly taskStore?: TaskStore,
     private readonly approvalStore?: ApprovalStore,
     private readonly oauthService?: OAuthService,
-    private readonly llmService?: { generateText: (sessionId: string, input: string) => Promise<{ text: string } | null> },
+    private readonly llmService?: {
+      generateText: (
+        sessionId: string,
+        input: string,
+        options?: { authPreference?: LlmAuthPreference }
+      ) => Promise<{ text: string } | null>;
+    },
     private readonly codexAuthService?: CodexAuthService,
     private readonly codexLoginMode: CodexLoginStartMode = "chatgpt",
     private readonly codexApiKey?: string,
     private readonly conversationStore?: ConversationStore,
-    private readonly identityProfileStore?: IdentityProfileStore
+    private readonly identityProfileStore?: IdentityProfileStore,
+    private readonly memoryService?: Pick<MemoryService, "searchMemory">
   ) {}
 
   async health(): Promise<{
@@ -54,13 +64,15 @@ export class GatewayService {
     const source = provider === "baileys" ? "whatsapp" : "gateway";
     const channel = provider === "baileys" ? "baileys" : "direct";
     const authSessionId = await this.resolveAuthSessionId(inbound.sessionId, provider);
+    const authPreference = this.normalizeAuthPreference(inbound.metadata?.authPreference);
     await this.recordConversation(inbound.sessionId, "inbound", inbound.text ?? "", {
       source,
       channel,
       kind: inbound.requestJob ? "job" : "chat",
       metadata: {
         ...(inbound.metadata && typeof inbound.metadata === "object" ? inbound.metadata : {}),
-        authSessionId
+        authSessionId,
+        authPreference
       }
     });
 
@@ -109,13 +121,14 @@ export class GatewayService {
         };
       }
 
-      const response = await this.executeChatTurn(authSessionId, inbound.text);
+      const response = await this.executeChatTurn(authSessionId, inbound.text, authPreference);
       await this.recordConversation(inbound.sessionId, "outbound", response, {
         source: "gateway",
         channel: "internal",
         kind: "chat",
         metadata: {
-          authSessionId
+          authSessionId,
+          authPreference
         }
       });
       return {
@@ -128,7 +141,7 @@ export class GatewayService {
     return {
       accepted: true,
       mode: "chat",
-      response: `ack:${inbound.text ?? ""}`
+      response: "No chat text received."
     };
   }
 
@@ -409,19 +422,26 @@ export class GatewayService {
     }
   }
 
-  private async executeChatTurn(sessionId: string, text: string): Promise<string> {
+  private async executeChatTurn(sessionId: string, text: string, authPreference: LlmAuthPreference): Promise<string> {
+    const prepared = await this.prepareMemoryAugmentedInput(text);
     if (!this.llmService) {
-      return `ack:${text}`;
+      return "No model backend is configured. Connect ChatGPT OAuth or set OPENAI_API_KEY.";
     }
 
     try {
-      const result = await this.llmService.generateText(sessionId, text);
-      if (!result || !result.text) {
-        return `ack:${text}`;
+      const result = await this.llmService.generateText(sessionId, prepared.prompt, { authPreference });
+      const llmText = result?.text?.trim();
+      if (!llmText) {
+        return this.noModelResponse(authPreference);
       }
-      return result.text;
+
+      if (prepared.sources.length === 0) {
+        return llmText;
+      }
+
+      return `${llmText}\n\nMemory references:\n${prepared.sources.map((source) => `- ${source}`).join("\n")}`;
     } catch (error) {
-      return `llm_error:${error instanceof Error ? error.message : String(error)}`;
+      return this.humanizeLlmError(error);
     }
   }
 
@@ -474,5 +494,84 @@ export class GatewayService {
     } catch {
       return channelSessionId;
     }
+  }
+
+  private normalizeAuthPreference(raw: unknown): LlmAuthPreference {
+    if (typeof raw !== "string") {
+      return "auto";
+    }
+    const value = raw.trim().toLowerCase();
+    if (value === "oauth") {
+      return "oauth";
+    }
+    if (value === "api_key") {
+      return "api_key";
+    }
+    return "auto";
+  }
+
+  private noModelResponse(authPreference: LlmAuthPreference): string {
+    if (authPreference === "oauth") {
+      return "No OAuth-backed model session is available. Connect ChatGPT OAuth and try again.";
+    }
+    if (authPreference === "api_key") {
+      return "API-key model mode is selected but OPENAI_API_KEY is not configured or unavailable.";
+    }
+    return "No model response is available. Connect ChatGPT OAuth or configure OPENAI_API_KEY.";
+  }
+
+  private humanizeLlmError(error: unknown): string {
+    const detail = error instanceof Error ? error.message : String(error);
+    const lower = detail.toLowerCase();
+
+    if (lower.includes("timeout")) {
+      return "Model request timed out. Please retry.";
+    }
+    if (lower.includes("401") || lower.includes("unauthorized") || lower.includes("forbidden")) {
+      return "Model authentication failed. Reconnect ChatGPT OAuth or verify OPENAI_API_KEY.";
+    }
+    if (lower.includes("429") || lower.includes("rate")) {
+      return "Model rate limit reached. Please wait and retry.";
+    }
+
+    return `Model request failed: ${detail}`;
+  }
+
+  private async prepareMemoryAugmentedInput(input: string): Promise<{ prompt: string; sources: string[] }> {
+    const trimmed = input.trim();
+    if (!this.memoryService || !trimmed) {
+      return { prompt: input, sources: [] };
+    }
+
+    let results: MemoryResult[] = [];
+    try {
+      results = await this.memoryService.searchMemory(trimmed, {
+        maxResults: 3,
+        minScore: 0.05
+      });
+    } catch {
+      return { prompt: input, sources: [] };
+    }
+
+    if (results.length === 0) {
+      return { prompt: input, sources: [] };
+    }
+
+    const snippets = results.map((item, index) => {
+      const normalizedSnippet = item.snippet.replace(/\s+/g, " ").trim().slice(0, 320);
+      return `[${index + 1}] ${item.source}\n${normalizedSnippet}`;
+    });
+    const prompt = [
+      "You are answering with optional memory context.",
+      "If memory snippets are relevant, use them and cite source as [path:start:end].",
+      "Memory snippets:",
+      snippets.join("\n\n"),
+      `User message: ${trimmed}`
+    ].join("\n\n");
+
+    return {
+      prompt,
+      sources: results.map((item) => item.source)
+    };
   }
 }

@@ -74,7 +74,7 @@ describe("GatewayService llm path", () => {
       requestJob: false
     });
 
-    expect(chat.response).toBe("ack:fallback please");
+    expect(chat.response).toContain("No model response is available");
   });
 
   it("routes WhatsApp chat turns through mapped auth session id", async () => {
@@ -120,5 +120,99 @@ describe("GatewayService llm path", () => {
     const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(calls.length).toBe(1);
     expect(calls[0]?.[0]).toBe("auth-profile-1");
+  });
+
+  it("injects memory snippets into prompt and appends memory references", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-llm-memory-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "Here is what I found.",
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const memory = {
+      searchMemory: vi.fn().mockResolvedValue([
+        {
+          path: "memory/2026-02-23.md",
+          startLine: 10,
+          endLine: 14,
+          score: 0.81,
+          snippet: "User prefers strict /alfred prefix on WhatsApp.",
+          source: "memory/2026-02-23.md:10:14"
+        }
+      ])
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      memory as never
+    );
+
+    const chat = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "what prefix did we choose?",
+      requestJob: false
+    });
+    expect(chat.response).toContain("Here is what I found.");
+    expect(chat.response).toContain("Memory references:");
+    expect(chat.response).toContain("memory/2026-02-23.md:10:14");
+
+    const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(calls.length).toBe(1);
+    expect(String(calls[0]?.[1] ?? "")).toContain("Memory snippets:");
+    expect(String(calls[0]?.[1] ?? "")).toContain("memory/2026-02-23.md:10:14");
+  });
+
+  it("forwards requested auth preference to llm service", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-llm-pref-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "preference checked",
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      llm
+    );
+
+    await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "hello",
+      requestJob: false,
+      metadata: { authPreference: "api_key" }
+    });
+
+    const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.[2]).toEqual({ authPreference: "api_key" });
   });
 });

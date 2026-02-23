@@ -1,6 +1,7 @@
 import { OAuthService } from "../auth/oauth_service";
 
 export type ResponsesAuthMode = "oauth" | "api_key";
+export type LlmAuthPreference = "auto" | "oauth" | "api_key";
 
 export type ResponsesResult = {
   text: string;
@@ -33,12 +34,16 @@ export class OpenAIResponsesService {
     this.oauthService = options.oauthService;
   }
 
-  async generateText(sessionId: string, input: string): Promise<ResponsesResult | null> {
+  async generateText(
+    sessionId: string,
+    input: string,
+    options?: { authPreference?: LlmAuthPreference }
+  ): Promise<ResponsesResult | null> {
     if (!this.enabled || !input.trim()) {
       return null;
     }
 
-    const credential = await this.resolveCredential(sessionId);
+    const credential = await this.resolveCredential(sessionId, options?.authPreference ?? "auto");
     if (!credential) {
       return null;
     }
@@ -91,8 +96,11 @@ export class OpenAIResponsesService {
     }
   }
 
-  private async resolveCredential(sessionId: string): Promise<{ mode: ResponsesAuthMode; bearerToken: string } | null> {
-    if (this.oauthService) {
+  private async resolveCredential(
+    sessionId: string,
+    authPreference: LlmAuthPreference
+  ): Promise<{ mode: ResponsesAuthMode; bearerToken: string } | null> {
+    if (authPreference !== "api_key" && this.oauthService) {
       const accessToken = await this.oauthService.getOpenAiAccessToken(sessionId);
       if (accessToken) {
         return {
@@ -102,7 +110,7 @@ export class OpenAIResponsesService {
       }
     }
 
-    if (this.apiKey) {
+    if (authPreference !== "oauth" && this.apiKey) {
       return {
         mode: "api_key",
         bearerToken: this.apiKey

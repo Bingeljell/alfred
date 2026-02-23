@@ -34,7 +34,11 @@ async function main(): Promise<void> {
   const noteStore = new NoteStore(config.stateDir);
   const taskStore = new TaskStore(config.stateDir);
   const approvalStore = new ApprovalStore(config.stateDir);
-  const conversationStore = new ConversationStore(config.stateDir);
+  const conversationStore = new ConversationStore(config.stateDir, {
+    maxEvents: config.streamMaxEvents,
+    retentionDays: config.streamRetentionDays,
+    dedupeWindowMs: config.streamDedupeWindowMs
+  });
   const identityProfileStore = new IdentityProfileStore(config.stateDir);
   const oauthService = new OAuthService({
     stateDir: config.stateDir,

@@ -64,7 +64,7 @@ describe("phase 2 smoke", () => {
     });
 
     expect(immediateChat.mode).toBe("chat");
-    expect(immediateChat.response).toBe("ack:still there?");
+    expect(immediateChat.response).toContain("No model backend is configured");
 
     await waitFor(async () => {
       const status = adapter.sent.find((entry) => entry.jobId === inbound.jobId && entry.status === "succeeded");

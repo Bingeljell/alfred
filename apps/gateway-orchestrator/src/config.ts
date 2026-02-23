@@ -23,6 +23,21 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ? Number(v) : 500))
     .pipe(z.number().int().min(100).max(60000)),
+  STREAM_MAX_EVENTS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 5000))
+    .pipe(z.number().int().min(200).max(200000)),
+  STREAM_RETENTION_DAYS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 14))
+    .pipe(z.number().int().min(1).max(365)),
+  STREAM_DEDUPE_WINDOW_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 2500))
+    .pipe(z.number().int().min(0).max(60000)),
   PUBLIC_BASE_URL: z.string().optional().default("http://localhost:3000"),
   OAUTH_STATE_TTL_SEC: z
     .string()
@@ -102,6 +117,9 @@ export type AppConfig = {
   workerPollMs: number;
   notificationPollMs: number;
   reminderPollMs: number;
+  streamMaxEvents: number;
+  streamRetentionDays: number;
+  streamDedupeWindowMs: number;
   publicBaseUrl: string;
   oauthStateTtlMs: number;
   oauthTokenEncryptionKey?: string;
@@ -156,6 +174,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     workerPollMs: parsed.WORKER_POLL_MS,
     notificationPollMs: parsed.NOTIFICATION_POLL_MS,
     reminderPollMs: parsed.REMINDER_POLL_MS,
+    streamMaxEvents: parsed.STREAM_MAX_EVENTS,
+    streamRetentionDays: parsed.STREAM_RETENTION_DAYS,
+    streamDedupeWindowMs: parsed.STREAM_DEDUPE_WINDOW_MS,
     publicBaseUrl: parsed.PUBLIC_BASE_URL.replace(/\/+$/, ""),
     oauthStateTtlMs: parsed.OAUTH_STATE_TTL_SEC * 1000,
     oauthTokenEncryptionKey: parsed.OAUTH_TOKEN_ENCRYPTION_KEY,
