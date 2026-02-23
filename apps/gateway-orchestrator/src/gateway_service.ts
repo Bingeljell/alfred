@@ -9,6 +9,7 @@ import { OutboundNotificationStore } from "./notification_store";
 import { MessageDedupeStore } from "./whatsapp/dedupe_store";
 import { normalizeBaileysInbound } from "./whatsapp/normalize_baileys";
 import { OAuthService } from "./auth/oauth_service";
+import { OpenAIResponsesService } from "./llm/openai_responses_service";
 
 export class GatewayService {
   constructor(
@@ -18,7 +19,8 @@ export class GatewayService {
     private readonly noteStore?: NoteStore,
     private readonly taskStore?: TaskStore,
     private readonly approvalStore?: ApprovalStore,
-    private readonly oauthService?: OAuthService
+    private readonly oauthService?: OAuthService,
+    private readonly llmService?: OpenAIResponsesService
   ) {}
 
   async health(): Promise<{
@@ -72,6 +74,13 @@ export class GatewayService {
           response
         };
       }
+
+      const response = await this.executeChatTurn(inbound.sessionId, inbound.text);
+      return {
+        accepted: true,
+        mode: "chat",
+        response
+      };
     }
 
     return {
@@ -308,6 +317,22 @@ export class GatewayService {
 
         return `Approved action executed: ${approval.action}`;
       }
+    }
+  }
+
+  private async executeChatTurn(sessionId: string, text: string): Promise<string> {
+    if (!this.llmService) {
+      return `ack:${text}`;
+    }
+
+    try {
+      const result = await this.llmService.generateText(sessionId, text);
+      if (!result || !result.text) {
+        return `ack:${text}`;
+      }
+      return result.text;
+    } catch (error) {
+      return `llm_error:${error instanceof Error ? error.message : String(error)}`;
     }
   }
 

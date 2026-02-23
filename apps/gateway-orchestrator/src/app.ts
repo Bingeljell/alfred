@@ -11,6 +11,7 @@ import { TaskStore } from "./builtins/task_store";
 import { ApprovalStore } from "./builtins/approval_store";
 import { renderWebConsoleHtml } from "./ui/render_web_console";
 import { OAuthService } from "./auth/oauth_service";
+import { OpenAIResponsesService } from "./llm/openai_responses_service";
 
 const CancelParamsSchema = z.object({
   jobId: z.string().min(1)
@@ -37,6 +38,7 @@ export function createGatewayApp(
     taskStore?: TaskStore;
     approvalStore?: ApprovalStore;
     oauthService?: OAuthService;
+    llmService?: OpenAIResponsesService;
   }
 ) {
   const app = express();
@@ -47,7 +49,8 @@ export function createGatewayApp(
     options?.noteStore,
     options?.taskStore,
     options?.approvalStore,
-    options?.oauthService
+    options?.oauthService,
+    options?.llmService
   );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;

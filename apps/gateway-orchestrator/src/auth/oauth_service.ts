@@ -167,6 +167,35 @@ export class OAuthService {
     return this.store.deleteToken("openai", sessionId);
   }
 
+  async getOpenAiAccessToken(sessionId: string): Promise<string | null> {
+    const token = await this.store.getToken("openai", sessionId);
+    if (!token) {
+      return null;
+    }
+
+    if (token.expiresAt) {
+      const expiresAt = Date.parse(token.expiresAt);
+      if (!Number.isNaN(expiresAt) && expiresAt <= Date.now()) {
+        return null;
+      }
+    }
+
+    const raw = this.codec.decode(token.secret);
+    if (!raw) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as Partial<OAuthTokenPayload>;
+      if (typeof parsed.accessToken !== "string" || !parsed.accessToken.trim()) {
+        return null;
+      }
+      return parsed.accessToken;
+    } catch {
+      return null;
+    }
+  }
+
   async hasPendingOpenAiState(state: string): Promise<boolean> {
     return this.store.hasPending("openai", state);
   }

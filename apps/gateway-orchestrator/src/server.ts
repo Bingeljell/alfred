@@ -12,6 +12,7 @@ import { TaskStore } from "./builtins/task_store";
 import { ApprovalStore } from "./builtins/approval_store";
 import { startReminderDispatcher } from "./builtins/reminder_dispatcher";
 import { OAuthService } from "./auth/oauth_service";
+import { OpenAIResponsesService } from "./llm/openai_responses_service";
 
 async function main(): Promise<void> {
   loadDotEnvFile();
@@ -37,6 +38,14 @@ async function main(): Promise<void> {
       scope: config.oauthOpenAiScope
     }
   });
+  const llmService = new OpenAIResponsesService({
+    enabled: config.openAiResponsesEnabled,
+    apiUrl: config.openAiResponsesUrl,
+    model: config.openAiResponsesModel,
+    timeoutMs: config.openAiResponsesTimeoutMs,
+    apiKey: config.openAiApiKey,
+    oauthService
+  });
   const memoryService = new MemoryService({
     rootDir: process.cwd(),
     stateDir: config.stateDir
@@ -60,7 +69,8 @@ async function main(): Promise<void> {
     noteStore,
     taskStore,
     approvalStore,
-    oauthService
+    oauthService,
+    llmService
   });
   const adapter = new StdoutWhatsAppAdapter();
   const dispatcher = startNotificationDispatcher({

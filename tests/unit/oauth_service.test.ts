@@ -24,6 +24,8 @@ describe("OAuthService", () => {
     });
 
     expect(completed.connected).toBe(true);
+    const accessToken = await service.getOpenAiAccessToken("owner@s.whatsapp.net");
+    expect(accessToken).toContain("mock_access_allow-1");
 
     const status = await service.statusOpenAi("owner@s.whatsapp.net");
     expect(status.connected).toBe(true);

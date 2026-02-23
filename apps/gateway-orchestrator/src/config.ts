@@ -35,7 +35,19 @@ const EnvSchema = z.object({
   OAUTH_OPENAI_CLIENT_SECRET: z.string().optional(),
   OAUTH_OPENAI_AUTHORIZE_URL: z.string().optional(),
   OAUTH_OPENAI_TOKEN_URL: z.string().optional(),
-  OAUTH_OPENAI_SCOPE: z.string().optional().default("responses.read responses.write offline_access")
+  OAUTH_OPENAI_SCOPE: z.string().optional().default("responses.read responses.write offline_access"),
+  OPENAI_RESPONSES_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  OPENAI_RESPONSES_URL: z.string().optional().default("https://api.openai.com/v1/responses"),
+  OPENAI_RESPONSES_MODEL: z.string().optional().default("gpt-4.1-mini"),
+  OPENAI_RESPONSES_TIMEOUT_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 20000))
+    .pipe(z.number().int().min(1000).max(120000)),
+  OPENAI_API_KEY: z.string().optional()
 });
 
 export type AppConfig = {
@@ -53,6 +65,11 @@ export type AppConfig = {
   oauthOpenAiAuthorizeUrl?: string;
   oauthOpenAiTokenUrl?: string;
   oauthOpenAiScope: string;
+  openAiResponsesEnabled: boolean;
+  openAiResponsesUrl: string;
+  openAiResponsesModel: string;
+  openAiResponsesTimeoutMs: number;
+  openAiApiKey?: string;
 };
 
 export function loadDotEnvFile(dotEnvPath = path.resolve(process.cwd(), ".env")): void {
@@ -83,6 +100,11 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     oauthOpenAiClientSecret: parsed.OAUTH_OPENAI_CLIENT_SECRET,
     oauthOpenAiAuthorizeUrl: parsed.OAUTH_OPENAI_AUTHORIZE_URL,
     oauthOpenAiTokenUrl: parsed.OAUTH_OPENAI_TOKEN_URL,
-    oauthOpenAiScope: parsed.OAUTH_OPENAI_SCOPE
+    oauthOpenAiScope: parsed.OAUTH_OPENAI_SCOPE,
+    openAiResponsesEnabled: parsed.OPENAI_RESPONSES_ENABLED,
+    openAiResponsesUrl: parsed.OPENAI_RESPONSES_URL,
+    openAiResponsesModel: parsed.OPENAI_RESPONSES_MODEL,
+    openAiResponsesTimeoutMs: parsed.OPENAI_RESPONSES_TIMEOUT_MS,
+    openAiApiKey: parsed.OPENAI_API_KEY
   };
 }
