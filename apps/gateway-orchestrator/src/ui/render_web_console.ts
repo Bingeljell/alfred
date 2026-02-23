@@ -96,15 +96,44 @@ export function renderWebConsoleHtml(): string {
         padding: 8px 10px;
         font-weight: 600;
         cursor: pointer;
+        transition: transform 120ms ease, box-shadow 140ms ease, opacity 120ms ease;
+      }
+      button:active {
+        transform: translateY(1px);
+      }
+      button[data-busy="true"] {
+        box-shadow: inset 0 0 0 2px color-mix(in oklab, var(--accent) 35%, white 65%);
       }
       button.secondary {
         background: #f6f6f6;
         color: #333;
         border-color: var(--line);
       }
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.65;
+      }
       .hint {
         font-size: 12px;
         color: var(--muted);
+      }
+      .toolbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+      .inline-control {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .inline-control input {
+        width: auto;
+        margin: 0;
       }
       #log {
         width: 100%;
@@ -140,6 +169,12 @@ export function renderWebConsoleHtml(): string {
         color: #166534;
       }
       .status[data-state="error"] {
+        color: #b42318;
+      }
+      .auth-summary[data-state="connected"] {
+        color: #166534;
+      }
+      .auth-summary[data-state="disconnected"] {
         color: #b42318;
       }
       @media (max-width: 1000px) {
@@ -229,10 +264,18 @@ export function renderWebConsoleHtml(): string {
             </div>
           </div>
         </div>
+        <div class="hint auth-summary" id="authSummary" data-state="unknown">Auth: unknown</div>
       </section>
 
       <section class="panel" style="grid-column: 1 / -1;">
         <h2>Console Output</h2>
+        <div class="toolbar">
+          <label class="inline-control" for="logNewestFirst">
+            <input type="checkbox" id="logNewestFirst" checked />
+            Newest first
+          </label>
+          <button class="secondary" id="logClear">Clear Console</button>
+        </div>
         <pre id="log"></pre>
       </section>
     </main>
@@ -241,6 +284,8 @@ export function renderWebConsoleHtml(): string {
       const $ = (id) => document.getElementById(id);
       const log = $("log");
       const statusLine = $("statusLine");
+      const authSummary = $("authSummary");
+      const logNewestFirst = $("logNewestFirst");
 
       function stamp() {
         return new Date().toISOString();
@@ -248,8 +293,13 @@ export function renderWebConsoleHtml(): string {
 
       function pushLog(label, payload) {
         const line = "[" + stamp() + "] " + label + "\\n" + (typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)) + "\\n";
-        log.textContent += line + "\\n";
-        log.scrollTop = log.scrollHeight;
+        if (logNewestFirst.checked) {
+          log.textContent = line + "\\n" + log.textContent;
+          log.scrollTop = 0;
+        } else {
+          log.textContent += line + "\\n";
+          log.scrollTop = log.scrollHeight;
+        }
       }
 
       async function api(method, url, body) {
@@ -274,12 +324,30 @@ export function renderWebConsoleHtml(): string {
         statusLine.dataset.state = state;
       }
 
+      function setButtonBusy(button, busy) {
+        if (!button) {
+          return;
+        }
+        button.dataset.busy = busy ? "true" : "false";
+        button.disabled = busy;
+      }
+
+      async function runButtonAction(button, label, work) {
+        setButtonBusy(button, true);
+        setStatus(label + " in progress...", "busy");
+        try {
+          return await work();
+        } finally {
+          setButtonBusy(button, false);
+        }
+      }
+
       const sendChatBtn = $("sendChat");
       const sendJobBtn = $("sendJob");
 
       function setSendingUi(active) {
-        sendChatBtn.disabled = active;
-        sendJobBtn.disabled = active;
+        setButtonBusy(sendChatBtn, active);
+        setButtonBusy(sendJobBtn, active);
       }
 
       async function withSendingUi(label, fn) {
@@ -290,6 +358,25 @@ export function renderWebConsoleHtml(): string {
         } finally {
           setSendingUi(false);
         }
+      }
+
+      function renderAuthSummary(status) {
+        if (!status || typeof status !== "object") {
+          authSummary.textContent = "Auth: unavailable";
+          authSummary.dataset.state = "disconnected";
+          return;
+        }
+
+        const connected = status.connected === true;
+        const identity = status.email ? status.email : "unknown account";
+        const plan = status.planType ? " (" + status.planType + ")" : "";
+        const telemetry = status.telemetry || {};
+        const lastLoginAt = telemetry.lastLogin && telemetry.lastLogin.at ? telemetry.lastLogin.at : "n/a";
+        const lastDisconnectAt = telemetry.lastDisconnectAt ? telemetry.lastDisconnectAt : "n/a";
+        authSummary.textContent = connected
+          ? "Connected: " + identity + plan + " | last login: " + lastLoginAt + " | last disconnect: " + lastDisconnectAt
+          : "Disconnected | last login: " + lastLoginAt + " | last disconnect: " + lastDisconnectAt;
+        authSummary.dataset.state = connected ? "connected" : "disconnected";
       }
 
       $("sendChat").addEventListener("click", async () => {
@@ -379,30 +466,35 @@ export function renderWebConsoleHtml(): string {
       });
 
       $("healthBtn").addEventListener("click", async () => {
-        const response = await api("GET", "/health");
+        const response = await runButtonAction($("healthBtn"), "HEALTH", () => api("GET", "/health"));
         pushLog("HEALTH", response);
-        setStatus("Last action: HEALTH (" + response.status + ")");
+        setStatus("Last action: HEALTH (" + response.status + ")", response.ok ? "success" : "error");
       });
 
       $("jobStatus").addEventListener("click", async () => {
         const jobId = $("jobId").value.trim();
-        if (!jobId) return setStatus("Job ID is required.");
-        const response = await api("GET", "/v1/jobs/" + jobId);
+        if (!jobId) return setStatus("Job ID is required.", "error");
+        const response = await runButtonAction($("jobStatus"), "JOB_STATUS", () => api("GET", "/v1/jobs/" + jobId));
         pushLog("JOB_STATUS", response);
+        setStatus("Last action: JOB_STATUS (" + response.status + ")", response.ok ? "success" : "error");
       });
 
       $("jobCancel").addEventListener("click", async () => {
         const jobId = $("jobId").value.trim();
-        if (!jobId) return setStatus("Job ID is required.");
-        const response = await api("POST", "/v1/jobs/" + jobId + "/cancel", {});
+        if (!jobId) return setStatus("Job ID is required.", "error");
+        const response = await runButtonAction($("jobCancel"), "JOB_CANCEL", () =>
+          api("POST", "/v1/jobs/" + jobId + "/cancel", {})
+        );
         pushLog("JOB_CANCEL", response);
+        setStatus("Last action: JOB_CANCEL (" + response.status + ")", response.ok ? "success" : "error");
       });
 
       $("jobRetry").addEventListener("click", async () => {
         const jobId = $("jobId").value.trim();
-        if (!jobId) return setStatus("Job ID is required.");
-        const response = await api("POST", "/v1/jobs/" + jobId + "/retry", {});
+        if (!jobId) return setStatus("Job ID is required.", "error");
+        const response = await runButtonAction($("jobRetry"), "JOB_RETRY", () => api("POST", "/v1/jobs/" + jobId + "/retry", {}));
         pushLog("JOB_RETRY", response);
+        setStatus("Last action: JOB_RETRY (" + response.status + ")", response.ok ? "success" : "error");
         if (response.data?.jobId) {
           $("jobId").value = response.data.jobId;
         }
@@ -410,18 +502,21 @@ export function renderWebConsoleHtml(): string {
 
       $("memorySearch").addEventListener("click", async () => {
         const q = encodeURIComponent($("memoryQuery").value.trim());
-        const response = await api("GET", "/v1/memory/search?q=" + q);
+        const response = await runButtonAction($("memorySearch"), "MEMORY_SEARCH", () => api("GET", "/v1/memory/search?q=" + q));
         pushLog("MEMORY_SEARCH", response);
+        setStatus("Last action: MEMORY_SEARCH (" + response.status + ")", response.ok ? "success" : "error");
       });
 
       $("memorySync").addEventListener("click", async () => {
-        const response = await api("POST", "/v1/memory/sync", {});
+        const response = await runButtonAction($("memorySync"), "MEMORY_SYNC", () => api("POST", "/v1/memory/sync", {}));
         pushLog("MEMORY_SYNC", response);
+        setStatus("Last action: MEMORY_SYNC (" + response.status + ")", response.ok ? "success" : "error");
       });
 
       $("memoryStatus").addEventListener("click", async () => {
-        const response = await api("GET", "/v1/memory/status");
+        const response = await runButtonAction($("memoryStatus"), "MEMORY_STATUS", () => api("GET", "/v1/memory/status"));
         pushLog("MEMORY_STATUS", response);
+        setStatus("Last action: MEMORY_STATUS (" + response.status + ")", response.ok ? "success" : "error");
       });
 
       function selectedOAuthSession() {
@@ -434,35 +529,56 @@ export function renderWebConsoleHtml(): string {
 
       $("oauthConnect").addEventListener("click", async () => {
         const sessionId = selectedOAuthSession();
-        if (!sessionId) return setStatus("Session ID is required.");
-        const response = await api("POST", "/v1/auth/openai/start", { sessionId: sessionId });
+        if (!sessionId) return setStatus("Session ID is required.", "error");
+        const response = await runButtonAction($("oauthConnect"), "OAUTH_CONNECT", () =>
+          api("POST", "/v1/auth/openai/start", { sessionId: sessionId })
+        );
         pushLog("OAUTH_CONNECT", response);
+        setStatus("Last action: OAUTH_CONNECT (" + response.status + ")", response.ok ? "success" : "error");
         if (response.data?.authorizationUrl) {
-          setStatus("Opened OAuth authorize page in a new tab.");
+          setStatus("Opened OAuth authorize page in a new tab.", "success");
           window.open(response.data.authorizationUrl, "_blank", "noopener,noreferrer");
         }
       });
 
       $("oauthStatus").addEventListener("click", async () => {
         const sessionId = selectedOAuthSession();
-        if (!sessionId) return setStatus("Session ID is required.");
-        const response = await api("GET", "/v1/auth/openai/status?sessionId=" + encodeURIComponent(sessionId));
+        if (!sessionId) return setStatus("Session ID is required.", "error");
+        const response = await runButtonAction($("oauthStatus"), "OAUTH_STATUS", () =>
+          api("GET", "/v1/auth/openai/status?sessionId=" + encodeURIComponent(sessionId))
+        );
         pushLog("OAUTH_STATUS", response);
+        renderAuthSummary(response.data);
+        setStatus("Last action: OAUTH_STATUS (" + response.status + ")", response.ok ? "success" : "error");
         if (response.data?.connected === false) {
           setStatus("Codex auth unavailable; chat may use API key fallback if configured.", "error");
         }
       });
 
       $("oauthLimits").addEventListener("click", async () => {
-        const response = await api("GET", "/v1/auth/openai/rate-limits");
+        const response = await runButtonAction($("oauthLimits"), "OAUTH_RATE_LIMITS", () =>
+          api("GET", "/v1/auth/openai/rate-limits")
+        );
         pushLog("OAUTH_RATE_LIMITS", response);
+        setStatus("Last action: OAUTH_RATE_LIMITS (" + response.status + ")", response.ok ? "success" : "error");
       });
 
       $("oauthDisconnect").addEventListener("click", async () => {
         const sessionId = selectedOAuthSession();
-        if (!sessionId) return setStatus("Session ID is required.");
-        const response = await api("POST", "/v1/auth/openai/disconnect", { sessionId: sessionId });
+        if (!sessionId) return setStatus("Session ID is required.", "error");
+        const response = await runButtonAction($("oauthDisconnect"), "OAUTH_DISCONNECT", () =>
+          api("POST", "/v1/auth/openai/disconnect", { sessionId: sessionId })
+        );
         pushLog("OAUTH_DISCONNECT", response);
+        setStatus("Last action: OAUTH_DISCONNECT (" + response.status + ")", response.ok ? "success" : "error");
+      });
+
+      $("logClear").addEventListener("click", async () => {
+        await runButtonAction($("logClear"), "CLEAR_LOG", async () => {
+          log.textContent = "";
+          return { ok: true, status: 200, data: { cleared: true } };
+        });
+        setStatus("Console cleared.", "success");
       });
 
       pushLog("READY", "Web console loaded. Use controls above.");
@@ -473,6 +589,7 @@ export function renderWebConsoleHtml(): string {
         }
         const response = await api("GET", "/v1/auth/openai/status?sessionId=" + encodeURIComponent(sessionId));
         pushLog("OAUTH_STATUS_BOOT", response);
+        renderAuthSummary(response.data);
         if (response.data?.connected === false) {
           setStatus("Codex auth unavailable; chat may use API key fallback if configured.", "error");
         }

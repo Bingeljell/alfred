@@ -17,5 +17,9 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("OAuth (OpenAI)");
     expect(html).toContain("SEND_CHAT_REQUEST");
     expect(html).toContain(".status[data-state=\"busy\"]");
+    expect(html).toContain("id=\"logNewestFirst\"");
+    expect(html).toContain("Newest first");
+    expect(html).toContain("id=\"authSummary\"");
+    expect(html).toContain("runButtonAction");
   });
 });
