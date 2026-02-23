@@ -9,6 +9,7 @@ import { ReminderStore } from "./builtins/reminder_store";
 import { NoteStore } from "./builtins/note_store";
 import { TaskStore } from "./builtins/task_store";
 import { ApprovalStore } from "./builtins/approval_store";
+import { renderWebConsoleHtml } from "./ui/render_web_console";
 
 const CancelParamsSchema = z.object({
   jobId: z.string().min(1)
@@ -39,6 +40,14 @@ export function createGatewayApp(
   const memoryService = options?.memoryService;
   void dedupeStore.ensureReady();
   app.use(express.json());
+
+  app.get("/", (_req, res) => {
+    res.redirect(302, "/ui");
+  });
+
+  app.get("/ui", (_req, res) => {
+    res.status(200).type("html").send(renderWebConsoleHtml());
+  });
 
   app.get("/health", async (_req, res) => {
     const health = await service.health();
