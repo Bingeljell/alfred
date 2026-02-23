@@ -10,6 +10,9 @@ type BaileysRuntimeStatus = {
   meId: string | null;
   qr: string | null;
   qrUpdatedAt: string | null;
+  qrGenerationCount: number;
+  qrGenerationLimit: number;
+  qrLocked: boolean;
   lastDisconnectCode: number | null;
   lastDisconnectReason: string | null;
   lastError: string | null;
@@ -117,6 +120,7 @@ export class BaileysRuntime implements BaileysTransport {
   private readonly onInbound: (message: BaileysInboundMessage) => Promise<void>;
   private readonly maxTextChars: number;
   private readonly reconnectDelayMs: number;
+  private readonly maxQrGenerations: number;
   private readonly allowSelfFromMe: boolean;
   private readonly requirePrefix?: string;
   private readonly allowedSenders: Set<string>;
@@ -136,6 +140,9 @@ export class BaileysRuntime implements BaileysTransport {
     meId: null,
     qr: null,
     qrUpdatedAt: null,
+    qrGenerationCount: 0,
+    qrGenerationLimit: 3,
+    qrLocked: false,
     lastDisconnectCode: null,
     lastDisconnectReason: null,
     lastError: null,
@@ -147,6 +154,7 @@ export class BaileysRuntime implements BaileysTransport {
     onInbound: (message: BaileysInboundMessage) => Promise<void>;
     maxTextChars?: number;
     reconnectDelayMs?: number;
+    maxQrGenerations?: number;
     allowSelfFromMe?: boolean;
     requirePrefix?: string;
     allowedSenders?: string[];
@@ -156,10 +164,14 @@ export class BaileysRuntime implements BaileysTransport {
     this.onInbound = options.onInbound;
     this.maxTextChars = options.maxTextChars ?? 4000;
     this.reconnectDelayMs = options.reconnectDelayMs ?? 3000;
+    this.maxQrGenerations = options.maxQrGenerations ?? 3;
     this.allowSelfFromMe = options.allowSelfFromMe ?? false;
     this.requirePrefix = options.requirePrefix?.trim() || undefined;
     this.allowedSenders = new Set((options.allowedSenders ?? []).map((item) => item.trim()).filter((item) => item.length > 0));
     this.loadModule = options.moduleLoader ?? defaultModuleLoader;
+    this.updateStatus({
+      qrGenerationLimit: this.maxQrGenerations
+    });
   }
 
   status(): BaileysRuntimeStatus {
@@ -206,7 +218,10 @@ export class BaileysRuntime implements BaileysTransport {
     this.updateStatus({
       state: "disconnected",
       connected: false,
-      qr: null
+      qr: null,
+      qrUpdatedAt: null,
+      qrGenerationCount: 0,
+      qrLocked: false
     });
     return this.status();
   }
@@ -240,7 +255,9 @@ export class BaileysRuntime implements BaileysTransport {
       connected: false,
       lastError: null,
       qr: null,
-      qrUpdatedAt: null
+      qrUpdatedAt: null,
+      qrGenerationCount: 0,
+      qrLocked: false
     });
 
     try {
@@ -297,11 +314,33 @@ export class BaileysRuntime implements BaileysTransport {
     const qr = typeof update.qr === "string" ? update.qr : null;
 
     if (qr) {
+      const nextQrGenerationCount = this.statusValue.qrGenerationCount + 1;
+      if (nextQrGenerationCount > this.maxQrGenerations) {
+        this.allowReconnect = false;
+        const socket = this.socket;
+        this.socket = null;
+        if (socket?.end) {
+          socket.end();
+        }
+        this.updateStatus({
+          state: "disconnected",
+          connected: false,
+          qr: null,
+          qrUpdatedAt: null,
+          qrGenerationCount: this.maxQrGenerations,
+          qrLocked: true,
+          lastError: "baileys_qr_generation_limit_reached"
+        });
+        return;
+      }
+
       this.updateStatus({
         qr,
         qrUpdatedAt: nowIso(),
         state: "connecting",
-        connected: false
+        connected: false,
+        qrGenerationCount: nextQrGenerationCount,
+        qrLocked: false
       });
     }
 
@@ -311,6 +350,8 @@ export class BaileysRuntime implements BaileysTransport {
         connected: true,
         qr: null,
         qrUpdatedAt: null,
+        qrGenerationCount: 0,
+        qrLocked: false,
         meId: this.socket?.user?.id ?? null,
         lastError: null
       });
@@ -328,6 +369,7 @@ export class BaileysRuntime implements BaileysTransport {
       connected: false,
       qr: null,
       qrUpdatedAt: null,
+      qrLocked: false,
       meId: null,
       lastDisconnectCode: code,
       lastDisconnectReason: reason

@@ -147,4 +147,39 @@ describe("BaileysRuntime", () => {
     expect(received[0]?.text).toBe("run report");
     expect(received[1]?.text).toBe("self check");
   });
+
+  it("locks QR linking after max generation count and requires manual reconnect", async () => {
+    const fake = createFakeSocket();
+    const runtime = new BaileysRuntime({
+      authDir: "/tmp/baileys-auth",
+      maxQrGenerations: 3,
+      onInbound: async () => undefined,
+      moduleLoader: async () => ({
+        default: () => fake.socket,
+        fetchLatestBaileysVersion: async () => ({ version: [1, 0, 0] as [number, number, number] }),
+        useMultiFileAuthState: async () => ({ state: {}, saveCreds: async () => undefined })
+      })
+    });
+
+    await runtime.connect();
+    fake.emit("connection.update", { connection: "connecting", qr: "qr-1" });
+    fake.emit("connection.update", { connection: "connecting", qr: "qr-2" });
+    fake.emit("connection.update", { connection: "connecting", qr: "qr-3" });
+    fake.emit("connection.update", { connection: "connecting", qr: "qr-4" });
+
+    const status = runtime.status() as {
+      connected: boolean;
+      qr: string | null;
+      qrGenerationCount: number;
+      qrGenerationLimit: number;
+      qrLocked: boolean;
+      lastError: string | null;
+    };
+    expect(status.connected).toBe(false);
+    expect(status.qr).toBeNull();
+    expect(status.qrGenerationCount).toBe(3);
+    expect(status.qrGenerationLimit).toBe(3);
+    expect(status.qrLocked).toBe(true);
+    expect(status.lastError).toBe("baileys_qr_generation_limit_reached");
+  });
 });

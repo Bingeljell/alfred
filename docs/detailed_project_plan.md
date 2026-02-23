@@ -170,6 +170,7 @@ Deliverables:
 - OAuth entry points from both web console controls and WhatsApp chat commands (`/auth connect`, `/auth status`, `/auth limits`, `/auth disconnect`).
 - OpenAI Responses runtime wiring for API-key fallback when Codex auth is unavailable.
 - Codex thread runtime wiring for normal chat turns with OAuth-first routing and session-thread persistence.
+- Live WhatsApp linking hardening: auto-refresh QR/status in UI and cap QR generation attempts per connect window before manual re-init.
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.

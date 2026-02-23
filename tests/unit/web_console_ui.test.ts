@@ -27,6 +27,8 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("id=\"waQrHint\"");
     expect(html).toContain("renderWaQrPreview");
     expect(html).toContain("cdn.jsdelivr.net/npm/qrcode");
+    expect(html).toContain("WA_LIVE_AUTO_POLL_MS");
+    expect(html).toContain("startWaLiveAutoPoll");
     expect(html).toContain("WHATSAPP_PROVIDER=baileys");
     expect(html).toContain("SEND_CHAT_REQUEST");
     expect(html).toContain(".status[data-state=\"busy\"]");

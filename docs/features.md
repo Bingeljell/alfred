@@ -102,6 +102,8 @@ Acceptance criteria:
 - Baileys inbound relay can be token-protected (`x-baileys-inbound-token`) to reduce spoofed ingress risk.
 - Live inbound messages can be gated by required command prefix (default `/alfred`) and optional sender allowlist.
 - Optional single-number test mode can allow `fromMe` messages when explicitly enabled.
+- Linking QR behavior is guarded with a capped generation window (`WHATSAPP_BAILEYS_MAX_QR_GENERATIONS`, default `3`) so runaway QR churn stops until the operator re-initiates connect.
+- Web UI auto-refreshes live WhatsApp status so QR image/raw payload update without repeated manual status clicks.
 
 Testing:
 - Automated: route-level/UI render tests for live WhatsApp endpoints plus unit coverage for Baileys runtime filtering/token authorization.

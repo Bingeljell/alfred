@@ -71,6 +71,11 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ? Number(v) : 3000))
     .pipe(z.number().int().min(500).max(60000)),
+  WHATSAPP_BAILEYS_MAX_QR_GENERATIONS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 3))
+    .pipe(z.number().int().min(1).max(20)),
   CODEX_APP_SERVER_ENABLED: z
     .string()
     .optional()
@@ -120,6 +125,7 @@ export type AppConfig = {
   whatsAppBaileysAllowedSenders: string[];
   whatsAppBaileysMaxTextChars: number;
   whatsAppBaileysReconnectDelayMs: number;
+  whatsAppBaileysMaxQrGenerations: number;
   codexAppServerEnabled: boolean;
   codexAppServerCommand: string;
   codexAppServerClientName: string;
@@ -176,6 +182,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
       .filter((item) => item.length > 0),
     whatsAppBaileysMaxTextChars: parsed.WHATSAPP_BAILEYS_MAX_TEXT_CHARS,
     whatsAppBaileysReconnectDelayMs: parsed.WHATSAPP_BAILEYS_RECONNECT_DELAY_MS,
+    whatsAppBaileysMaxQrGenerations: parsed.WHATSAPP_BAILEYS_MAX_QR_GENERATIONS,
     codexAppServerEnabled: parsed.CODEX_APP_SERVER_ENABLED,
     codexAppServerCommand: parsed.CODEX_APP_SERVER_COMMAND,
     codexAppServerClientName: parsed.CODEX_APP_SERVER_CLIENT_NAME,

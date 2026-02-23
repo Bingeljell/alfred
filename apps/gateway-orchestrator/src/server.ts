@@ -117,6 +117,7 @@ async function main(): Promise<void> {
       authDir: config.whatsAppBaileysAuthDir,
       maxTextChars: config.whatsAppBaileysMaxTextChars,
       reconnectDelayMs: config.whatsAppBaileysReconnectDelayMs,
+      maxQrGenerations: config.whatsAppBaileysMaxQrGenerations,
       allowSelfFromMe: config.whatsAppBaileysAllowSelfFromMe,
       requirePrefix: config.whatsAppBaileysRequirePrefix,
       allowedSenders: config.whatsAppBaileysAllowedSenders,

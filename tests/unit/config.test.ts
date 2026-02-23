@@ -17,6 +17,7 @@ describe("loadConfig", () => {
     expect(config.whatsAppBaileysRequirePrefix).toBe("/alfred");
     expect(config.whatsAppBaileysAllowedSenders).toEqual([]);
     expect(config.whatsAppBaileysMaxTextChars).toBe(4000);
+    expect(config.whatsAppBaileysMaxQrGenerations).toBe(3);
     expect(config.codexAppServerEnabled).toBe(false);
     expect(config.codexAuthLoginMode).toBe("chatgpt");
     expect(config.stateDir.length).toBeGreaterThan(0);
@@ -43,6 +44,7 @@ describe("loadConfig", () => {
       WHATSAPP_BAILEYS_ALLOWED_SENDERS: "111@s.whatsapp.net,222@s.whatsapp.net",
       WHATSAPP_BAILEYS_MAX_TEXT_CHARS: "2048",
       WHATSAPP_BAILEYS_RECONNECT_DELAY_MS: "2500",
+      WHATSAPP_BAILEYS_MAX_QR_GENERATIONS: "5",
       CODEX_APP_SERVER_ENABLED: "true",
       CODEX_APP_SERVER_COMMAND: "codex",
       CODEX_AUTH_LOGIN_MODE: "apiKey",
@@ -67,6 +69,7 @@ describe("loadConfig", () => {
     expect(config.whatsAppBaileysAllowedSenders).toEqual(["111@s.whatsapp.net", "222@s.whatsapp.net"]);
     expect(config.whatsAppBaileysMaxTextChars).toBe(2048);
     expect(config.whatsAppBaileysReconnectDelayMs).toBe(2500);
+    expect(config.whatsAppBaileysMaxQrGenerations).toBe(5);
     expect(config.codexAppServerEnabled).toBe(true);
     expect(config.codexAuthLoginMode).toBe("apiKey");
     expect(config.codexModel).toBe("openai-codex/mini");

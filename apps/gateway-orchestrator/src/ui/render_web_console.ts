@@ -395,6 +395,9 @@ export function renderWebConsoleHtml(): string {
       const waQrImage = $("waQrImage");
       const waQrHint = $("waQrHint");
       const logNewestFirst = $("logNewestFirst");
+      const WA_LIVE_AUTO_POLL_MS = 2000;
+      let waLivePollInFlight = false;
+      let waLivePollTimer = null;
 
       function stamp() {
         return new Date().toISOString();
@@ -513,14 +516,19 @@ export function renderWebConsoleHtml(): string {
         const state = status.state ? String(status.state) : "unknown";
         const me = status.meId ? String(status.meId) : "n/a";
         const qr = status.qr ? "qr_ready" : "no_qr";
+        const qrCount = typeof status.qrGenerationCount === "number" ? status.qrGenerationCount : 0;
+        const qrLimit = typeof status.qrGenerationLimit === "number" ? status.qrGenerationLimit : "n/a";
+        const qrLocked = status.qrLocked === true;
         const lastError = status.lastError ? String(status.lastError) : "none";
         waLiveSummary.textContent =
-          "WhatsApp " + (connected ? "connected" : "not connected") + " | state: " + state + " | me: " + me + " | " + qr + " | lastError: " + lastError;
+          "WhatsApp " + (connected ? "connected" : "not connected") + " | state: " + state + " | me: " + me + " | " + qr + " | qrAttempts: " + qrCount + "/" + qrLimit + " | lastError: " + lastError;
         waLiveSummary.dataset.state = connected ? "connected" : "disconnected";
         waLiveBadge.textContent = state;
         waLiveBadge.dataset.state = connected ? "connected" : state === "connecting" ? "connecting" : "disconnected";
 
-        if (connected) {
+        if (qrLocked) {
+          waSetupNext.textContent = "QR attempt limit reached. Click Live Connect to start a fresh linking window.";
+        } else if (connected) {
           waSetupNext.textContent = "Connected. Send a WhatsApp message starting with /alfred to test command/chat handling.";
         } else if (status.qr) {
           waSetupNext.textContent = "QR is ready. Scan it from WhatsApp Linked Devices now.";
@@ -577,13 +585,44 @@ export function renderWebConsoleHtml(): string {
         });
       }
 
+      async function fetchWaLiveStatusSilently() {
+        if (waLivePollInFlight) {
+          return;
+        }
+        waLivePollInFlight = true;
+        try {
+          const response = await api("GET", "/v1/whatsapp/live/status");
+          renderWaLiveSummary(response.data);
+        } finally {
+          waLivePollInFlight = false;
+        }
+      }
+
+      function startWaLiveAutoPoll() {
+        if (waLivePollTimer) {
+          clearInterval(waLivePollTimer);
+        }
+        waLivePollTimer = setInterval(() => {
+          void fetchWaLiveStatusSilently();
+        }, WA_LIVE_AUTO_POLL_MS);
+      }
+
+      window.addEventListener("beforeunload", () => {
+        if (!waLivePollTimer) {
+          return;
+        }
+        clearInterval(waLivePollTimer);
+        waLivePollTimer = null;
+      });
+
       const waEnvSnippet = [
         "WHATSAPP_PROVIDER=baileys",
         "WHATSAPP_BAILEYS_AUTO_CONNECT=false",
         "WHATSAPP_BAILEYS_AUTH_DIR=./state/whatsapp/baileys_auth",
         "WHATSAPP_BAILEYS_INBOUND_TOKEN=replace_with_strong_token",
         "WHATSAPP_BAILEYS_REQUIRE_PREFIX=/alfred",
-        "WHATSAPP_BAILEYS_ALLOW_SELF_FROM_ME=true"
+        "WHATSAPP_BAILEYS_ALLOW_SELF_FROM_ME=true",
+        "WHATSAPP_BAILEYS_MAX_QR_GENERATIONS=3"
       ].join("\\n");
 
       $("sendChat").addEventListener("click", async () => {
@@ -796,6 +835,9 @@ export function renderWebConsoleHtml(): string {
         pushLog("WA_LIVE_CONNECT", response);
         renderWaLiveSummary(response.data);
         setStatus("Last action: WA_LIVE_CONNECT (" + response.status + ")", response.ok ? "success" : "error");
+        setTimeout(() => {
+          void fetchWaLiveStatusSilently();
+        }, 500);
       });
 
       $("waLiveDisconnect").addEventListener("click", async () => {
@@ -845,9 +887,13 @@ export function renderWebConsoleHtml(): string {
       })();
 
       void (async () => {
-        const response = await api("GET", "/v1/whatsapp/live/status");
-        pushLog("WA_LIVE_STATUS_BOOT", response);
-        renderWaLiveSummary(response.data);
+        try {
+          const response = await api("GET", "/v1/whatsapp/live/status");
+          pushLog("WA_LIVE_STATUS_BOOT", response);
+          renderWaLiveSummary(response.data);
+        } finally {
+          startWaLiveAutoPoll();
+        }
       })();
     </script>
   </body>

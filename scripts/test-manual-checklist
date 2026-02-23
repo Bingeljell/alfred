@@ -30,15 +30,18 @@ Live WhatsApp (Baileys) Manual Checklist
    - `WHATSAPP_BAILEYS_REQUIRE_PREFIX=/alfred`
    - (Optional single-number test) `WHATSAPP_BAILEYS_ALLOW_SELF_FROM_ME=true`
    - (Recommended safety) `WHATSAPP_BAILEYS_ALLOWED_SENDERS=<jid1,jid2>`
+   - `WHATSAPP_BAILEYS_MAX_QR_GENERATIONS=3`
 2. Start gateway + worker and open `/ui`.
 3. Click `Live Status` and confirm API is configured (not 404).
-4. Click `Live Connect`; if QR is required, scan it via the UI raw QR helper/status payload.
-5. Scan QR in WhatsApp Linked Devices and verify `Live Status` shows connected with `meId`.
-6. Send a WhatsApp message from your phone and verify gateway logs show inbound processing.
+4. Click `Live Connect`; scan the QR image shown directly in the UI (raw QR is fallback only).
+5. Verify QR/raw panel auto-refreshes without pressing `Live Status` while linking.
+6. If QR rotates more than the configured cap, confirm status shows lock and click `Live Connect` to start a fresh attempt.
+7. Scan QR in WhatsApp Linked Devices and verify `Live Status` shows connected with `meId`.
+8. Send a WhatsApp message from your phone and verify gateway logs show inbound processing.
    - Message must start with `/alfred ` (example: `/alfred what time is it?`).
-7. Trigger a reminder/job update and verify outbound text is delivered to the linked WhatsApp account.
-8. Click `Live Disconnect` and verify status reports disconnected.
-9. Security check: send `POST /v1/whatsapp/baileys/inbound` without `x-baileys-inbound-token` and confirm 401.
+9. Trigger a reminder/job update and verify outbound text is delivered to the linked WhatsApp account.
+10. Click `Live Disconnect` and verify status reports disconnected.
+11. Security check: send `POST /v1/whatsapp/baileys/inbound` without `x-baileys-inbound-token` and confirm 401.
 
 Phase 1 Manual Checklist
 1. Start gateway: npm run dev:gateway
