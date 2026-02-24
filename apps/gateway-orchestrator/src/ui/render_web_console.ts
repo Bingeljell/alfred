@@ -304,8 +304,8 @@ export function renderWebConsoleHtml(): string {
         min-height: 88px;
       }
       #sessionTranscript {
-        width: 100%;
-        max-width: 100%;
+        width: min(100%, 800px);
+        max-width: 800px;
         max-height: 260px;
         overflow: auto;
         white-space: pre-wrap;

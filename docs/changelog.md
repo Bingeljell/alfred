@@ -1,5 +1,6 @@
 # Changelog
 
+- **2026-02-24** > apps/gateway-orchestrator/src/ui/render_web_console.ts, tests/unit/web_console_ui.test.ts > sessionTranscript fixed-width cap > Capped persisted transcript width to `800px` (`min(100%, 800px)`) so long responses stay readable without excessive horizontal scrolling, with updated UI assertions.
 - **2026-02-24** > apps/gateway-orchestrator/src/ui/render_web_console.ts, tests/unit/web_console_ui.test.ts > sessionTranscript CSS containment > Prevented long unbroken transcript lines from expanding `/ui` layout by enforcing wrapped, scrollable, fixed-width transcript rendering and added UI test assertions for overflow guards.
 - **2026-02-24** > apps/gateway-orchestrator/src/gateway_service.ts, tests/unit/gateway_service_llm.test.ts > prepareChatInput, shouldUseProviderManagedContext > Reduced token/context duplication by disabling app transcript injection when `openai-codex` provider-thread context is active (except forced `api_key` mode), with unit coverage for both paths.
 - **2026-02-24** > apps/gateway-orchestrator/src/ui/render_web_console.ts, tests/unit/web_console_ui.test.ts > renderSessionTranscript > Fixed `/ui` script parse failure by escaping transcript newline join/whitespace regex in generated HTML script so button handlers bind and UI actions execute.
