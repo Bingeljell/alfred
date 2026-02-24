@@ -303,9 +303,17 @@ export function renderWebConsoleHtml(): string {
       #waQrRaw {
         min-height: 88px;
       }
-      #sessionTranscript {
+      .transcript-frame {
         width: min(100%, 800px);
         max-width: 800px;
+        min-width: 0;
+        overflow: hidden;
+      }
+      #sessionTranscript {
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        margin: 0;
         max-height: 260px;
         overflow: auto;
         white-space: pre-wrap;
@@ -365,7 +373,9 @@ export function renderWebConsoleHtml(): string {
         <div class="actions">
           <button class="secondary" id="transcriptRefresh">Refresh Transcript</button>
         </div>
-        <pre id="sessionTranscript"></pre>
+        <div class="transcript-frame">
+          <pre id="sessionTranscript"></pre>
+        </div>
       </section>
 
       <section class="panel">
