@@ -66,6 +66,23 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ? Number(v) : 120))
     .pipe(z.number().int().min(1).max(24 * 60)),
+  HEARTBEAT_ALERT_ON_AUTH_DISCONNECTED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  HEARTBEAT_ALERT_ON_WHATSAPP_DISCONNECTED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  HEARTBEAT_ALERT_ON_STUCK_JOBS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  HEARTBEAT_STUCK_JOB_THRESHOLD_MINUTES: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 30))
+    .pipe(z.number().int().min(1).max(24 * 60)),
   STREAM_MAX_EVENTS: z
     .string()
     .optional()
@@ -170,6 +187,10 @@ export type AppConfig = {
   heartbeatSessionId: string;
   heartbeatPendingNotificationAlertThreshold: number;
   heartbeatErrorLookbackMinutes: number;
+  heartbeatAlertOnAuthDisconnected: boolean;
+  heartbeatAlertOnWhatsAppDisconnected: boolean;
+  heartbeatAlertOnStuckJobs: boolean;
+  heartbeatStuckJobThresholdMinutes: number;
   streamMaxEvents: number;
   streamRetentionDays: number;
   streamDedupeWindowMs: number;
@@ -237,6 +258,10 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     heartbeatSessionId: parsed.HEARTBEAT_SESSION_ID.trim() || "owner@s.whatsapp.net",
     heartbeatPendingNotificationAlertThreshold: parsed.HEARTBEAT_PENDING_NOTIFICATION_ALERT_THRESHOLD,
     heartbeatErrorLookbackMinutes: parsed.HEARTBEAT_ERROR_LOOKBACK_MINUTES,
+    heartbeatAlertOnAuthDisconnected: parsed.HEARTBEAT_ALERT_ON_AUTH_DISCONNECTED,
+    heartbeatAlertOnWhatsAppDisconnected: parsed.HEARTBEAT_ALERT_ON_WHATSAPP_DISCONNECTED,
+    heartbeatAlertOnStuckJobs: parsed.HEARTBEAT_ALERT_ON_STUCK_JOBS,
+    heartbeatStuckJobThresholdMinutes: parsed.HEARTBEAT_STUCK_JOB_THRESHOLD_MINUTES,
     streamMaxEvents: parsed.STREAM_MAX_EVENTS,
     streamRetentionDays: parsed.STREAM_RETENTION_DAYS,
     streamDedupeWindowMs: parsed.STREAM_DEDUPE_WINDOW_MS,

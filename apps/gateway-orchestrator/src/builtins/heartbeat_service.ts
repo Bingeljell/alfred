@@ -20,6 +20,10 @@ export type HeartbeatConfig = {
   sessionId: string;
   pendingNotificationAlertThreshold: number;
   recentErrorLookbackMinutes: number;
+  alertOnAuthDisconnected: boolean;
+  alertOnWhatsAppDisconnected: boolean;
+  alertOnStuckJobs: boolean;
+  stuckJobThresholdMinutes: number;
 };
 
 export type HeartbeatRuntimeState = {
@@ -37,6 +41,8 @@ export type HeartbeatRuntimeState = {
   skippedCount: number;
   dedupedCount: number;
   errorCount: number;
+  lastKnownAuthConnected?: boolean;
+  lastKnownWhatsAppConnected?: boolean;
   lastSignals?: {
     trigger: string;
     forced: boolean;
@@ -44,6 +50,12 @@ export type HeartbeatRuntimeState = {
     dueReminderCount: number;
     pendingNotificationCount: number;
     recentErrorCount: number;
+    authAvailable: boolean;
+    authConnected: boolean;
+    whatsAppAvailable: boolean;
+    whatsAppConnected: boolean;
+    stuckRunningJobCount: number;
+    maxRunningJobAgeMinutes: number;
   };
 };
 
@@ -64,6 +76,8 @@ type HeartbeatDependencies = {
   notificationStore?: OutboundNotificationStore;
   reminderStore?: ReminderStore;
   conversationStore?: ConversationStore;
+  readAuthStatus?: (sessionId: string) => Promise<{ available: boolean; connected: boolean; detail?: string; error?: string }>;
+  readWhatsAppStatus?: () => Promise<{ available: boolean; connected: boolean; state?: string; error?: string }>;
   defaultConfig?: Partial<HeartbeatConfig>;
 };
 
@@ -77,7 +91,11 @@ const DEFAULT_HEARTBEAT_CONFIG: HeartbeatConfig = {
   suppressOk: true,
   sessionId: "owner@s.whatsapp.net",
   pendingNotificationAlertThreshold: 5,
-  recentErrorLookbackMinutes: 120
+  recentErrorLookbackMinutes: 120,
+  alertOnAuthDisconnected: true,
+  alertOnWhatsAppDisconnected: true,
+  alertOnStuckJobs: true,
+  stuckJobThresholdMinutes: 30
 };
 
 const DEFAULT_HEARTBEAT_RUNTIME: HeartbeatRuntimeState = {
@@ -95,6 +113,10 @@ export class HeartbeatService {
   private readonly notificationStore?: OutboundNotificationStore;
   private readonly reminderStore?: ReminderStore;
   private readonly conversationStore?: ConversationStore;
+  private readonly readAuthStatus?: (
+    sessionId: string
+  ) => Promise<{ available: boolean; connected: boolean; detail?: string; error?: string }>;
+  private readonly readWhatsAppStatus?: () => Promise<{ available: boolean; connected: boolean; state?: string; error?: string }>;
   private readonly defaultConfig: Partial<HeartbeatConfig>;
 
   private state?: HeartbeatPersistedState;
@@ -108,6 +130,8 @@ export class HeartbeatService {
     this.notificationStore = deps.notificationStore;
     this.reminderStore = deps.reminderStore;
     this.conversationStore = deps.conversationStore;
+    this.readAuthStatus = deps.readAuthStatus;
+    this.readWhatsAppStatus = deps.readWhatsAppStatus;
     this.defaultConfig = deps.defaultConfig ?? {};
   }
 
@@ -236,6 +260,13 @@ export class HeartbeatService {
       const queue = await this.queueStore.statusCounts();
       const dueReminderCount = this.reminderStore ? (await this.reminderStore.listDue(now)).length : 0;
       const pendingNotificationCount = this.notificationStore ? (await this.notificationStore.listPending()).length : 0;
+      const { stuckRunningJobCount, maxRunningJobAgeMinutes } = await this.readStuckJobSignals(now, config.stuckJobThresholdMinutes);
+      const authStatus = this.readAuthStatus
+        ? await this.readAuthStatus(config.sessionId)
+        : { available: false, connected: false };
+      const whatsAppStatus = this.readWhatsAppStatus
+        ? await this.readWhatsAppStatus()
+        : { available: false, connected: false };
 
       const lookbackAnchor = previousLastRunAt ?? new Date(now.getTime() - config.recentErrorLookbackMinutes * 60_000).toISOString();
       const recentErrorCount = this.conversationStore
@@ -254,7 +285,13 @@ export class HeartbeatService {
         queue,
         dueReminderCount,
         pendingNotificationCount,
-        recentErrorCount
+        recentErrorCount,
+        authAvailable: authStatus.available,
+        authConnected: authStatus.connected,
+        whatsAppAvailable: whatsAppStatus.available,
+        whatsAppConnected: whatsAppStatus.connected,
+        stuckRunningJobCount,
+        maxRunningJobAgeMinutes
       };
 
       if (!force) {
@@ -295,8 +332,46 @@ export class HeartbeatService {
       if (recentErrorCount > 0) {
         alerts.push(`Recent error events observed: ${recentErrorCount}.`);
       }
+      if (
+        config.alertOnAuthDisconnected &&
+        authStatus.available &&
+        !authStatus.connected &&
+        runtime.lastKnownAuthConnected === true
+      ) {
+        alerts.push(`OpenAI auth disconnected${authStatus.detail ? ` (${authStatus.detail})` : ""}.`);
+      }
+      if (
+        config.alertOnWhatsAppDisconnected &&
+        whatsAppStatus.available &&
+        !whatsAppStatus.connected &&
+        runtime.lastKnownWhatsAppConnected === true
+      ) {
+        const stateSuffix = whatsAppStatus.state ? ` (state=${whatsAppStatus.state})` : "";
+        alerts.push(`WhatsApp connection disconnected${stateSuffix}.`);
+      }
+      if (config.alertOnStuckJobs && stuckRunningJobCount > 0) {
+        alerts.push(
+          `Long-running jobs detected: ${stuckRunningJobCount} (oldest age ${maxRunningJobAgeMinutes}m, threshold ${config.stuckJobThresholdMinutes}m).`
+        );
+      }
       if (!config.requireIdleQueue && isQueueBusy(queue)) {
         alerts.push(`Queue is active (queued=${queue.queued}, running=${queue.running}, cancelling=${queue.cancelling}).`);
+      }
+
+      if (authStatus.available && authStatus.connected) {
+        runtime.lastKnownAuthConnected = true;
+      } else if (authStatus.available && !authStatus.connected && runtime.lastKnownAuthConnected !== true) {
+        runtime.lastKnownAuthConnected = false;
+      }
+
+      if (whatsAppStatus.available && whatsAppStatus.connected) {
+        runtime.lastKnownWhatsAppConnected = true;
+      } else if (
+        whatsAppStatus.available &&
+        !whatsAppStatus.connected &&
+        runtime.lastKnownWhatsAppConnected !== true
+      ) {
+        runtime.lastKnownWhatsAppConnected = false;
       }
 
       if (alerts.length === 0) {
@@ -350,6 +425,42 @@ export class HeartbeatService {
     } finally {
       this.inFlight = false;
     }
+  }
+
+  private async readStuckJobSignals(
+    now: Date,
+    thresholdMinutes: number
+  ): Promise<{ stuckRunningJobCount: number; maxRunningJobAgeMinutes: number }> {
+    if (thresholdMinutes <= 0) {
+      return { stuckRunningJobCount: 0, maxRunningJobAgeMinutes: 0 };
+    }
+
+    const jobs = await this.queueStore.listJobs();
+    let stuckRunningJobCount = 0;
+    let maxRunningJobAgeMinutes = 0;
+
+    for (const job of jobs) {
+      if (job.status !== "running" || !job.startedAt) {
+        continue;
+      }
+
+      const startedUnixMs = Date.parse(job.startedAt);
+      if (!Number.isFinite(startedUnixMs)) {
+        continue;
+      }
+
+      const ageMinutes = Math.max(0, Math.floor((now.getTime() - startedUnixMs) / 60000));
+      if (ageMinutes < thresholdMinutes) {
+        continue;
+      }
+
+      stuckRunningJobCount += 1;
+      if (ageMinutes > maxRunningJobAgeMinutes) {
+        maxRunningJobAgeMinutes = ageMinutes;
+      }
+    }
+
+    return { stuckRunningJobCount, maxRunningJobAgeMinutes };
   }
 
   private async dispatchNotification(
@@ -433,6 +544,15 @@ function normalizeConfig(input: Partial<HeartbeatConfig> | undefined, defaults?:
       1,
       24 * 60,
       DEFAULT_HEARTBEAT_CONFIG.recentErrorLookbackMinutes
+    ),
+    alertOnAuthDisconnected: Boolean(merged.alertOnAuthDisconnected),
+    alertOnWhatsAppDisconnected: Boolean(merged.alertOnWhatsAppDisconnected),
+    alertOnStuckJobs: Boolean(merged.alertOnStuckJobs),
+    stuckJobThresholdMinutes: clampInt(
+      merged.stuckJobThresholdMinutes,
+      1,
+      24 * 60,
+      DEFAULT_HEARTBEAT_CONFIG.stuckJobThresholdMinutes
     )
   };
 }
@@ -450,7 +570,10 @@ function normalizeRuntime(input: Partial<HeartbeatRuntimeState> | undefined): He
     alertCount: clampInt(merged.alertCount, 0, Number.MAX_SAFE_INTEGER, 0),
     skippedCount: clampInt(merged.skippedCount, 0, Number.MAX_SAFE_INTEGER, 0),
     dedupedCount: clampInt(merged.dedupedCount, 0, Number.MAX_SAFE_INTEGER, 0),
-    errorCount: clampInt(merged.errorCount, 0, Number.MAX_SAFE_INTEGER, 0)
+    errorCount: clampInt(merged.errorCount, 0, Number.MAX_SAFE_INTEGER, 0),
+    lastKnownAuthConnected: typeof merged.lastKnownAuthConnected === "boolean" ? merged.lastKnownAuthConnected : undefined,
+    lastKnownWhatsAppConnected:
+      typeof merged.lastKnownWhatsAppConnected === "boolean" ? merged.lastKnownWhatsAppConnected : undefined
   };
 }
 

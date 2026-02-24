@@ -44,7 +44,11 @@ const HeartbeatConfigureBodySchema = z.object({
   suppressOk: z.boolean().optional(),
   sessionId: z.string().min(1).optional(),
   pendingNotificationAlertThreshold: z.number().int().min(1).max(1000).optional(),
-  recentErrorLookbackMinutes: z.number().int().min(1).max(24 * 60).optional()
+  recentErrorLookbackMinutes: z.number().int().min(1).max(24 * 60).optional(),
+  alertOnAuthDisconnected: z.boolean().optional(),
+  alertOnWhatsAppDisconnected: z.boolean().optional(),
+  alertOnStuckJobs: z.boolean().optional(),
+  stuckJobThresholdMinutes: z.number().int().min(1).max(24 * 60).optional()
 });
 
 const HeartbeatRunBodySchema = z.object({
@@ -165,6 +169,10 @@ export function createGatewayApp(
         sessionId?: string;
         pendingNotificationAlertThreshold?: number;
         recentErrorLookbackMinutes?: number;
+        alertOnAuthDisconnected?: boolean;
+        alertOnWhatsAppDisconnected?: boolean;
+        alertOnStuckJobs?: boolean;
+        stuckJobThresholdMinutes?: number;
       }) => Promise<unknown>;
       runNow: (options?: { force?: boolean; trigger?: string }) => Promise<unknown>;
     };

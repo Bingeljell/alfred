@@ -16,6 +16,10 @@ describe("loadConfig", () => {
     expect(config.heartbeatSessionId).toBe("owner@s.whatsapp.net");
     expect(config.heartbeatPendingNotificationAlertThreshold).toBe(5);
     expect(config.heartbeatErrorLookbackMinutes).toBe(120);
+    expect(config.heartbeatAlertOnAuthDisconnected).toBe(true);
+    expect(config.heartbeatAlertOnWhatsAppDisconnected).toBe(true);
+    expect(config.heartbeatAlertOnStuckJobs).toBe(true);
+    expect(config.heartbeatStuckJobThresholdMinutes).toBe(30);
     expect(config.streamMaxEvents).toBe(5000);
     expect(config.streamRetentionDays).toBe(14);
     expect(config.streamDedupeWindowMs).toBe(2500);
@@ -51,6 +55,10 @@ describe("loadConfig", () => {
       HEARTBEAT_SESSION_ID: "heartbeat@test.session",
       HEARTBEAT_PENDING_NOTIFICATION_ALERT_THRESHOLD: "9",
       HEARTBEAT_ERROR_LOOKBACK_MINUTES: "45",
+      HEARTBEAT_ALERT_ON_AUTH_DISCONNECTED: "false",
+      HEARTBEAT_ALERT_ON_WHATSAPP_DISCONNECTED: "false",
+      HEARTBEAT_ALERT_ON_STUCK_JOBS: "false",
+      HEARTBEAT_STUCK_JOB_THRESHOLD_MINUTES: "75",
       STREAM_MAX_EVENTS: "8000",
       STREAM_RETENTION_DAYS: "30",
       STREAM_DEDUPE_WINDOW_MS: "1200",
@@ -90,6 +98,10 @@ describe("loadConfig", () => {
     expect(config.heartbeatSessionId).toBe("heartbeat@test.session");
     expect(config.heartbeatPendingNotificationAlertThreshold).toBe(9);
     expect(config.heartbeatErrorLookbackMinutes).toBe(45);
+    expect(config.heartbeatAlertOnAuthDisconnected).toBe(false);
+    expect(config.heartbeatAlertOnWhatsAppDisconnected).toBe(false);
+    expect(config.heartbeatAlertOnStuckJobs).toBe(false);
+    expect(config.heartbeatStuckJobThresholdMinutes).toBe(75);
     expect(config.streamMaxEvents).toBe(8000);
     expect(config.streamRetentionDays).toBe(30);
     expect(config.streamDedupeWindowMs).toBe(1200);

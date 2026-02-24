@@ -448,6 +448,12 @@ export function renderWebConsoleHtml(): string {
             <input id="heartbeatErrorLookbackMinutes" type="number" min="1" step="1" value="120" />
           </div>
           <div>
+            <label for="heartbeatStuckJobThresholdMinutes">Stuck Job Threshold (minutes)</label>
+            <input id="heartbeatStuckJobThresholdMinutes" type="number" min="1" step="1" value="30" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
             <label>&nbsp;</label>
             <div class="actions">
               <label class="inline-control" for="heartbeatEnabled">
@@ -462,8 +468,21 @@ export function renderWebConsoleHtml(): string {
                 <input type="checkbox" id="heartbeatSuppressOk" checked />
                 Suppress OK
               </label>
+              <label class="inline-control" for="heartbeatAlertOnAuthDisconnected">
+                <input type="checkbox" id="heartbeatAlertOnAuthDisconnected" checked />
+                Alert auth disconnect
+              </label>
+              <label class="inline-control" for="heartbeatAlertOnWhatsAppDisconnected">
+                <input type="checkbox" id="heartbeatAlertOnWhatsAppDisconnected" checked />
+                Alert WhatsApp disconnect
+              </label>
+              <label class="inline-control" for="heartbeatAlertOnStuckJobs">
+                <input type="checkbox" id="heartbeatAlertOnStuckJobs" checked />
+                Alert stuck jobs
+              </label>
             </div>
           </div>
+          <div></div>
         </div>
         <div class="actions">
           <button class="secondary" id="heartbeatStatus">Heartbeat Status</button>
@@ -1000,14 +1019,26 @@ export function renderWebConsoleHtml(): string {
         const sessionId = String(config.sessionId ?? "owner@s.whatsapp.net");
         const threshold = toInteger(config.pendingNotificationAlertThreshold, 5);
         const lookback = toInteger(config.recentErrorLookbackMinutes, 120);
+        const stuckThreshold = Math.max(1, toInteger(config.stuckJobThresholdMinutes, 30));
+        const alertOnAuthDisconnected = config.alertOnAuthDisconnected !== false;
+        const alertOnWhatsAppDisconnected = config.alertOnWhatsAppDisconnected !== false;
+        const alertOnStuckJobs = config.alertOnStuckJobs !== false;
         const lastOutcome = runtime.lastOutcome ? String(runtime.lastOutcome) : "never";
         const lastRunAt = runtime.lastRunAt ? String(runtime.lastRunAt) : "n/a";
         const nextRunAt = runtime.nextRunAt ? String(runtime.nextRunAt) : "n/a";
         const lastSkipReason = runtime.lastSkipReason ? String(runtime.lastSkipReason) : "none";
+        const lastSignals = runtime.lastSignals && typeof runtime.lastSignals === "object" ? runtime.lastSignals : {};
+        const authSignal = lastSignals.authAvailable === true ? (lastSignals.authConnected === true ? "up" : "down") : "n/a";
+        const whatsAppSignal =
+          lastSignals.whatsAppAvailable === true ? (lastSignals.whatsAppConnected === true ? "up" : "down") : "n/a";
+        const stuckJobs = toInteger(lastSignals.stuckRunningJobCount, 0);
 
         $("heartbeatEnabled").checked = enabled;
         $("heartbeatRequireIdleQueue").checked = requireIdleQueue;
         $("heartbeatSuppressOk").checked = suppressOk;
+        $("heartbeatAlertOnAuthDisconnected").checked = alertOnAuthDisconnected;
+        $("heartbeatAlertOnWhatsAppDisconnected").checked = alertOnWhatsAppDisconnected;
+        $("heartbeatAlertOnStuckJobs").checked = alertOnStuckJobs;
         $("heartbeatIntervalMinutes").value = String(intervalMinutes);
         $("heartbeatStartHour").value = String(startHour);
         $("heartbeatEndHour").value = String(endHour);
@@ -1015,6 +1046,7 @@ export function renderWebConsoleHtml(): string {
         $("heartbeatSessionId").value = sessionId;
         $("heartbeatBacklogThreshold").value = String(threshold);
         $("heartbeatErrorLookbackMinutes").value = String(lookback);
+        $("heartbeatStuckJobThresholdMinutes").value = String(stuckThreshold);
 
         heartbeatSummary.textContent =
           "Heartbeat " +
@@ -1030,7 +1062,13 @@ export function renderWebConsoleHtml(): string {
           " | next: " +
           nextRunAt +
           " | skip: " +
-          lastSkipReason;
+          lastSkipReason +
+          " | auth: " +
+          authSignal +
+          " | wa: " +
+          whatsAppSignal +
+          " | stuck: " +
+          stuckJobs;
         heartbeatSummary.dataset.state = enabled ? "connected" : "disconnected";
 
         const cardState = enabled ? (lastOutcome === "error" ? "error" : lastOutcome === "alert" ? "warn" : "ok") : "warn";
@@ -1063,7 +1101,14 @@ export function renderWebConsoleHtml(): string {
             requireIdleQueue,
             suppressOk,
             threshold,
-            lookback
+            lookback,
+            stuckThreshold,
+            alertOnAuthDisconnected,
+            alertOnWhatsAppDisconnected,
+            alertOnStuckJobs,
+            authSignal,
+            whatsAppSignal,
+            stuckJobs
           }
         );
       }
@@ -1595,6 +1640,7 @@ export function renderWebConsoleHtml(): string {
         const endHour = Math.max(0, Math.min(23, toInteger($("heartbeatEndHour").value, 22)));
         const threshold = Math.max(1, toInteger($("heartbeatBacklogThreshold").value, 5));
         const lookback = Math.max(1, toInteger($("heartbeatErrorLookbackMinutes").value, 120));
+        const stuckThreshold = Math.max(1, toInteger($("heartbeatStuckJobThresholdMinutes").value, 30));
         const sessionId = $("heartbeatSessionId").value.trim() || $("sessionId").value.trim() || "owner@s.whatsapp.net";
         return {
           enabled: $("heartbeatEnabled").checked,
@@ -1606,7 +1652,11 @@ export function renderWebConsoleHtml(): string {
           suppressOk: $("heartbeatSuppressOk").checked,
           sessionId,
           pendingNotificationAlertThreshold: threshold,
-          recentErrorLookbackMinutes: lookback
+          recentErrorLookbackMinutes: lookback,
+          alertOnAuthDisconnected: $("heartbeatAlertOnAuthDisconnected").checked,
+          alertOnWhatsAppDisconnected: $("heartbeatAlertOnWhatsAppDisconnected").checked,
+          alertOnStuckJobs: $("heartbeatAlertOnStuckJobs").checked,
+          stuckJobThresholdMinutes: stuckThreshold
         };
       }
 

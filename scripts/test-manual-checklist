@@ -18,6 +18,7 @@ Heartbeat Manual Checklist
 4. Click `Heartbeat Run Now` and verify `HEARTBEAT_RUN` appears in console output with updated runtime counters.
 5. Add one due reminder (`/remind <past ISO> ...`) and click `Heartbeat Run Now`; confirm outcome becomes `alert`.
 6. Click `Heartbeat Run Now` again quickly and confirm identical alert is deduped (outcome `deduped`).
+7. Toggle `Alert auth disconnect` / `Alert WhatsApp disconnect` / `Alert stuck jobs` in Heartbeat settings, save config, and confirm status summary reflects those toggles.
 
 OAuth Manual Checklist
 1. Set `.env` for Codex auth path:

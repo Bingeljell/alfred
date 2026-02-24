@@ -40,24 +40,6 @@ async function main(): Promise<void> {
     retentionDays: config.streamRetentionDays,
     dedupeWindowMs: config.streamDedupeWindowMs
   });
-  const heartbeatService = new HeartbeatService(config.stateDir, {
-    queueStore: store,
-    notificationStore,
-    reminderStore,
-    conversationStore,
-    defaultConfig: {
-      enabled: config.heartbeatEnabled,
-      intervalMs: config.heartbeatIntervalMs,
-      activeHoursStart: config.heartbeatActiveHoursStart,
-      activeHoursEnd: config.heartbeatActiveHoursEnd,
-      requireIdleQueue: config.heartbeatRequireIdleQueue,
-      dedupeWindowMs: config.heartbeatDedupeWindowMs,
-      suppressOk: config.heartbeatSuppressOk,
-      sessionId: config.heartbeatSessionId,
-      pendingNotificationAlertThreshold: config.heartbeatPendingNotificationAlertThreshold,
-      recentErrorLookbackMinutes: config.heartbeatErrorLookbackMinutes
-    }
-  });
   const identityProfileStore = new IdentityProfileStore(config.stateDir);
   const oauthService = new OAuthService({
     stateDir: config.stateDir,
@@ -107,6 +89,85 @@ async function main(): Promise<void> {
   let llmService: HybridLlmService;
   let whatsAppAdapter: WhatsAppAdapter = new StdoutWhatsAppAdapter();
   let whatsAppLiveRuntime: BaileysRuntime | undefined;
+  const heartbeatService = new HeartbeatService(config.stateDir, {
+    queueStore: store,
+    notificationStore,
+    reminderStore,
+    conversationStore,
+    readAuthStatus: async (sessionId) => {
+      if (codexAuthService) {
+        try {
+          const status = await codexAuthService.readStatus(false);
+          return {
+            available: true,
+            connected: status.connected === true,
+            detail: `provider=openai-codex mode=${String(status.authMode ?? "unknown")}`
+          };
+        } catch (error) {
+          return {
+            available: true,
+            connected: false,
+            error: String(error)
+          };
+        }
+      }
+
+      try {
+        const status = await oauthService.statusOpenAi(sessionId);
+        return {
+          available: true,
+          connected: status.connected === true,
+          detail: `provider=openai mode=${String(status.mode ?? "unknown")}`
+        };
+      } catch (error) {
+        return {
+          available: true,
+          connected: false,
+          error: String(error)
+        };
+      }
+    },
+    readWhatsAppStatus: async () => {
+      if (!whatsAppLiveRuntime) {
+        return {
+          available: false,
+          connected: false
+        };
+      }
+
+      try {
+        const status = (await whatsAppLiveRuntime.status()) as Record<string, unknown>;
+        return {
+          available: true,
+          connected: status.connected === true,
+          state: typeof status.state === "string" ? status.state : undefined,
+          error: typeof status.lastError === "string" ? status.lastError : undefined
+        };
+      } catch (error) {
+        return {
+          available: true,
+          connected: false,
+          error: String(error)
+        };
+      }
+    },
+    defaultConfig: {
+      enabled: config.heartbeatEnabled,
+      intervalMs: config.heartbeatIntervalMs,
+      activeHoursStart: config.heartbeatActiveHoursStart,
+      activeHoursEnd: config.heartbeatActiveHoursEnd,
+      requireIdleQueue: config.heartbeatRequireIdleQueue,
+      dedupeWindowMs: config.heartbeatDedupeWindowMs,
+      suppressOk: config.heartbeatSuppressOk,
+      sessionId: config.heartbeatSessionId,
+      pendingNotificationAlertThreshold: config.heartbeatPendingNotificationAlertThreshold,
+      recentErrorLookbackMinutes: config.heartbeatErrorLookbackMinutes,
+      alertOnAuthDisconnected: config.heartbeatAlertOnAuthDisconnected,
+      alertOnWhatsAppDisconnected: config.heartbeatAlertOnWhatsAppDisconnected,
+      alertOnStuckJobs: config.heartbeatAlertOnStuckJobs,
+      stuckJobThresholdMinutes: config.heartbeatStuckJobThresholdMinutes
+    }
+  });
   const memoryService = new MemoryService({
     rootDir: process.cwd(),
     stateDir: config.stateDir
@@ -119,8 +180,8 @@ async function main(): Promise<void> {
   await noteStore.ensureReady();
   await taskStore.ensureReady();
   await approvalStore.ensureReady();
-  await heartbeatService.ensureReady();
   await conversationStore.ensureReady();
+  await heartbeatService.ensureReady();
   await identityProfileStore.ensureReady();
   await oauthService.ensureReady();
   if (codexAuthService) {

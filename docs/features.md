@@ -147,6 +147,7 @@ Description:
 
 Acceptance criteria:
 - Heartbeat supports enable/disable, interval, active-hour window, idle-queue gate, and dedupe window configuration.
+- Heartbeat can explicitly monitor OpenAI auth connectivity, WhatsApp live connectivity, and long-running job thresholds.
 - Heartbeat status/config/run APIs are available (`/v1/heartbeat/status`, `/v1/heartbeat/configure`, `/v1/heartbeat/run`).
 - `/ui` exposes heartbeat controls and status summary for manual testing.
 - Repeated identical alerts are deduped within configured dedupe window.
