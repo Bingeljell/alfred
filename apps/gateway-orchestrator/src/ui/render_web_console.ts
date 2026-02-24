@@ -1142,10 +1142,10 @@ export function renderWebConsoleHtml(): string {
         const lines = events.map((event) => {
           const at = event?.createdAt ? String(event.createdAt).slice(11, 19) : "--:--:--";
           const direction = event?.direction === "outbound" ? "assistant" : event?.direction === "inbound" ? "user" : "system";
-          const text = event?.text ? String(event.text).replace(/\s+/g, " ").trim() : "";
+          const text = event?.text ? String(event.text).replace(/\\s+/g, " ").trim() : "";
           return "[" + at + "] " + direction + ": " + text;
         });
-        sessionTranscript.textContent = lines.join("\n");
+        sessionTranscript.textContent = lines.join("\\n");
         sessionTranscript.scrollTop = sessionTranscript.scrollHeight;
       }
 

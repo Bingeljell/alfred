@@ -61,6 +61,8 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("id=\"transcriptRefresh\"");
     expect(html).toContain("pollTranscriptSilently");
     expect(html).toContain("startTranscriptAutoPoll");
+    expect(html).toContain("sessionTranscript.textContent = lines.join(");
+    expect(html).toContain("replace(");
     expect(html).toContain(".status[data-state=\"busy\"]");
     expect(html).toContain("id=\"logNewestFirst\"");
     expect(html).toContain("Newest first");
