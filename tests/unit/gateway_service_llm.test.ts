@@ -296,4 +296,152 @@ describe("GatewayService llm path", () => {
     expect(prompt).toContain("Recent conversation context");
     expect(prompt).toContain("assistant: Yes, /alfred is required.");
   });
+
+  it("skips transcript context injection when codex provider context is active", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-llm-codex-context-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const conversationStore = {
+      add: vi.fn(async () => ({ id: "x" })),
+      listBySession: vi.fn(async () => [
+        {
+          id: "1",
+          sessionId: "owner@s.whatsapp.net",
+          direction: "inbound",
+          text: "old user line",
+          source: "gateway",
+          channel: "direct",
+          kind: "chat",
+          createdAt: new Date().toISOString()
+        },
+        {
+          id: "2",
+          sessionId: "owner@s.whatsapp.net",
+          direction: "outbound",
+          text: "old assistant line",
+          source: "gateway",
+          channel: "direct",
+          kind: "chat",
+          createdAt: new Date().toISOString()
+        }
+      ])
+    } as unknown as ConversationStore;
+
+    const codexAuth = {
+      readStatus: vi.fn().mockResolvedValue({
+        connected: true,
+        authMode: "chatgpt"
+      })
+    };
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "codex-context-aware",
+        model: "openai-codex/default",
+        authMode: "oauth"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      llm,
+      codexAuth as never,
+      "chatgpt",
+      undefined,
+      conversationStore
+    );
+
+    await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "new question",
+      requestJob: false
+    });
+
+    const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(calls.length).toBe(1);
+    expect(calls[0]?.[1]).toBe("new question");
+    expect(calls[0]?.[2]).toEqual({ authPreference: "auto" });
+  });
+
+  it("still injects transcript context when api_key mode is forced", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-llm-api-context-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const conversationStore = {
+      add: vi.fn(async () => ({ id: "x" })),
+      listBySession: vi.fn(async () => [
+        {
+          id: "1",
+          sessionId: "owner@s.whatsapp.net",
+          direction: "inbound",
+          text: "prior user detail",
+          source: "gateway",
+          channel: "direct",
+          kind: "chat",
+          createdAt: new Date().toISOString()
+        },
+        {
+          id: "2",
+          sessionId: "owner@s.whatsapp.net",
+          direction: "outbound",
+          text: "prior assistant detail",
+          source: "gateway",
+          channel: "direct",
+          kind: "chat",
+          createdAt: new Date().toISOString()
+        }
+      ])
+    } as unknown as ConversationStore;
+
+    const codexAuth = {
+      readStatus: vi.fn().mockResolvedValue({
+        connected: true,
+        authMode: "chatgpt"
+      })
+    };
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "api-context-aware",
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      llm,
+      codexAuth as never,
+      "chatgpt",
+      undefined,
+      conversationStore
+    );
+
+    await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "new api question",
+      requestJob: false,
+      metadata: { authPreference: "api_key" }
+    });
+
+    const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(calls.length).toBe(1);
+    expect(String(calls[0]?.[1] ?? "")).toContain("Recent conversation context");
+    expect(String(calls[0]?.[1] ?? "")).toContain("assistant: prior assistant detail");
+    expect(calls[0]?.[2]).toEqual({ authPreference: "api_key" });
+  });
 });

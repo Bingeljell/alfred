@@ -423,7 +423,7 @@ export class GatewayService {
   }
 
   private async executeChatTurn(sessionId: string, text: string, authPreference: LlmAuthPreference): Promise<string> {
-    const prepared = await this.prepareChatInput(sessionId, text);
+    const prepared = await this.prepareChatInput(sessionId, text, authPreference);
     if (!this.llmService) {
       return "No model backend is configured. Connect ChatGPT OAuth or set OPENAI_API_KEY.";
     }
@@ -537,13 +537,18 @@ export class GatewayService {
     return `Model request failed: ${detail}`;
   }
 
-  private async prepareChatInput(sessionId: string, input: string): Promise<{ prompt: string; sources: string[] }> {
+  private async prepareChatInput(
+    sessionId: string,
+    input: string,
+    authPreference: LlmAuthPreference
+  ): Promise<{ prompt: string; sources: string[] }> {
     const trimmed = input.trim();
     if (!trimmed) {
       return { prompt: input, sources: [] };
     }
 
-    const historyLines = await this.buildRecentConversationContext(sessionId, trimmed);
+    const providerManagedContext = await this.shouldUseProviderManagedContext(authPreference);
+    const historyLines = providerManagedContext ? [] : await this.buildRecentConversationContext(sessionId, trimmed);
 
     if (!this.memoryService) {
       if (historyLines.length === 0) {
@@ -645,5 +650,22 @@ export class GatewayService {
     }
 
     return selected.reverse();
+  }
+
+  private async shouldUseProviderManagedContext(authPreference: LlmAuthPreference): Promise<boolean> {
+    if (authPreference === "api_key") {
+      return false;
+    }
+
+    if (!this.codexAuthService) {
+      return false;
+    }
+
+    try {
+      const status = await this.codexAuthService.readStatus(false);
+      return status.connected === true && status.authMode === "chatgpt";
+    } catch {
+      return false;
+    }
   }
 }
