@@ -53,6 +53,7 @@ export function renderWebConsoleHtml(): string {
         border-radius: 12px;
         padding: 14px;
         box-shadow: 0 8px 22px rgba(0, 0, 0, 0.05);
+        min-width: 0;
       }
       .panel h2 {
         margin: 0 0 10px;
@@ -303,7 +304,13 @@ export function renderWebConsoleHtml(): string {
         min-height: 88px;
       }
       #sessionTranscript {
+        width: 100%;
+        max-width: 100%;
         max-height: 260px;
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        word-break: break-word;
       }
       @media (max-width: 1000px) {
         .layout { grid-template-columns: 1fr; }

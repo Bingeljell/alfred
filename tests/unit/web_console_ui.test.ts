@@ -59,6 +59,10 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("Persisted Transcript");
     expect(html).toContain("id=\"sessionTranscript\"");
     expect(html).toContain("id=\"transcriptRefresh\"");
+    expect(html).toContain("overflow-wrap: anywhere;");
+    expect(html).toContain("word-break: break-word;");
+    expect(html).toContain(".panel {");
+    expect(html).toContain("min-width: 0;");
     expect(html).toContain("pollTranscriptSilently");
     expect(html).toContain("startTranscriptAutoPoll");
     expect(html).toContain("sessionTranscript.textContent = lines.join(");
