@@ -9,6 +9,9 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("/v1/messages/inbound");
     expect(html).toContain("/v1/whatsapp/baileys/inbound");
     expect(html).toContain("/v1/memory/search");
+    expect(html).toContain("/v1/heartbeat/status");
+    expect(html).toContain("/v1/heartbeat/configure");
+    expect(html).toContain("/v1/heartbeat/run");
     expect(html).toContain("/v1/auth/openai/start");
     expect(html).toContain("/v1/auth/openai/status");
     expect(html).toContain("/v1/auth/openai/rate-limits");
@@ -23,6 +26,14 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("id=\"authPreference\"");
     expect(html).toContain("LLM Auth Mode");
     expect(html).toContain("OAuth (OpenAI)");
+    expect(html).toContain("Heartbeat");
+    expect(html).toContain("id=\"heartbeatStatus\"");
+    expect(html).toContain("id=\"heartbeatRun\"");
+    expect(html).toContain("id=\"heartbeatSave\"");
+    expect(html).toContain("id=\"heartbeatSummary\"");
+    expect(html).toContain("id=\"sourceHeartbeatCard\"");
+    expect(html).toContain("id=\"sourceHeartbeatValue\"");
+    expect(html).toContain("id=\"sourceHeartbeatMeta\"");
     expect(html).toContain("Live WhatsApp (Baileys)");
     expect(html).toContain("WhatsApp Setup Flow");
     expect(html).toContain("id=\"waLiveBadge\"");
@@ -51,6 +62,8 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("id=\"mapList\"");
     expect(html).toContain("Log source changes");
     expect(html).toContain("updateSourceSnapshot");
+    expect(html).toContain("renderHeartbeatSummary");
+    expect(html).toContain("buildHeartbeatConfigPayload");
     expect(html).toContain("/v1/stream/events");
     expect(html).toContain("streamEventsUrl");
     expect(html).toContain("WHATSAPP_PROVIDER=baileys");

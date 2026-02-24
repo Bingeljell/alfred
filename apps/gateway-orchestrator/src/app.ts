@@ -34,6 +34,23 @@ const IdentityMappingBodySchema = z.object({
   authSessionId: z.string().min(1)
 });
 
+const HeartbeatConfigureBodySchema = z.object({
+  enabled: z.boolean().optional(),
+  intervalMs: z.number().int().min(15000).max(24 * 60 * 60 * 1000).optional(),
+  activeHoursStart: z.number().int().min(0).max(23).optional(),
+  activeHoursEnd: z.number().int().min(0).max(23).optional(),
+  requireIdleQueue: z.boolean().optional(),
+  dedupeWindowMs: z.number().int().min(0).max(7 * 24 * 60 * 60 * 1000).optional(),
+  suppressOk: z.boolean().optional(),
+  sessionId: z.string().min(1).optional(),
+  pendingNotificationAlertThreshold: z.number().int().min(1).max(1000).optional(),
+  recentErrorLookbackMinutes: z.number().int().min(1).max(24 * 60).optional()
+});
+
+const HeartbeatRunBodySchema = z.object({
+  force: z.boolean().optional()
+});
+
 const DEFAULT_STREAM_KINDS = ["chat", "command", "job", "error"] as const;
 const ConversationSourceValues = ["gateway", "whatsapp", "auth", "memory", "worker", "system"] as const;
 const ConversationChannelValues = ["direct", "baileys", "api", "internal"] as const;
@@ -135,6 +152,22 @@ export function createGatewayApp(
       connect: () => Promise<unknown>;
       disconnect: () => Promise<unknown>;
     };
+    heartbeatService?: {
+      status: () => Promise<unknown> | unknown;
+      configure: (patch: {
+        enabled?: boolean;
+        intervalMs?: number;
+        activeHoursStart?: number;
+        activeHoursEnd?: number;
+        requireIdleQueue?: boolean;
+        dedupeWindowMs?: number;
+        suppressOk?: boolean;
+        sessionId?: string;
+        pendingNotificationAlertThreshold?: number;
+        recentErrorLookbackMinutes?: number;
+      }) => Promise<unknown>;
+      runNow: (options?: { force?: boolean; trigger?: string }) => Promise<unknown>;
+    };
     baileysInboundToken?: string;
   }
 ) {
@@ -160,6 +193,7 @@ export function createGatewayApp(
   const oauthService = options?.oauthService;
   const codexAuthService = options?.codexAuthService;
   const whatsAppLiveManager = options?.whatsAppLiveManager;
+  const heartbeatService = options?.heartbeatService;
   const conversationStore = options?.conversationStore;
   const identityProfileStore = options?.identityProfileStore;
   const baileysInboundToken = options?.baileysInboundToken?.trim() ? options.baileysInboundToken.trim() : undefined;
@@ -177,6 +211,46 @@ export function createGatewayApp(
   app.get("/health", async (_req, res) => {
     const health = await service.health();
     res.status(200).json(health);
+  });
+
+  app.get("/v1/heartbeat/status", async (_req, res) => {
+    if (!heartbeatService) {
+      res.status(404).json({ error: "heartbeat_not_configured" });
+      return;
+    }
+
+    const status = await heartbeatService.status();
+    res.status(200).json(status);
+  });
+
+  app.post("/v1/heartbeat/configure", async (req, res) => {
+    if (!heartbeatService) {
+      res.status(404).json({ error: "heartbeat_not_configured" });
+      return;
+    }
+
+    try {
+      const patch = HeartbeatConfigureBodySchema.parse(req.body ?? {});
+      const status = await heartbeatService.configure(patch);
+      res.status(200).json(status);
+    } catch (error) {
+      res.status(400).json({ error: "invalid_heartbeat_config", detail: String(error) });
+    }
+  });
+
+  app.post("/v1/heartbeat/run", async (req, res) => {
+    if (!heartbeatService) {
+      res.status(404).json({ error: "heartbeat_not_configured" });
+      return;
+    }
+
+    try {
+      const input = HeartbeatRunBodySchema.parse(req.body ?? {});
+      const status = await heartbeatService.runNow({ force: input.force ?? true, trigger: "manual_api" });
+      res.status(200).json(status);
+    } catch (error) {
+      res.status(400).json({ error: "invalid_heartbeat_run_request", detail: String(error) });
+    }
   });
 
   app.get("/v1/stream/events", async (req, res) => {

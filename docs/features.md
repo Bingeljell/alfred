@@ -140,6 +140,22 @@ Testing:
 - Automated: OAuth service unit tests, command parsing tests, and integration flow for connect/status/disconnect.
 - Manual: run OAuth connect from `/ui`, complete callback, verify status in both web console and chat commands.
 
+## 9) Heartbeat Reliability Loop
+
+Description:
+- Add a periodic low-noise heartbeat that checks runtime signals and only emits alerts when something needs attention.
+
+Acceptance criteria:
+- Heartbeat supports enable/disable, interval, active-hour window, idle-queue gate, and dedupe window configuration.
+- Heartbeat status/config/run APIs are available (`/v1/heartbeat/status`, `/v1/heartbeat/configure`, `/v1/heartbeat/run`).
+- `/ui` exposes heartbeat controls and status summary for manual testing.
+- Repeated identical alerts are deduped within configured dedupe window.
+- `HEARTBEAT_OK` can be suppressed to avoid spam.
+
+Testing:
+- Automated: unit coverage for heartbeat alerting, queue-busy gating, dedupe behavior, and config parsing.
+- Manual: configure heartbeat in `/ui`, run now, and validate status transitions plus alert suppression/dedupe.
+
 ## Security Baseline (v1)
 
 - Side-effect actions require explicit confirmation.

@@ -11,6 +11,14 @@ Web Console Manual Checklist
 7. Send as async job and confirm jobId appears and can be checked with Job Controls.
 8. Run Memory Search/Sync/Status actions and confirm responses are shown in the log panel.
 
+Heartbeat Manual Checklist
+1. Open `/ui` and use the Heartbeat section.
+2. Click `Heartbeat Status` and confirm config/runtime fields are populated.
+3. Set `Enabled=true`, `Require idle queue=true`, and click `Heartbeat Save Config`.
+4. Click `Heartbeat Run Now` and verify `HEARTBEAT_RUN` appears in console output with updated runtime counters.
+5. Add one due reminder (`/remind <past ISO> ...`) and click `Heartbeat Run Now`; confirm outcome becomes `alert`.
+6. Click `Heartbeat Run Now` again quickly and confirm identical alert is deduped (outcome `deduped`).
+
 OAuth Manual Checklist
 1. Set `.env` for Codex auth path:
    - `CODEX_APP_SERVER_ENABLED=true`

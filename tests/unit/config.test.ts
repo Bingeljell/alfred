@@ -6,6 +6,16 @@ describe("loadConfig", () => {
     const config = loadConfig({});
     expect(config.port).toBe(3000);
     expect(config.workerPollMs).toBe(250);
+    expect(config.heartbeatEnabled).toBe(true);
+    expect(config.heartbeatIntervalMs).toBe(1800000);
+    expect(config.heartbeatActiveHoursStart).toBe(9);
+    expect(config.heartbeatActiveHoursEnd).toBe(22);
+    expect(config.heartbeatRequireIdleQueue).toBe(true);
+    expect(config.heartbeatDedupeWindowMs).toBe(7200000);
+    expect(config.heartbeatSuppressOk).toBe(true);
+    expect(config.heartbeatSessionId).toBe("owner@s.whatsapp.net");
+    expect(config.heartbeatPendingNotificationAlertThreshold).toBe(5);
+    expect(config.heartbeatErrorLookbackMinutes).toBe(120);
     expect(config.streamMaxEvents).toBe(5000);
     expect(config.streamRetentionDays).toBe(14);
     expect(config.streamDedupeWindowMs).toBe(2500);
@@ -31,6 +41,16 @@ describe("loadConfig", () => {
       PORT: "4010",
       STATE_DIR: "./tmp/state-a",
       WORKER_POLL_MS: "500",
+      HEARTBEAT_ENABLED: "false",
+      HEARTBEAT_INTERVAL_MS: "45000",
+      HEARTBEAT_ACTIVE_HOURS_START: "7",
+      HEARTBEAT_ACTIVE_HOURS_END: "20",
+      HEARTBEAT_REQUIRE_IDLE_QUEUE: "false",
+      HEARTBEAT_DEDUPE_WINDOW_MS: "600000",
+      HEARTBEAT_SUPPRESS_OK: "false",
+      HEARTBEAT_SESSION_ID: "heartbeat@test.session",
+      HEARTBEAT_PENDING_NOTIFICATION_ALERT_THRESHOLD: "9",
+      HEARTBEAT_ERROR_LOOKBACK_MINUTES: "45",
       STREAM_MAX_EVENTS: "8000",
       STREAM_RETENTION_DAYS: "30",
       STREAM_DEDUPE_WINDOW_MS: "1200",
@@ -60,6 +80,16 @@ describe("loadConfig", () => {
 
     expect(config.port).toBe(4010);
     expect(config.workerPollMs).toBe(500);
+    expect(config.heartbeatEnabled).toBe(false);
+    expect(config.heartbeatIntervalMs).toBe(45000);
+    expect(config.heartbeatActiveHoursStart).toBe(7);
+    expect(config.heartbeatActiveHoursEnd).toBe(20);
+    expect(config.heartbeatRequireIdleQueue).toBe(false);
+    expect(config.heartbeatDedupeWindowMs).toBe(600000);
+    expect(config.heartbeatSuppressOk).toBe(false);
+    expect(config.heartbeatSessionId).toBe("heartbeat@test.session");
+    expect(config.heartbeatPendingNotificationAlertThreshold).toBe(9);
+    expect(config.heartbeatErrorLookbackMinutes).toBe(45);
     expect(config.streamMaxEvents).toBe(8000);
     expect(config.streamRetentionDays).toBe(30);
     expect(config.streamDedupeWindowMs).toBe(1200);

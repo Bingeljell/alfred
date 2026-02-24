@@ -27,6 +27,9 @@ describe("gateway web console routes", () => {
     expect(routes).toContain("GET /v1/whatsapp/live/status");
     expect(routes).toContain("POST /v1/whatsapp/live/connect");
     expect(routes).toContain("POST /v1/whatsapp/live/disconnect");
+    expect(routes).toContain("GET /v1/heartbeat/status");
+    expect(routes).toContain("POST /v1/heartbeat/configure");
+    expect(routes).toContain("POST /v1/heartbeat/run");
     expect(routes).toContain("GET /v1/stream/events");
     expect(routes).toContain("GET /v1/stream/events/subscribe");
     expect(routes).toContain("GET /v1/identity/mappings");

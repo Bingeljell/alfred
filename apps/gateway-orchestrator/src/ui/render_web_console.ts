@@ -411,6 +411,67 @@ export function renderWebConsoleHtml(): string {
           </div>
         </div>
 
+        <h2>Heartbeat</h2>
+        <div class="row">
+          <div>
+            <label for="heartbeatSessionId">Target Session</label>
+            <input id="heartbeatSessionId" value="owner@s.whatsapp.net" />
+          </div>
+          <div>
+            <label for="heartbeatIntervalMinutes">Interval (minutes)</label>
+            <input id="heartbeatIntervalMinutes" type="number" min="1" step="1" value="30" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="heartbeatStartHour">Active Start Hour (0-23)</label>
+            <input id="heartbeatStartHour" type="number" min="0" max="23" step="1" value="9" />
+          </div>
+          <div>
+            <label for="heartbeatEndHour">Active End Hour (0-23)</label>
+            <input id="heartbeatEndHour" type="number" min="0" max="23" step="1" value="22" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="heartbeatDedupeMinutes">Alert Dedupe (minutes)</label>
+            <input id="heartbeatDedupeMinutes" type="number" min="0" step="1" value="120" />
+          </div>
+          <div>
+            <label for="heartbeatBacklogThreshold">Notification Backlog Threshold</label>
+            <input id="heartbeatBacklogThreshold" type="number" min="1" step="1" value="5" />
+          </div>
+        </div>
+        <div class="row">
+          <div>
+            <label for="heartbeatErrorLookbackMinutes">Error Lookback (minutes)</label>
+            <input id="heartbeatErrorLookbackMinutes" type="number" min="1" step="1" value="120" />
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <div class="actions">
+              <label class="inline-control" for="heartbeatEnabled">
+                <input type="checkbox" id="heartbeatEnabled" checked />
+                Enabled
+              </label>
+              <label class="inline-control" for="heartbeatRequireIdleQueue">
+                <input type="checkbox" id="heartbeatRequireIdleQueue" checked />
+                Require idle queue
+              </label>
+              <label class="inline-control" for="heartbeatSuppressOk">
+                <input type="checkbox" id="heartbeatSuppressOk" checked />
+                Suppress OK
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="secondary" id="heartbeatStatus">Heartbeat Status</button>
+          <button class="secondary" id="heartbeatRun">Heartbeat Run Now</button>
+          <button class="secondary" id="heartbeatSave">Heartbeat Save Config</button>
+        </div>
+        <div class="hint auth-summary" id="heartbeatSummary" data-state="unknown">Heartbeat: unknown</div>
+
         <h2>OAuth (OpenAI)</h2>
         <div class="row">
           <div>
@@ -503,6 +564,11 @@ export function renderWebConsoleHtml(): string {
               <div class="source-value" id="sourceMemoryValue">Unknown</div>
               <div class="source-meta" id="sourceMemoryMeta">waiting for poll</div>
             </div>
+            <div class="source-card" id="sourceHeartbeatCard" data-state="unknown">
+              <div class="source-name">Heartbeat</div>
+              <div class="source-value" id="sourceHeartbeatValue">Unknown</div>
+              <div class="source-meta" id="sourceHeartbeatMeta">waiting for poll</div>
+            </div>
           </div>
           <div class="source-tools">
             <label class="inline-control" for="logSourceEvents">
@@ -540,6 +606,7 @@ export function renderWebConsoleHtml(): string {
       const authSummary = $("authSummary");
       const mapSummary = $("mapSummary");
       const waLiveSummary = $("waLiveSummary");
+      const heartbeatSummary = $("heartbeatSummary");
       const waLiveBadge = $("waLiveBadge");
       const waSetupNext = $("waSetupNext");
       const waQrRaw = $("waQrRaw");
@@ -561,6 +628,9 @@ export function renderWebConsoleHtml(): string {
       const sourceMemoryCard = $("sourceMemoryCard");
       const sourceMemoryValue = $("sourceMemoryValue");
       const sourceMemoryMeta = $("sourceMemoryMeta");
+      const sourceHeartbeatCard = $("sourceHeartbeatCard");
+      const sourceHeartbeatValue = $("sourceHeartbeatValue");
+      const sourceHeartbeatMeta = $("sourceHeartbeatMeta");
       const authPreference = $("authPreference");
       const mapWhatsAppJid = $("mapWhatsAppJid");
       const mapAuthSessionId = $("mapAuthSessionId");
@@ -879,6 +949,125 @@ export function renderWebConsoleHtml(): string {
         );
       }
 
+      function toInteger(value, fallback) {
+        const numeric = Number(value);
+        if (!Number.isFinite(numeric)) {
+          return fallback;
+        }
+        return Math.floor(numeric);
+      }
+
+      function renderHeartbeatSummary(status) {
+        if (!status || typeof status !== "object") {
+          heartbeatSummary.textContent = "Heartbeat: unavailable";
+          heartbeatSummary.dataset.state = "disconnected";
+          updateSourceSnapshot(
+            "heartbeat",
+            sourceHeartbeatCard,
+            sourceHeartbeatValue,
+            sourceHeartbeatMeta,
+            { state: "error", value: "Unavailable", meta: "status missing" },
+            { configured: false, reason: "missing_status" }
+          );
+          return;
+        }
+
+        if (status.error === "heartbeat_not_configured") {
+          heartbeatSummary.textContent = "Heartbeat is not configured in this process.";
+          heartbeatSummary.dataset.state = "disconnected";
+          updateSourceSnapshot(
+            "heartbeat",
+            sourceHeartbeatCard,
+            sourceHeartbeatValue,
+            sourceHeartbeatMeta,
+            { state: "warn", value: "Not Configured", meta: "heartbeat service unavailable" },
+            { configured: false, error: "heartbeat_not_configured" }
+          );
+          return;
+        }
+
+        const config = status.config && typeof status.config === "object" ? status.config : {};
+        const runtime = status.runtime && typeof status.runtime === "object" ? status.runtime : {};
+        const enabled = config.enabled === true;
+        const running = status.running === true;
+        const inFlight = status.inFlight === true;
+        const intervalMinutes = Math.max(1, Math.round(Number(config.intervalMs ?? 1800000) / 60000));
+        const dedupeMinutes = Math.max(0, Math.round(Number(config.dedupeWindowMs ?? 0) / 60000));
+        const startHour = toInteger(config.activeHoursStart, 9);
+        const endHour = toInteger(config.activeHoursEnd, 22);
+        const requireIdleQueue = config.requireIdleQueue !== false;
+        const suppressOk = config.suppressOk !== false;
+        const sessionId = String(config.sessionId ?? "owner@s.whatsapp.net");
+        const threshold = toInteger(config.pendingNotificationAlertThreshold, 5);
+        const lookback = toInteger(config.recentErrorLookbackMinutes, 120);
+        const lastOutcome = runtime.lastOutcome ? String(runtime.lastOutcome) : "never";
+        const lastRunAt = runtime.lastRunAt ? String(runtime.lastRunAt) : "n/a";
+        const nextRunAt = runtime.nextRunAt ? String(runtime.nextRunAt) : "n/a";
+        const lastSkipReason = runtime.lastSkipReason ? String(runtime.lastSkipReason) : "none";
+
+        $("heartbeatEnabled").checked = enabled;
+        $("heartbeatRequireIdleQueue").checked = requireIdleQueue;
+        $("heartbeatSuppressOk").checked = suppressOk;
+        $("heartbeatIntervalMinutes").value = String(intervalMinutes);
+        $("heartbeatStartHour").value = String(startHour);
+        $("heartbeatEndHour").value = String(endHour);
+        $("heartbeatDedupeMinutes").value = String(dedupeMinutes);
+        $("heartbeatSessionId").value = sessionId;
+        $("heartbeatBacklogThreshold").value = String(threshold);
+        $("heartbeatErrorLookbackMinutes").value = String(lookback);
+
+        heartbeatSummary.textContent =
+          "Heartbeat " +
+          (enabled ? "enabled" : "disabled") +
+          " | running: " +
+          (running ? "yes" : "no") +
+          " | in-flight: " +
+          (inFlight ? "yes" : "no") +
+          " | last: " +
+          lastOutcome +
+          " | last run: " +
+          lastRunAt +
+          " | next: " +
+          nextRunAt +
+          " | skip: " +
+          lastSkipReason;
+        heartbeatSummary.dataset.state = enabled ? "connected" : "disconnected";
+
+        const cardState = enabled ? (lastOutcome === "error" ? "error" : lastOutcome === "alert" ? "warn" : "ok") : "warn";
+        updateSourceSnapshot(
+          "heartbeat",
+          sourceHeartbeatCard,
+          sourceHeartbeatValue,
+          sourceHeartbeatMeta,
+          {
+            state: cardState,
+            value: enabled ? "Enabled" : "Disabled",
+            meta:
+              "last: " +
+              lastOutcome +
+              " | every " +
+              intervalMinutes +
+              "m | window " +
+              startHour +
+              "-" +
+              endHour
+          },
+          {
+            running,
+            enabled,
+            inFlight,
+            sessionId,
+            lastOutcome,
+            lastRunAt,
+            nextRunAt,
+            requireIdleQueue,
+            suppressOk,
+            threshold,
+            lookback
+          }
+        );
+      }
+
       function renderWaLiveSummary(status) {
         if (!status || typeof status !== "object") {
           waLiveSummary.textContent = "WhatsApp: unavailable";
@@ -1039,14 +1228,21 @@ export function renderWebConsoleHtml(): string {
           const sessionId = selectedOAuthSession();
           const healthPromise = api("GET", "/health");
           const memoryPromise = api("GET", "/v1/memory/status");
+          const heartbeatPromise = api("GET", "/v1/heartbeat/status");
           const authPromise = sessionId
             ? api("GET", "/v1/auth/openai/status?sessionId=" + encodeURIComponent(sessionId))
             : Promise.resolve({ ok: false, status: 400, data: { error: "missing_session_id" } });
 
-          const [healthResponse, memoryResponse, authResponse] = await Promise.all([healthPromise, memoryPromise, authPromise]);
+          const [healthResponse, memoryResponse, authResponse, heartbeatResponse] = await Promise.all([
+            healthPromise,
+            memoryPromise,
+            authPromise,
+            heartbeatPromise
+          ]);
           updateGatewaySourceFromHealth(healthResponse);
           updateMemorySourceFromStatus(memoryResponse);
           renderAuthSummary(authResponse.data);
+          renderHeartbeatSummary(heartbeatResponse.data);
         } catch (error) {
           updateSourceSnapshot(
             "gateway",
@@ -1392,6 +1588,56 @@ export function renderWebConsoleHtml(): string {
         setStatus("Last action: MEMORY_STATUS (" + response.status + ")", response.ok ? "success" : "error");
       });
 
+      function buildHeartbeatConfigPayload() {
+        const intervalMinutes = Math.max(1, toInteger($("heartbeatIntervalMinutes").value, 30));
+        const dedupeMinutes = Math.max(0, toInteger($("heartbeatDedupeMinutes").value, 120));
+        const startHour = Math.max(0, Math.min(23, toInteger($("heartbeatStartHour").value, 9)));
+        const endHour = Math.max(0, Math.min(23, toInteger($("heartbeatEndHour").value, 22)));
+        const threshold = Math.max(1, toInteger($("heartbeatBacklogThreshold").value, 5));
+        const lookback = Math.max(1, toInteger($("heartbeatErrorLookbackMinutes").value, 120));
+        const sessionId = $("heartbeatSessionId").value.trim() || $("sessionId").value.trim() || "owner@s.whatsapp.net";
+        return {
+          enabled: $("heartbeatEnabled").checked,
+          intervalMs: intervalMinutes * 60 * 1000,
+          activeHoursStart: startHour,
+          activeHoursEnd: endHour,
+          requireIdleQueue: $("heartbeatRequireIdleQueue").checked,
+          dedupeWindowMs: dedupeMinutes * 60 * 1000,
+          suppressOk: $("heartbeatSuppressOk").checked,
+          sessionId,
+          pendingNotificationAlertThreshold: threshold,
+          recentErrorLookbackMinutes: lookback
+        };
+      }
+
+      $("heartbeatStatus").addEventListener("click", async () => {
+        const response = await runButtonAction($("heartbeatStatus"), "HEARTBEAT_STATUS", () =>
+          api("GET", "/v1/heartbeat/status")
+        );
+        pushLog("HEARTBEAT_STATUS", response);
+        renderHeartbeatSummary(response.data);
+        setStatus("Last action: HEARTBEAT_STATUS (" + response.status + ")", response.ok ? "success" : "error");
+      });
+
+      $("heartbeatRun").addEventListener("click", async () => {
+        const response = await runButtonAction($("heartbeatRun"), "HEARTBEAT_RUN", () =>
+          api("POST", "/v1/heartbeat/run", { force: true })
+        );
+        pushLog("HEARTBEAT_RUN", response);
+        renderHeartbeatSummary(response.data);
+        setStatus("Last action: HEARTBEAT_RUN (" + response.status + ")", response.ok ? "success" : "error");
+      });
+
+      $("heartbeatSave").addEventListener("click", async () => {
+        const payload = buildHeartbeatConfigPayload();
+        const response = await runButtonAction($("heartbeatSave"), "HEARTBEAT_CONFIGURE", () =>
+          api("POST", "/v1/heartbeat/configure", payload)
+        );
+        pushLog("HEARTBEAT_CONFIGURE", response);
+        renderHeartbeatSummary(response.data);
+        setStatus("Last action: HEARTBEAT_CONFIGURE (" + response.status + ")", response.ok ? "success" : "error");
+      });
+
       function selectedOAuthSession() {
         const override = $("oauthSession").value.trim();
         if (override) {
@@ -1627,6 +1873,12 @@ export function renderWebConsoleHtml(): string {
         } finally {
           startWaLiveAutoPoll();
         }
+      })();
+
+      void (async () => {
+        const response = await api("GET", "/v1/heartbeat/status");
+        pushLog("HEARTBEAT_STATUS_BOOT", response);
+        renderHeartbeatSummary(response.data);
       })();
 
       void (async () => {

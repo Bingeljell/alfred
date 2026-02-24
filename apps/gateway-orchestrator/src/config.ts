@@ -23,6 +23,49 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ? Number(v) : 500))
     .pipe(z.number().int().min(100).max(60000)),
+  HEARTBEAT_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  HEARTBEAT_INTERVAL_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 30 * 60 * 1000))
+    .pipe(z.number().int().min(15000).max(24 * 60 * 60 * 1000)),
+  HEARTBEAT_ACTIVE_HOURS_START: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 9))
+    .pipe(z.number().int().min(0).max(23)),
+  HEARTBEAT_ACTIVE_HOURS_END: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 22))
+    .pipe(z.number().int().min(0).max(23)),
+  HEARTBEAT_REQUIRE_IDLE_QUEUE: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  HEARTBEAT_DEDUPE_WINDOW_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 2 * 60 * 60 * 1000))
+    .pipe(z.number().int().min(0).max(7 * 24 * 60 * 60 * 1000)),
+  HEARTBEAT_SUPPRESS_OK: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  HEARTBEAT_SESSION_ID: z.string().optional().default("owner@s.whatsapp.net"),
+  HEARTBEAT_PENDING_NOTIFICATION_ALERT_THRESHOLD: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 5))
+    .pipe(z.number().int().min(1).max(1000)),
+  HEARTBEAT_ERROR_LOOKBACK_MINUTES: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 120))
+    .pipe(z.number().int().min(1).max(24 * 60)),
   STREAM_MAX_EVENTS: z
     .string()
     .optional()
@@ -117,6 +160,16 @@ export type AppConfig = {
   workerPollMs: number;
   notificationPollMs: number;
   reminderPollMs: number;
+  heartbeatEnabled: boolean;
+  heartbeatIntervalMs: number;
+  heartbeatActiveHoursStart: number;
+  heartbeatActiveHoursEnd: number;
+  heartbeatRequireIdleQueue: boolean;
+  heartbeatDedupeWindowMs: number;
+  heartbeatSuppressOk: boolean;
+  heartbeatSessionId: string;
+  heartbeatPendingNotificationAlertThreshold: number;
+  heartbeatErrorLookbackMinutes: number;
   streamMaxEvents: number;
   streamRetentionDays: number;
   streamDedupeWindowMs: number;
@@ -174,6 +227,16 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     workerPollMs: parsed.WORKER_POLL_MS,
     notificationPollMs: parsed.NOTIFICATION_POLL_MS,
     reminderPollMs: parsed.REMINDER_POLL_MS,
+    heartbeatEnabled: parsed.HEARTBEAT_ENABLED,
+    heartbeatIntervalMs: parsed.HEARTBEAT_INTERVAL_MS,
+    heartbeatActiveHoursStart: parsed.HEARTBEAT_ACTIVE_HOURS_START,
+    heartbeatActiveHoursEnd: parsed.HEARTBEAT_ACTIVE_HOURS_END,
+    heartbeatRequireIdleQueue: parsed.HEARTBEAT_REQUIRE_IDLE_QUEUE,
+    heartbeatDedupeWindowMs: parsed.HEARTBEAT_DEDUPE_WINDOW_MS,
+    heartbeatSuppressOk: parsed.HEARTBEAT_SUPPRESS_OK,
+    heartbeatSessionId: parsed.HEARTBEAT_SESSION_ID.trim() || "owner@s.whatsapp.net",
+    heartbeatPendingNotificationAlertThreshold: parsed.HEARTBEAT_PENDING_NOTIFICATION_ALERT_THRESHOLD,
+    heartbeatErrorLookbackMinutes: parsed.HEARTBEAT_ERROR_LOOKBACK_MINUTES,
     streamMaxEvents: parsed.STREAM_MAX_EVENTS,
     streamRetentionDays: parsed.STREAM_RETENTION_DAYS,
     streamDedupeWindowMs: parsed.STREAM_DEDUPE_WINDOW_MS,

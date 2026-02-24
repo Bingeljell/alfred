@@ -11,6 +11,7 @@ import { NoteStore } from "./builtins/note_store";
 import { TaskStore } from "./builtins/task_store";
 import { ApprovalStore } from "./builtins/approval_store";
 import { startReminderDispatcher } from "./builtins/reminder_dispatcher";
+import { HeartbeatService } from "./builtins/heartbeat_service";
 import { ConversationStore } from "./builtins/conversation_store";
 import { IdentityProfileStore } from "./auth/identity_profile_store";
 import { OAuthService } from "./auth/oauth_service";
@@ -38,6 +39,24 @@ async function main(): Promise<void> {
     maxEvents: config.streamMaxEvents,
     retentionDays: config.streamRetentionDays,
     dedupeWindowMs: config.streamDedupeWindowMs
+  });
+  const heartbeatService = new HeartbeatService(config.stateDir, {
+    queueStore: store,
+    notificationStore,
+    reminderStore,
+    conversationStore,
+    defaultConfig: {
+      enabled: config.heartbeatEnabled,
+      intervalMs: config.heartbeatIntervalMs,
+      activeHoursStart: config.heartbeatActiveHoursStart,
+      activeHoursEnd: config.heartbeatActiveHoursEnd,
+      requireIdleQueue: config.heartbeatRequireIdleQueue,
+      dedupeWindowMs: config.heartbeatDedupeWindowMs,
+      suppressOk: config.heartbeatSuppressOk,
+      sessionId: config.heartbeatSessionId,
+      pendingNotificationAlertThreshold: config.heartbeatPendingNotificationAlertThreshold,
+      recentErrorLookbackMinutes: config.heartbeatErrorLookbackMinutes
+    }
   });
   const identityProfileStore = new IdentityProfileStore(config.stateDir);
   const oauthService = new OAuthService({
@@ -100,6 +119,7 @@ async function main(): Promise<void> {
   await noteStore.ensureReady();
   await taskStore.ensureReady();
   await approvalStore.ensureReady();
+  await heartbeatService.ensureReady();
   await conversationStore.ensureReady();
   await identityProfileStore.ensureReady();
   await oauthService.ensureReady();
@@ -183,6 +203,7 @@ async function main(): Promise<void> {
     codexApiKey: config.openAiApiKey,
     conversationStore,
     identityProfileStore,
+    heartbeatService,
     whatsAppLiveManager: whatsAppLiveRuntime,
     baileysInboundToken: config.whatsAppBaileysInboundToken
   });
@@ -209,7 +230,10 @@ async function main(): Promise<void> {
     });
   }
 
+  await heartbeatService.start();
+
   const shutdown = async () => {
+    await heartbeatService.stop();
     await dispatcher.stop();
     await reminderDispatcher.stop();
     await memoryService.stop();
