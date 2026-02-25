@@ -181,6 +181,7 @@ Deliverables:
 - Stream retention/noise controls: enforce bounded conversation stream persistence and short-window duplicate suppression, with optional noisy-event inclusion for diagnostics.
 - Operator auth-path control: allow per-request auth preference selection (`auto`, `oauth`, `api_key`) in `/ui` for deterministic fallback testing.
 - Memory-aware chat path: inject top cited memory hits into chat prompts and return explicit memory references for recall traceability.
+- Daily memory compaction loop: summarize prior-day conversation events into bounded memory notes with persistent compaction cursor state, periodic scheduling, and manual run/status APIs (`/v1/memory/compaction/status`, `/v1/memory/compaction/run`).
 - Conversation continuity path: surface persisted session transcript in `/ui` and inject bounded recent session turns into chat prompts for restart-safe continuity.
 - Transcript operability hardening: add day-scoped transcript filtering in `/ui` with bounded `since`/`until` reads so long-running histories stay navigable.
 - Heartbeat reliability loop: add periodic heartbeat scheduler with active-hour and idle-queue gating, deduped alert delivery, explicit dependency checks (OpenAI auth disconnect, WhatsApp disconnect, long-running jobs), and operator controls (`/v1/heartbeat/status`, `/v1/heartbeat/configure`, `/v1/heartbeat/run`) exposed in `/ui`.

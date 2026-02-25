@@ -108,7 +108,14 @@ Phase 3 Manual Checklist
 3. Search memory:
    curl -s "http://localhost:3000/v1/memory/search?q=what+did+we+choose+for+v1"
 4. Confirm results include source citations (`path:start:end`).
-5. Send a related chat question via `/ui` and confirm response includes `Memory references` lines.
+5. Check compaction status:
+   curl -s http://localhost:3000/v1/memory/compaction/status
+6. Run compaction manually for a prior day with conversation activity:
+   curl -s -X POST http://localhost:3000/v1/memory/compaction/run \
+     -H 'content-type: application/json' \
+     -d '{"targetDate":"2026-02-24","force":true}'
+7. Confirm compaction status updates (`lastCompactedDate`) and re-running for current cursor day reports skipped/already processed.
+8. Send a related chat question via `/ui` and confirm response includes `Memory references` lines.
 
 Phase 4 Manual Checklist
 1. Prepare a local/allowlisted skill repo with `skill.json` and runnable entrypoint.

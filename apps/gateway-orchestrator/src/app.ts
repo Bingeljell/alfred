@@ -55,6 +55,11 @@ const HeartbeatRunBodySchema = z.object({
   force: z.boolean().optional()
 });
 
+const MemoryCompactionRunBodySchema = z.object({
+  force: z.boolean().optional(),
+  targetDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
+});
+
 const DEFAULT_STREAM_KINDS = ["chat", "command", "job", "error"] as const;
 const ConversationSourceValues = ["gateway", "whatsapp", "auth", "memory", "worker", "system"] as const;
 const ConversationChannelValues = ["direct", "baileys", "api", "internal"] as const;
@@ -186,6 +191,19 @@ export function createGatewayApp(
       }) => Promise<unknown>;
       runNow: (options?: { force?: boolean; trigger?: string }) => Promise<unknown>;
     };
+    memoryCompactionService?: {
+      status: () => Promise<unknown> | unknown;
+      configure: (patch: {
+        enabled?: boolean;
+        intervalMs?: number;
+        maxDaysPerRun?: number;
+        minEventsPerDay?: number;
+        maxEventsPerDay?: number;
+        maxNoteChars?: number;
+        sessionId?: string;
+      }) => Promise<unknown>;
+      runNow: (options?: { force?: boolean; trigger?: string; targetDate?: string }) => Promise<unknown>;
+    };
     capabilityPolicy?: {
       workspaceDir?: string;
       approvalDefault?: boolean;
@@ -225,6 +243,7 @@ export function createGatewayApp(
   const codexAuthService = options?.codexAuthService;
   const whatsAppLiveManager = options?.whatsAppLiveManager;
   const heartbeatService = options?.heartbeatService;
+  const memoryCompactionService = options?.memoryCompactionService;
   const conversationStore = options?.conversationStore;
   const identityProfileStore = options?.identityProfileStore;
   const baileysInboundToken = options?.baileysInboundToken?.trim() ? options.baileysInboundToken.trim() : undefined;
@@ -587,6 +606,35 @@ export function createGatewayApp(
 
     await memoryService.syncMemory("manual_api");
     res.status(200).json({ synced: true, status: memoryService.memoryStatus() });
+  });
+
+  app.get("/v1/memory/compaction/status", async (_req, res) => {
+    if (!memoryCompactionService) {
+      res.status(404).json({ error: "memory_compaction_not_configured" });
+      return;
+    }
+
+    const status = await memoryCompactionService.status();
+    res.status(200).json(status);
+  });
+
+  app.post("/v1/memory/compaction/run", async (req, res) => {
+    if (!memoryCompactionService) {
+      res.status(404).json({ error: "memory_compaction_not_configured" });
+      return;
+    }
+
+    try {
+      const input = MemoryCompactionRunBodySchema.parse(req.body ?? {});
+      const status = await memoryCompactionService.runNow({
+        force: input.force ?? true,
+        targetDate: input.targetDate,
+        trigger: "manual_api"
+      });
+      res.status(200).json(status);
+    } catch (error) {
+      res.status(400).json({ error: "invalid_memory_compaction_run_request", detail: String(error) });
+    }
   });
 
   app.get("/v1/memory/search", async (req, res) => {

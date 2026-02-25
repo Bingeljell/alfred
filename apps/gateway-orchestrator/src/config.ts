@@ -23,6 +23,36 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ? Number(v) : 500))
     .pipe(z.number().int().min(100).max(60000)),
+  MEMORY_COMPACTION_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  MEMORY_COMPACTION_INTERVAL_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 60 * 60 * 1000))
+    .pipe(z.number().int().min(60_000).max(24 * 60 * 60 * 1000)),
+  MEMORY_COMPACTION_MAX_DAYS_PER_RUN: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 2))
+    .pipe(z.number().int().min(1).max(30)),
+  MEMORY_COMPACTION_MIN_EVENTS_PER_DAY: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 6))
+    .pipe(z.number().int().min(1).max(500)),
+  MEMORY_COMPACTION_MAX_EVENTS_PER_DAY: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 600))
+    .pipe(z.number().int().min(20).max(5000)),
+  MEMORY_COMPACTION_MAX_NOTE_CHARS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 8000))
+    .pipe(z.number().int().min(400).max(20_000)),
+  MEMORY_COMPACTION_SESSION_ID: z.string().optional().default("owner@s.whatsapp.net"),
   HEARTBEAT_ENABLED: z
     .string()
     .optional()
@@ -224,6 +254,13 @@ export type AppConfig = {
   workerPollMs: number;
   notificationPollMs: number;
   reminderPollMs: number;
+  memoryCompactionEnabled: boolean;
+  memoryCompactionIntervalMs: number;
+  memoryCompactionMaxDaysPerRun: number;
+  memoryCompactionMinEventsPerDay: number;
+  memoryCompactionMaxEventsPerDay: number;
+  memoryCompactionMaxNoteChars: number;
+  memoryCompactionSessionId: string;
   heartbeatEnabled: boolean;
   heartbeatIntervalMs: number;
   heartbeatActiveHoursStart: number;
@@ -312,6 +349,13 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     workerPollMs: parsed.WORKER_POLL_MS,
     notificationPollMs: parsed.NOTIFICATION_POLL_MS,
     reminderPollMs: parsed.REMINDER_POLL_MS,
+    memoryCompactionEnabled: parsed.MEMORY_COMPACTION_ENABLED,
+    memoryCompactionIntervalMs: parsed.MEMORY_COMPACTION_INTERVAL_MS,
+    memoryCompactionMaxDaysPerRun: parsed.MEMORY_COMPACTION_MAX_DAYS_PER_RUN,
+    memoryCompactionMinEventsPerDay: parsed.MEMORY_COMPACTION_MIN_EVENTS_PER_DAY,
+    memoryCompactionMaxEventsPerDay: parsed.MEMORY_COMPACTION_MAX_EVENTS_PER_DAY,
+    memoryCompactionMaxNoteChars: parsed.MEMORY_COMPACTION_MAX_NOTE_CHARS,
+    memoryCompactionSessionId: parsed.MEMORY_COMPACTION_SESSION_ID.trim() || "owner@s.whatsapp.net",
     heartbeatEnabled: parsed.HEARTBEAT_ENABLED,
     heartbeatIntervalMs: parsed.HEARTBEAT_INTERVAL_MS,
     heartbeatActiveHoursStart: parsed.HEARTBEAT_ACTIVE_HOURS_START,

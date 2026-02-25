@@ -179,6 +179,22 @@ Testing:
 - Automated: command parser, config parsing, and gateway-service unit tests for web-search approvals and file-write policy enforcement.
 - Manual: run `/policy`, `/web ...`, and `/write ...` with different `ALFRED_*` env combinations and verify approval/workspace behavior.
 
+## 11) Daily Memory Compaction
+
+Description:
+- Add a bounded daily compaction pass that summarizes prior-day conversation events into memory notes so long-running transcripts stay usable without uncontrolled context growth.
+
+Acceptance criteria:
+- Compaction runs on startup + interval and only targets prior UTC days (never partial current day).
+- Compaction state is persisted (`cursorDate`, `lastCompactedDate`, counters) so restart behavior is deterministic and non-duplicative.
+- Summary notes are bounded (`MEMORY_COMPACTION_MAX_NOTE_CHARS`) and include auditable metadata (window, counts, notable events).
+- Manual APIs are available for operators: `GET /v1/memory/compaction/status` and `POST /v1/memory/compaction/run`.
+- Successful compaction triggers memory index sync and emits a `source=memory` status event to the unified stream.
+
+Testing:
+- Automated: unit coverage for compaction success, low-signal skip behavior, invalid manual target handling, config parsing defaults/overrides, and route registration.
+- Manual: run compaction status/manual run APIs, verify memory note append for prior day, and verify duplicate re-run is skipped once cursor is current.
+
 ## Security Baseline (v1)
 
 - Side-effect actions require explicit confirmation.

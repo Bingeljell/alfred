@@ -15,6 +15,7 @@ import { startReminderDispatcher } from "./builtins/reminder_dispatcher";
 import { HeartbeatService } from "./builtins/heartbeat_service";
 import { ConversationStore } from "./builtins/conversation_store";
 import { WebSearchService } from "./builtins/web_search_service";
+import { MemoryCompactionService } from "./builtins/memory_compaction_service";
 import { IdentityProfileStore } from "./auth/identity_profile_store";
 import { OAuthService } from "./auth/oauth_service";
 import { OpenAIResponsesService } from "./llm/openai_responses_service";
@@ -174,6 +175,19 @@ async function main(): Promise<void> {
     rootDir: process.cwd(),
     stateDir: config.stateDir
   });
+  const memoryCompactionService = new MemoryCompactionService(config.stateDir, {
+    conversationStore,
+    memoryService,
+    defaultConfig: {
+      enabled: config.memoryCompactionEnabled,
+      intervalMs: config.memoryCompactionIntervalMs,
+      maxDaysPerRun: config.memoryCompactionMaxDaysPerRun,
+      minEventsPerDay: config.memoryCompactionMinEventsPerDay,
+      maxEventsPerDay: config.memoryCompactionMaxEventsPerDay,
+      maxNoteChars: config.memoryCompactionMaxNoteChars,
+      sessionId: config.memoryCompactionSessionId
+    }
+  });
 
   await store.ensureReady();
   await dedupeStore.ensureReady();
@@ -184,6 +198,7 @@ async function main(): Promise<void> {
   await approvalStore.ensureReady();
   await conversationStore.ensureReady();
   await heartbeatService.ensureReady();
+  await memoryCompactionService.ensureReady();
   await identityProfileStore.ensureReady();
   await oauthService.ensureReady();
   await fs.mkdir(config.alfredWorkspaceDir, { recursive: true });
@@ -285,6 +300,7 @@ async function main(): Promise<void> {
     conversationStore,
     identityProfileStore,
     heartbeatService,
+    memoryCompactionService,
     whatsAppLiveManager: whatsAppLiveRuntime,
     capabilityPolicy: {
       workspaceDir: config.alfredWorkspaceDir,
@@ -323,8 +339,10 @@ async function main(): Promise<void> {
   }
 
   await heartbeatService.start();
+  await memoryCompactionService.start();
 
   const shutdown = async () => {
+    await memoryCompactionService.stop();
     await heartbeatService.stop();
     await dispatcher.stop();
     await reminderDispatcher.stop();

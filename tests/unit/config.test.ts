@@ -6,6 +6,13 @@ describe("loadConfig", () => {
     const config = loadConfig({});
     expect(config.port).toBe(3000);
     expect(config.workerPollMs).toBe(250);
+    expect(config.memoryCompactionEnabled).toBe(true);
+    expect(config.memoryCompactionIntervalMs).toBe(3600000);
+    expect(config.memoryCompactionMaxDaysPerRun).toBe(2);
+    expect(config.memoryCompactionMinEventsPerDay).toBe(6);
+    expect(config.memoryCompactionMaxEventsPerDay).toBe(600);
+    expect(config.memoryCompactionMaxNoteChars).toBe(8000);
+    expect(config.memoryCompactionSessionId).toBe("owner@s.whatsapp.net");
     expect(config.heartbeatEnabled).toBe(true);
     expect(config.heartbeatIntervalMs).toBe(1800000);
     expect(config.heartbeatActiveHoursStart).toBe(9);
@@ -62,6 +69,13 @@ describe("loadConfig", () => {
       PORT: "4010",
       STATE_DIR: "./tmp/state-a",
       WORKER_POLL_MS: "500",
+      MEMORY_COMPACTION_ENABLED: "false",
+      MEMORY_COMPACTION_INTERVAL_MS: "900000",
+      MEMORY_COMPACTION_MAX_DAYS_PER_RUN: "3",
+      MEMORY_COMPACTION_MIN_EVENTS_PER_DAY: "9",
+      MEMORY_COMPACTION_MAX_EVENTS_PER_DAY: "900",
+      MEMORY_COMPACTION_MAX_NOTE_CHARS: "7000",
+      MEMORY_COMPACTION_SESSION_ID: "memory-session@test",
       HEARTBEAT_ENABLED: "false",
       HEARTBEAT_INTERVAL_MS: "45000",
       HEARTBEAT_ACTIVE_HOURS_START: "7",
@@ -122,6 +136,13 @@ describe("loadConfig", () => {
 
     expect(config.port).toBe(4010);
     expect(config.workerPollMs).toBe(500);
+    expect(config.memoryCompactionEnabled).toBe(false);
+    expect(config.memoryCompactionIntervalMs).toBe(900000);
+    expect(config.memoryCompactionMaxDaysPerRun).toBe(3);
+    expect(config.memoryCompactionMinEventsPerDay).toBe(9);
+    expect(config.memoryCompactionMaxEventsPerDay).toBe(900);
+    expect(config.memoryCompactionMaxNoteChars).toBe(7000);
+    expect(config.memoryCompactionSessionId).toBe("memory-session@test");
     expect(config.heartbeatEnabled).toBe(false);
     expect(config.heartbeatIntervalMs).toBe(45000);
     expect(config.heartbeatActiveHoursStart).toBe(7);
