@@ -5,7 +5,10 @@ type ChatReplyTransport = {
 };
 
 function isValidJid(value: unknown): value is string {
-  return typeof value === "string" && value.endsWith("@s.whatsapp.net");
+  return (
+    typeof value === "string" &&
+    (value.endsWith("@s.whatsapp.net") || value.endsWith("@lid"))
+  );
 }
 
 export async function maybeSendBaileysChatReply(
