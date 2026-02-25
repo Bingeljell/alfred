@@ -25,6 +25,8 @@ Web Console Manual Checklist
 21. Send a long research-style prompt (for example: `research best stable diffusion models and compare options`) and confirm immediate async-job acknowledgment is returned (not a long blocking turn).
 22. Wait for worker updates and confirm progress notifications appear (running/progress/succeeded) and `status?` returns latest active job state.
 23. If response is paged, send `#next` repeatedly and confirm each page is returned until completion.
+24. Send an ambiguous request (for example: `help me with models`) and confirm Alfred asks a clarifying question instead of executing uncertain work.
+25. Send `/policy` and confirm `approvalMode: balanced` (or your configured mode) is reported.
 
 Heartbeat Manual Checklist
 1. Open `/ui` and use the Heartbeat section.

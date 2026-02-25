@@ -190,6 +190,9 @@ Deliverables:
 - Approval UX hardening: support tokenless yes/no approval decisions scoped to latest pending action per session across web and WhatsApp channels.
 - Operator feedback hardening: emit in-flight progress notifications for slower command paths (starting with `/web`) so chat channels are not silent during long operations.
 - Long-task routing hardening: route `/web` and research-style long prompts into worker jobs with immediate acknowledgements, worker-side progress events, `status?` responses, and paged `#next` result delivery for large responses.
+- Planner-first routing: run an LLM intent planner for non-command chat turns with structured intent output, confidence-based clarification fallback, and deterministic policy enforcement.
+- System-prompt stack: load Alfred identity/capability/policy markdown files and inject them into planner context so behavior remains auditable and easy to tune without code changes.
+- Approval-mode policy: support `strict`/`balanced`/`relaxed` capability approval modes with `balanced` as default for early autonomy with bounded risk.
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.

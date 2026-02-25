@@ -130,10 +130,24 @@ const EnvSchema = z.object({
     .pipe(z.number().int().min(0).max(60000)),
   PUBLIC_BASE_URL: z.string().optional().default("http://localhost:3000"),
   ALFRED_WORKSPACE_DIR: z.string().optional().default("./workspace/alfred"),
+  ALFRED_APPROVAL_MODE: z.enum(["strict", "balanced", "relaxed"]).optional().default("balanced"),
   ALFRED_APPROVAL_DEFAULT: z
     .string()
     .optional()
     .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  ALFRED_PLANNER_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  ALFRED_PLANNER_MIN_CONFIDENCE: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 0.65))
+    .pipe(z.number().min(0).max(1)),
+  ALFRED_PLANNER_SYSTEM_FILES: z
+    .string()
+    .optional()
+    .default("docs/alfred_identity.md,docs/alfred_capabilities.md,docs/alfred_policies.md"),
   ALFRED_WEB_SEARCH_ENABLED: z
     .string()
     .optional()
@@ -280,7 +294,11 @@ export type AppConfig = {
   streamDedupeWindowMs: number;
   publicBaseUrl: string;
   alfredWorkspaceDir: string;
+  alfredApprovalMode: "strict" | "balanced" | "relaxed";
   alfredApprovalDefault: boolean;
+  alfredPlannerEnabled: boolean;
+  alfredPlannerMinConfidence: number;
+  alfredPlannerSystemFiles: string[];
   alfredWebSearchEnabled: boolean;
   alfredWebSearchRequireApproval: boolean;
   alfredWebSearchProvider: "openai" | "brave" | "perplexity" | "auto";
@@ -375,7 +393,13 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     streamDedupeWindowMs: parsed.STREAM_DEDUPE_WINDOW_MS,
     publicBaseUrl: parsed.PUBLIC_BASE_URL.replace(/\/+$/, ""),
     alfredWorkspaceDir: path.resolve(parsed.ALFRED_WORKSPACE_DIR),
+    alfredApprovalMode: parsed.ALFRED_APPROVAL_MODE,
     alfredApprovalDefault: parsed.ALFRED_APPROVAL_DEFAULT,
+    alfredPlannerEnabled: parsed.ALFRED_PLANNER_ENABLED,
+    alfredPlannerMinConfidence: parsed.ALFRED_PLANNER_MIN_CONFIDENCE,
+    alfredPlannerSystemFiles: parsed.ALFRED_PLANNER_SYSTEM_FILES.split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0),
     alfredWebSearchEnabled: parsed.ALFRED_WEB_SEARCH_ENABLED,
     alfredWebSearchRequireApproval: parsed.ALFRED_WEB_SEARCH_REQUIRE_APPROVAL,
     alfredWebSearchProvider: parsed.ALFRED_WEB_SEARCH_PROVIDER,

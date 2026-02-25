@@ -97,6 +97,7 @@ async function main(): Promise<void> {
       codexChatService = undefined;
     }
   }
+  const jobNotificationState = new Map<string, { lastProgressAt: number; lastProgressText: string }>();
 
   const handle = startWorker({
     store,
@@ -178,18 +179,42 @@ async function main(): Promise<void> {
 
       const summary = event.summary ? ` (${event.summary})` : "";
       const status = event.status === "progress" ? "running" : event.status;
-      const text =
-        event.status === "succeeded" && event.responseText
-          ? event.responseText
-          : event.status === "progress"
-            ? `Job ${event.jobId} progress: ${event.summary ?? "working"}`
-            : `Job ${event.jobId} is ${event.status}${summary}`;
+      const now = Date.now();
+      const notifyState = jobNotificationState.get(event.jobId) ?? { lastProgressAt: 0, lastProgressText: "" };
+
+      let text: string | null = null;
+      if (event.status === "running") {
+        text = `Working on job ${event.jobId}...`;
+      } else if (event.status === "progress") {
+        const nextText = String(event.summary ?? "still working");
+        const shouldSend =
+          now - notifyState.lastProgressAt >= 45_000 && nextText.trim() && nextText !== notifyState.lastProgressText;
+        if (shouldSend) {
+          text = `Still working on job ${event.jobId}: ${nextText}`;
+          notifyState.lastProgressAt = now;
+          notifyState.lastProgressText = nextText;
+          jobNotificationState.set(event.jobId, notifyState);
+        }
+      } else if (event.status === "succeeded" && event.responseText) {
+        text = event.responseText;
+      } else {
+        text = `Job ${event.jobId} is ${event.status}${summary}`;
+      }
+
+      if (!text) {
+        return;
+      }
+
       await notificationStore.enqueue({
         sessionId: event.sessionId,
         jobId: event.jobId,
         status,
         text
       });
+
+      if (event.status === "succeeded" || event.status === "failed" || event.status === "cancelled") {
+        jobNotificationState.delete(event.jobId);
+      }
     }
   });
 

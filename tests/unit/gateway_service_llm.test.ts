@@ -68,6 +68,7 @@ describe("GatewayService llm path", () => {
       undefined,
       undefined,
       {
+        approvalMode: "strict",
         approvalDefault: true,
         webSearchEnabled: true,
         webSearchRequireApproval: true
@@ -142,12 +143,7 @@ describe("GatewayService llm path", () => {
     const queued = jobs[0];
     expect(queued?.status).toBe("queued");
     expect(queued?.payload?.provider).toBe("brave");
-    expect(notifications.enqueue).toHaveBeenCalled();
-    const payloads = (notifications.enqueue as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(
-      (entry) => entry[0] as { status?: string; text?: string }
-    );
-    expect(payloads.some((entry) => entry.status === "queued")).toBe(true);
-    expect(payloads.some((entry) => entry.status === "running")).toBe(true);
+    expect(notifications.enqueue).not.toHaveBeenCalled();
   });
 
   it("routes research-style long requests to worker and answers progress queries", async () => {

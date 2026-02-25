@@ -161,6 +161,21 @@ export function createGatewayApp(
         }
       ) => Promise<{ provider: "openai" | "brave" | "perplexity"; text: string } | null>;
     };
+    intentPlanner?: {
+      plan: (
+        sessionId: string,
+        message: string,
+        options?: { authPreference?: "auto" | "oauth" | "api_key"; hasActiveJob?: boolean }
+      ) => Promise<{
+        intent: "chat" | "web_research" | "status_query" | "clarify" | "command";
+        confidence: number;
+        needsWorker: boolean;
+        query?: string;
+        question?: string;
+        provider?: "openai" | "brave" | "perplexity" | "auto";
+        reason: string;
+      }>;
+    };
     codexAuthService?: CodexAuthService;
     codexLoginMode?: CodexLoginStartMode;
     codexApiKey?: string;
@@ -210,6 +225,7 @@ export function createGatewayApp(
     };
     capabilityPolicy?: {
       workspaceDir?: string;
+      approvalMode?: "strict" | "balanced" | "relaxed";
       approvalDefault?: boolean;
       webSearchEnabled?: boolean;
       webSearchRequireApproval?: boolean;
@@ -240,7 +256,8 @@ export function createGatewayApp(
     options?.memoryService,
     options?.capabilityPolicy,
     options?.webSearchService,
-    options?.pagedResponseStore
+    options?.pagedResponseStore,
+    options?.intentPlanner
   );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;

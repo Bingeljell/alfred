@@ -32,7 +32,15 @@ describe("loadConfig", () => {
     expect(config.streamDedupeWindowMs).toBe(2500);
     expect(config.publicBaseUrl).toBe("http://localhost:3000");
     expect(config.alfredWorkspaceDir.endsWith("workspace/alfred")).toBe(true);
+    expect(config.alfredApprovalMode).toBe("balanced");
     expect(config.alfredApprovalDefault).toBe(true);
+    expect(config.alfredPlannerEnabled).toBe(true);
+    expect(config.alfredPlannerMinConfidence).toBe(0.65);
+    expect(config.alfredPlannerSystemFiles).toEqual([
+      "docs/alfred_identity.md",
+      "docs/alfred_capabilities.md",
+      "docs/alfred_policies.md"
+    ]);
     expect(config.alfredWebSearchEnabled).toBe(true);
     expect(config.alfredWebSearchRequireApproval).toBe(true);
     expect(config.alfredWebSearchProvider).toBe("openai");
@@ -95,7 +103,11 @@ describe("loadConfig", () => {
       STREAM_DEDUPE_WINDOW_MS: "1200",
       PUBLIC_BASE_URL: "http://localhost:4010/",
       ALFRED_WORKSPACE_DIR: "./tmp/alfred-workspace",
+      ALFRED_APPROVAL_MODE: "strict",
       ALFRED_APPROVAL_DEFAULT: "false",
+      ALFRED_PLANNER_ENABLED: "false",
+      ALFRED_PLANNER_MIN_CONFIDENCE: "0.8",
+      ALFRED_PLANNER_SYSTEM_FILES: "docs/a.md,docs/b.md",
       ALFRED_WEB_SEARCH_ENABLED: "false",
       ALFRED_WEB_SEARCH_REQUIRE_APPROVAL: "false",
       ALFRED_WEB_SEARCH_PROVIDER: "brave",
@@ -162,7 +174,11 @@ describe("loadConfig", () => {
     expect(config.streamDedupeWindowMs).toBe(1200);
     expect(config.publicBaseUrl).toBe("http://localhost:4010");
     expect(config.alfredWorkspaceDir.endsWith("tmp/alfred-workspace")).toBe(true);
+    expect(config.alfredApprovalMode).toBe("strict");
     expect(config.alfredApprovalDefault).toBe(false);
+    expect(config.alfredPlannerEnabled).toBe(false);
+    expect(config.alfredPlannerMinConfidence).toBe(0.8);
+    expect(config.alfredPlannerSystemFiles).toEqual(["docs/a.md", "docs/b.md"]);
     expect(config.alfredWebSearchEnabled).toBe(false);
     expect(config.alfredWebSearchRequireApproval).toBe(false);
     expect(config.alfredWebSearchProvider).toBe("brave");

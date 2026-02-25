@@ -1,0 +1,75 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { IntentPlanner } from "../../apps/gateway-orchestrator/src/builtins/intent_planner";
+import { SystemPromptCatalog } from "../../apps/gateway-orchestrator/src/builtins/system_prompt_catalog";
+
+describe("IntentPlanner", () => {
+  it("returns command intent for slash commands without calling llm", async () => {
+    const llm = {
+      generateText: vi.fn()
+    };
+    const catalog = new SystemPromptCatalog(process.cwd(), []);
+    const planner = new IntentPlanner({
+      llmService: llm as never,
+      systemPromptCatalog: catalog
+    });
+
+    const result = await planner.plan("s1", "/task list");
+    expect(result.intent).toBe("command");
+    expect(llm.generateText).toHaveBeenCalledTimes(0);
+  });
+
+  it("uses llm json decision when available", async () => {
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: '{"intent":"web_research","confidence":0.92,"needsWorker":true,"query":"best stable diffusion models","provider":"brave","reason":"research_task"}'
+      })
+    };
+    const catalog = new SystemPromptCatalog(process.cwd(), []);
+    const planner = new IntentPlanner({
+      llmService: llm as never,
+      systemPromptCatalog: catalog
+    });
+
+    const result = await planner.plan("s1", "research best stable diffusion models");
+    expect(result.intent).toBe("web_research");
+    expect(result.needsWorker).toBe(true);
+    expect(result.provider).toBe("brave");
+    expect(result.query).toBe("best stable diffusion models");
+  });
+
+  it("falls back to heuristic when llm output is invalid json", async () => {
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "I think this is probably a research request"
+      })
+    };
+    const catalog = new SystemPromptCatalog(process.cwd(), []);
+    const planner = new IntentPlanner({
+      llmService: llm as never,
+      systemPromptCatalog: catalog
+    });
+
+    const result = await planner.plan("s1", "research and compare top local llm models");
+    expect(result.intent).toBe("web_research");
+    expect(result.needsWorker).toBe(true);
+    expect(result.reason).toContain("heuristic");
+  });
+
+  it("loads system prompt docs from configured files", async () => {
+    const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-prompt-catalog-unit-"));
+    const docsDir = path.join(rootDir, "docs");
+    await fs.mkdir(docsDir, { recursive: true });
+    await fs.writeFile(path.join(docsDir, "a.md"), "alpha", "utf8");
+    await fs.writeFile(path.join(docsDir, "b.md"), "beta", "utf8");
+
+    const catalog = new SystemPromptCatalog(rootDir, ["docs/a.md", "docs/b.md"]);
+    const prompt = await catalog.load();
+    expect(prompt).toContain("docs/a.md");
+    expect(prompt).toContain("alpha");
+    expect(prompt).toContain("docs/b.md");
+    expect(prompt).toContain("beta");
+  });
+});

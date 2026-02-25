@@ -29,6 +29,7 @@ type RoutedLongTask = {
 
 type CapabilityPolicy = {
   workspaceDir: string;
+  approvalMode: "strict" | "balanced" | "relaxed";
   approvalDefault: boolean;
   webSearchEnabled: boolean;
   webSearchRequireApproval: boolean;
@@ -41,6 +42,7 @@ type CapabilityPolicy = {
 
 const DEFAULT_CAPABILITY_POLICY: CapabilityPolicy = {
   workspaceDir: path.resolve(process.cwd(), "workspace", "alfred"),
+  approvalMode: "balanced",
   approvalDefault: true,
   webSearchEnabled: true,
   webSearchRequireApproval: true,
@@ -99,6 +101,21 @@ export class GatewayService {
     private readonly pagedResponseStore?: {
       popNext: (sessionId: string) => Promise<{ page: string; remaining: number } | null>;
       clear: (sessionId: string) => Promise<void>;
+    },
+    private readonly intentPlanner?: {
+      plan: (
+        sessionId: string,
+        message: string,
+        options?: { authPreference?: LlmAuthPreference; hasActiveJob?: boolean }
+      ) => Promise<{
+        intent: "chat" | "web_research" | "status_query" | "clarify" | "command";
+        confidence: number;
+        needsWorker: boolean;
+        query?: string;
+        question?: string;
+        provider?: WebSearchProvider;
+        reason: string;
+      }>;
     }
   ) {
     this.webSearchService = webSearchService;
@@ -106,6 +123,7 @@ export class GatewayService {
       ...DEFAULT_CAPABILITY_POLICY,
       ...(capabilityPolicy ?? {}),
       workspaceDir: path.resolve(capabilityPolicy?.workspaceDir ?? DEFAULT_CAPABILITY_POLICY.workspaceDir),
+      approvalMode: capabilityPolicy?.approvalMode ?? DEFAULT_CAPABILITY_POLICY.approvalMode,
       webSearchProvider: this.normalizeWebSearchProvider(capabilityPolicy?.webSearchProvider) ?? DEFAULT_CAPABILITY_POLICY.webSearchProvider,
       fileWriteNotesDir: (capabilityPolicy?.fileWriteNotesDir ?? DEFAULT_CAPABILITY_POLICY.fileWriteNotesDir).trim() || "notes"
     };
@@ -189,6 +207,85 @@ export class GatewayService {
         };
       }
 
+      const activeJob = await this.findLatestActiveJob(inbound.sessionId);
+      const plan = await this.intentPlanner?.plan(authSessionId, inbound.text, {
+        authPreference,
+        hasActiveJob: activeJob !== null
+      });
+
+      if (plan?.intent === "clarify") {
+        const question = plan.question?.trim() || "Can you clarify what output you want first?";
+        await this.recordConversation(inbound.sessionId, "outbound", question, {
+          source: "gateway",
+          channel: "internal",
+          kind: "chat",
+          metadata: {
+            authSessionId,
+            plannerIntent: plan.intent,
+            plannerConfidence: plan.confidence,
+            plannerReason: plan.reason
+          }
+        });
+        return {
+          accepted: true,
+          mode: "chat",
+          response: question
+        };
+      }
+
+      if (plan?.intent === "status_query") {
+        const progressStatus = await this.answerProgressQuery(inbound.sessionId, inbound.text);
+        if (progressStatus) {
+          await this.recordConversation(inbound.sessionId, "outbound", progressStatus, {
+            source: "gateway",
+            channel: "internal",
+            kind: "job",
+            metadata: {
+              authSessionId,
+              progressQuery: true,
+              plannerIntent: plan.intent,
+              plannerConfidence: plan.confidence,
+              plannerReason: plan.reason
+            }
+          });
+          return {
+            accepted: true,
+            mode: "chat",
+            response: progressStatus
+          };
+        }
+      }
+
+      if (plan?.intent === "web_research" && plan.needsWorker && plan.query?.trim()) {
+        const job = await this.enqueueLongTaskJob(inbound.sessionId, {
+          taskType: "web_search",
+          query: plan.query.trim(),
+          provider: plan.provider ?? this.capabilityPolicy.webSearchProvider,
+          authSessionId,
+          authPreference,
+          reason: `planner_${plan.reason}`
+        });
+        const response = `Queued research as job ${job.id}. I will share concise progress and final results here.`;
+        await this.recordConversation(inbound.sessionId, "outbound", response, {
+          source: "gateway",
+          channel: "internal",
+          kind: "job",
+          metadata: {
+            authSessionId,
+            plannerIntent: plan.intent,
+            plannerConfidence: plan.confidence,
+            plannerReason: plan.reason,
+            jobId: job.id
+          }
+        });
+        return {
+          accepted: true,
+          mode: "async-job",
+          response,
+          jobId: job.id
+        };
+      }
+
       const command = parseCommand(inbound.text);
       if (command) {
         const response = await this.executeCommand(inbound.sessionId, command, authSessionId, authPreference);
@@ -227,7 +324,7 @@ export class GatewayService {
           return {
             accepted: true,
             mode: "chat",
-          response: decisionResult.response
+            response: decisionResult.response
           };
         }
       }
@@ -552,6 +649,7 @@ export class GatewayService {
         return [
           "Capability policy:",
           `- workspaceDir: ${this.capabilityPolicy.workspaceDir}`,
+          `- approvalMode: ${this.capabilityPolicy.approvalMode}`,
           `- approvalDefault: ${String(this.capabilityPolicy.approvalDefault)}`,
           `- webSearch: enabled=${String(this.capabilityPolicy.webSearchEnabled)}, requireApproval=${String(this.capabilityPolicy.webSearchRequireApproval)}, provider=${this.capabilityPolicy.webSearchProvider}`,
           `- fileWrite: enabled=${String(this.capabilityPolicy.fileWriteEnabled)}, requireApproval=${String(this.capabilityPolicy.fileWriteRequireApproval)}, notesOnly=${String(this.capabilityPolicy.fileWriteNotesOnly)}, notesDir=${this.capabilityPolicy.fileWriteNotesDir}`
@@ -841,9 +939,6 @@ export class GatewayService {
       },
       priority: 5
     });
-
-    await this.queueJobNotification(sessionId, job.id, "queued", `Job ${job.id} queued: ${input.taskType}`);
-    await this.queueInFlightStatus(sessionId, `Started ${input.taskType} job ${job.id}...`);
     return job;
   }
 
@@ -1152,6 +1247,17 @@ export class GatewayService {
   }
 
   private requiresApproval(capability: ExternalCapability): boolean {
+    if (this.capabilityPolicy.approvalMode === "strict") {
+      return true;
+    }
+    if (this.capabilityPolicy.approvalMode === "balanced") {
+      if (capability === "web_search") {
+        return false;
+      }
+      if (capability === "file_write") {
+        return true;
+      }
+    }
     if (!this.capabilityPolicy.approvalDefault) {
       return false;
     }

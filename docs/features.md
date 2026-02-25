@@ -211,6 +211,22 @@ Testing:
 - Automated: unit coverage for routed web-search command behavior, progress query handling, `#next` paging, paged store persistence, and worker progress event/reporting.
 - Manual: trigger long research request, confirm immediate queue acknowledgement + progress updates, then use `status?` and `#next` until pages are exhausted.
 
+## 13) Planner-first Orchestration + System Prompt Stack
+
+Description:
+- Add an LLM intent planner as Alfred’s default decision layer for non-command chat, backed by policy enforcement and an explicit system-prompt stack.
+
+Acceptance criteria:
+- Planner runs for normal chat turns and returns structured intent (`chat`, `web_research`, `status_query`, `clarify`, `command`) with confidence.
+- Low-confidence plans ask clarifying questions instead of executing uncertain actions.
+- System prompt is assembled from dedicated docs files (`docs/alfred_identity.md`, `docs/alfred_capabilities.md`, `docs/alfred_policies.md`).
+- Approval mode is configurable via `ALFRED_APPROVAL_MODE` (`strict`, `balanced`, `relaxed`) and enforced in gateway policy checks.
+- `balanced` mode allows low-risk research autonomy while preserving guarded write behavior.
+
+Testing:
+- Automated: unit coverage for planner JSON parsing/heuristic fallback, config parsing for planner + approval mode, and gateway routing behavior under planner decisions.
+- Manual: send ambiguous prompt to verify clarification, send research prompt to verify planner-based worker delegation, and verify `/policy` reports current approval mode.
+
 ## Security Baseline (v1)
 
 - Side-effect actions require explicit confirmation.

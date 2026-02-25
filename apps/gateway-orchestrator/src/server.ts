@@ -17,6 +17,8 @@ import { ConversationStore } from "./builtins/conversation_store";
 import { WebSearchService } from "./builtins/web_search_service";
 import { MemoryCompactionService } from "./builtins/memory_compaction_service";
 import { PagedResponseStore } from "./builtins/paged_response_store";
+import { SystemPromptCatalog } from "./builtins/system_prompt_catalog";
+import { IntentPlanner } from "./builtins/intent_planner";
 import { IdentityProfileStore } from "./auth/identity_profile_store";
 import { OAuthService } from "./auth/oauth_service";
 import { OpenAIResponsesService } from "./llm/openai_responses_service";
@@ -237,6 +239,13 @@ async function main(): Promise<void> {
       timeoutMs: config.perplexityTimeoutMs
     }
   });
+  const systemPromptCatalog = new SystemPromptCatalog(process.cwd(), config.alfredPlannerSystemFiles);
+  const intentPlanner = new IntentPlanner({
+    llmService,
+    systemPromptCatalog,
+    enabled: config.alfredPlannerEnabled,
+    minConfidence: config.alfredPlannerMinConfidence
+  });
 
   if (config.whatsAppProvider === "baileys") {
     const inboundUrl = `http://127.0.0.1:${config.port}/v1/whatsapp/baileys/inbound`;
@@ -297,6 +306,7 @@ async function main(): Promise<void> {
     oauthService,
     llmService,
     webSearchService,
+    intentPlanner,
     codexAuthService,
     codexLoginMode: config.codexAuthLoginMode,
     codexApiKey: config.openAiApiKey,
@@ -308,6 +318,7 @@ async function main(): Promise<void> {
     whatsAppLiveManager: whatsAppLiveRuntime,
     capabilityPolicy: {
       workspaceDir: config.alfredWorkspaceDir,
+      approvalMode: config.alfredApprovalMode,
       approvalDefault: config.alfredApprovalDefault,
       webSearchEnabled: config.alfredWebSearchEnabled,
       webSearchRequireApproval: config.alfredWebSearchRequireApproval,
