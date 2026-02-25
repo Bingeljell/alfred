@@ -146,6 +146,16 @@ export function createGatewayApp(
         options?: { authPreference?: "auto" | "oauth" | "api_key" }
       ) => Promise<{ text: string } | null>;
     };
+    webSearchService?: {
+      search: (
+        query: string,
+        options: {
+          provider?: "openai" | "brave" | "perplexity" | "auto";
+          authSessionId: string;
+          authPreference?: "auto" | "oauth" | "api_key";
+        }
+      ) => Promise<{ provider: "openai" | "brave" | "perplexity"; text: string } | null>;
+    };
     codexAuthService?: CodexAuthService;
     codexLoginMode?: CodexLoginStartMode;
     codexApiKey?: string;
@@ -181,6 +191,7 @@ export function createGatewayApp(
       approvalDefault?: boolean;
       webSearchEnabled?: boolean;
       webSearchRequireApproval?: boolean;
+      webSearchProvider?: "openai" | "brave" | "perplexity" | "auto";
       fileWriteEnabled?: boolean;
       fileWriteRequireApproval?: boolean;
       fileWriteNotesOnly?: boolean;
@@ -205,7 +216,8 @@ export function createGatewayApp(
     options?.conversationStore,
     options?.identityProfileStore,
     options?.memoryService,
-    options?.capabilityPolicy
+    options?.capabilityPolicy,
+    options?.webSearchService
   );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;

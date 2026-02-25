@@ -15,6 +15,7 @@ import { CodexAuthService, type CodexLoginStartMode } from "./codex/auth_service
 import { ConversationStore } from "./builtins/conversation_store";
 import { IdentityProfileStore } from "./auth/identity_profile_store";
 import type { MemoryResult, MemoryService } from "../../../packages/memory/src";
+import type { WebSearchProvider } from "./builtins/web_search_service";
 
 type LlmAuthPreference = "auto" | "oauth" | "api_key";
 type ExternalCapability = "web_search" | "file_write";
@@ -24,6 +25,7 @@ type CapabilityPolicy = {
   approvalDefault: boolean;
   webSearchEnabled: boolean;
   webSearchRequireApproval: boolean;
+  webSearchProvider: WebSearchProvider;
   fileWriteEnabled: boolean;
   fileWriteRequireApproval: boolean;
   fileWriteNotesOnly: boolean;
@@ -35,6 +37,7 @@ const DEFAULT_CAPABILITY_POLICY: CapabilityPolicy = {
   approvalDefault: true,
   webSearchEnabled: true,
   webSearchRequireApproval: true,
+  webSearchProvider: "openai",
   fileWriteEnabled: false,
   fileWriteRequireApproval: true,
   fileWriteNotesOnly: true,
@@ -43,6 +46,16 @@ const DEFAULT_CAPABILITY_POLICY: CapabilityPolicy = {
 
 export class GatewayService {
   private readonly capabilityPolicy: CapabilityPolicy;
+  private readonly webSearchService?: {
+    search: (
+      query: string,
+      options: {
+        provider?: WebSearchProvider;
+        authSessionId: string;
+        authPreference?: LlmAuthPreference;
+      }
+    ) => Promise<{ provider: "openai" | "brave" | "perplexity"; text: string } | null>;
+  };
 
   constructor(
     private readonly store: FileBackedQueueStore,
@@ -65,12 +78,24 @@ export class GatewayService {
     private readonly conversationStore?: ConversationStore,
     private readonly identityProfileStore?: IdentityProfileStore,
     private readonly memoryService?: Pick<MemoryService, "searchMemory">,
-    capabilityPolicy?: Partial<CapabilityPolicy>
+    capabilityPolicy?: Partial<CapabilityPolicy>,
+    webSearchService?: {
+      search: (
+        query: string,
+        options: {
+          provider?: WebSearchProvider;
+          authSessionId: string;
+          authPreference?: LlmAuthPreference;
+        }
+      ) => Promise<{ provider: "openai" | "brave" | "perplexity"; text: string } | null>;
+    }
   ) {
+    this.webSearchService = webSearchService;
     this.capabilityPolicy = {
       ...DEFAULT_CAPABILITY_POLICY,
       ...(capabilityPolicy ?? {}),
       workspaceDir: path.resolve(capabilityPolicy?.workspaceDir ?? DEFAULT_CAPABILITY_POLICY.workspaceDir),
+      webSearchProvider: this.normalizeWebSearchProvider(capabilityPolicy?.webSearchProvider) ?? DEFAULT_CAPABILITY_POLICY.webSearchProvider,
       fileWriteNotesDir: (capabilityPolicy?.fileWriteNotesDir ?? DEFAULT_CAPABILITY_POLICY.fileWriteNotesDir).trim() || "notes"
     };
   }
@@ -438,7 +463,7 @@ export class GatewayService {
           "Capability policy:",
           `- workspaceDir: ${this.capabilityPolicy.workspaceDir}`,
           `- approvalDefault: ${String(this.capabilityPolicy.approvalDefault)}`,
-          `- webSearch: enabled=${String(this.capabilityPolicy.webSearchEnabled)}, requireApproval=${String(this.capabilityPolicy.webSearchRequireApproval)}`,
+          `- webSearch: enabled=${String(this.capabilityPolicy.webSearchEnabled)}, requireApproval=${String(this.capabilityPolicy.webSearchRequireApproval)}, provider=${this.capabilityPolicy.webSearchProvider}`,
           `- fileWrite: enabled=${String(this.capabilityPolicy.fileWriteEnabled)}, requireApproval=${String(this.capabilityPolicy.fileWriteRequireApproval)}, notesOnly=${String(this.capabilityPolicy.fileWriteNotesOnly)}, notesDir=${this.capabilityPolicy.fileWriteNotesDir}`
         ].join("\n");
       }
@@ -454,13 +479,19 @@ export class GatewayService {
           }
           const approval = await this.approvalStore.create(sessionId, "web_search", {
             query: command.query,
+            provider: command.provider ?? this.capabilityPolicy.webSearchProvider,
             authSessionId,
             authPreference
           });
           return `Approval required for web search. Reply: approve ${approval.token}`;
         }
 
-        return this.executeWebSearch(authSessionId, command.query, authPreference);
+        return this.executeWebSearch(
+          authSessionId,
+          command.query,
+          authPreference,
+          command.provider ?? this.capabilityPolicy.webSearchProvider
+        );
       }
 
       case "file_write": {
@@ -516,12 +547,13 @@ export class GatewayService {
             return "Approved action failed: web search is disabled by policy.";
           }
           const query = String(approval.payload.query ?? "").trim();
+          const provider = this.normalizeWebSearchProvider(approval.payload.provider);
           const targetAuthSessionId = String(approval.payload.authSessionId ?? authSessionId).trim() || authSessionId;
           const requestedAuthPreference = this.normalizeAuthPreference(approval.payload.authPreference);
           if (!query) {
             return "Approved action failed: missing web search query.";
           }
-          const output = await this.executeWebSearch(targetAuthSessionId, query, requestedAuthPreference);
+          const output = await this.executeWebSearch(targetAuthSessionId, query, requestedAuthPreference, provider);
           return `Approved action executed: web_search\n${output}`;
         }
         if (approval.action === "file_write") {
@@ -629,6 +661,17 @@ export class GatewayService {
       return "api_key";
     }
     return "auto";
+  }
+
+  private normalizeWebSearchProvider(raw: unknown): WebSearchProvider | undefined {
+    if (typeof raw !== "string") {
+      return undefined;
+    }
+    const value = raw.trim().toLowerCase();
+    if (value === "openai" || value === "brave" || value === "perplexity" || value === "auto") {
+      return value;
+    }
+    return undefined;
   }
 
   private noModelResponse(authPreference: LlmAuthPreference): string {
@@ -830,26 +873,41 @@ export class GatewayService {
   private async executeWebSearch(
     authSessionId: string,
     query: string,
-    authPreference: LlmAuthPreference = "auto"
+    authPreference: LlmAuthPreference = "auto",
+    provider: WebSearchProvider = this.capabilityPolicy.webSearchProvider
   ): Promise<string> {
-    if (!this.llmService) {
-      return "No model backend is configured. Connect ChatGPT OAuth or set OPENAI_API_KEY.";
+    if (this.webSearchService) {
+      try {
+        const result = await this.webSearchService.search(query, {
+          provider,
+          authSessionId,
+          authPreference
+        });
+        if (result?.text?.trim()) {
+          return `Web search provider: ${result.provider}\n${result.text.trim()}`;
+        }
+      } catch (error) {
+        return this.humanizeLlmError(error);
+      }
     }
 
-    const prompt = [
-      "You are a web research assistant.",
-      "Use available web-search/browsing tools if available.",
-      "Return concise findings with source links and publication dates when possible.",
-      `Query: ${query.trim()}`
-    ].join("\n");
+    if (!this.llmService) {
+      return "No web search provider is currently available. Configure OpenAI/Codex, Brave, or Perplexity.";
+    }
 
     try {
+      const prompt = [
+        "You are a web research assistant.",
+        "Use available web-search/browsing tools if available.",
+        "Return concise findings with source links and publication dates when possible.",
+        `Query: ${query.trim()}`
+      ].join("\n");
       const result = await this.llmService.generateText(authSessionId, prompt, { authPreference });
       const text = result?.text?.trim();
       if (!text) {
         return "No web search result is available for this query.";
       }
-      return text;
+      return `Web search provider: openai\n${text}`;
     } catch (error) {
       return this.humanizeLlmError(error);
     }

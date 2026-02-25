@@ -14,6 +14,7 @@ import { ApprovalStore } from "./builtins/approval_store";
 import { startReminderDispatcher } from "./builtins/reminder_dispatcher";
 import { HeartbeatService } from "./builtins/heartbeat_service";
 import { ConversationStore } from "./builtins/conversation_store";
+import { WebSearchService } from "./builtins/web_search_service";
 import { IdentityProfileStore } from "./auth/identity_profile_store";
 import { OAuthService } from "./auth/oauth_service";
 import { OpenAIResponsesService } from "./llm/openai_responses_service";
@@ -202,6 +203,22 @@ async function main(): Promise<void> {
     codex: codexChatService,
     responses: responsesService
   });
+  const webSearchService = new WebSearchService({
+    defaultProvider: config.alfredWebSearchProvider,
+    llmService,
+    brave: {
+      apiKey: config.braveSearchApiKey,
+      url: config.braveSearchUrl,
+      timeoutMs: config.braveSearchTimeoutMs,
+      maxResults: config.braveSearchMaxResults
+    },
+    perplexity: {
+      apiKey: config.perplexityApiKey,
+      url: config.perplexitySearchUrl,
+      model: config.perplexityModel,
+      timeoutMs: config.perplexityTimeoutMs
+    }
+  });
 
   if (config.whatsAppProvider === "baileys") {
     const inboundUrl = `http://127.0.0.1:${config.port}/v1/whatsapp/baileys/inbound`;
@@ -261,6 +278,7 @@ async function main(): Promise<void> {
     approvalStore,
     oauthService,
     llmService,
+    webSearchService,
     codexAuthService,
     codexLoginMode: config.codexAuthLoginMode,
     codexApiKey: config.openAiApiKey,
@@ -273,6 +291,7 @@ async function main(): Promise<void> {
       approvalDefault: config.alfredApprovalDefault,
       webSearchEnabled: config.alfredWebSearchEnabled,
       webSearchRequireApproval: config.alfredWebSearchRequireApproval,
+      webSearchProvider: config.alfredWebSearchProvider,
       fileWriteEnabled: config.alfredFileWriteEnabled,
       fileWriteRequireApproval: config.alfredFileWriteRequireApproval,
       fileWriteNotesOnly: config.alfredFileWriteNotesOnly,
