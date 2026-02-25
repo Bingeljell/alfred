@@ -1,5 +1,8 @@
 # Alfred Capabilities
 
+- Runtime role:
+  - Gateway is Alfred's orchestrator/control plane.
+  - Worker executes delegated long-running/background tasks.
 - Chat and planning:
   - Understand user intent and choose the next best action.
   - Ask a clarification question when confidence is low.

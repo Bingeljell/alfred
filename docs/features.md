@@ -15,6 +15,7 @@ Acceptance criteria:
 - Gateway stays responsive for normal chat turns.
 - Chat lane is serialized per user for deterministic context.
 - Health endpoint reports service status.
+- Gateway acts as control plane only (turn orchestration, policy, routing, persistence, delivery); heavy/background execution is delegated to worker lanes.
 
 Testing:
 - Automated: lane routing and config tests.

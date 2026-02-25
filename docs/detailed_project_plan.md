@@ -9,6 +9,10 @@ Build a WhatsApp-first personal agent that runs on a single self-hosted machine 
 - Runtime: TypeScript/Node for v1, Go review in v2/v3.
 - WhatsApp connector: Baileys direct.
 - Topology: same-machine persistent gateway + worker process.
+- Orchestration model:
+  - gateway is the control plane for every turn (session resolution, planning, policy, routing, persistence, delivery)
+  - worker is the execution plane for long/background tasks
+  - do not collapse these roles in v1; evolve toward multi-worker/subagent fan-out under gateway supervision
 - Execution lanes:
   - chat lane: per-user serialized turns
   - job lane: async queued jobs for long-running work
