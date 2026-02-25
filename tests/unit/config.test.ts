@@ -28,10 +28,19 @@ describe("loadConfig", () => {
     expect(config.alfredApprovalDefault).toBe(true);
     expect(config.alfredWebSearchEnabled).toBe(true);
     expect(config.alfredWebSearchRequireApproval).toBe(true);
+    expect(config.alfredWebSearchProvider).toBe("openai");
     expect(config.alfredFileWriteEnabled).toBe(false);
     expect(config.alfredFileWriteRequireApproval).toBe(true);
     expect(config.alfredFileWriteNotesOnly).toBe(true);
     expect(config.alfredFileWriteNotesDir).toBe("notes");
+    expect(config.braveSearchApiKey).toBeUndefined();
+    expect(config.braveSearchUrl).toBe("https://api.search.brave.com/res/v1/web/search");
+    expect(config.braveSearchTimeoutMs).toBe(12000);
+    expect(config.braveSearchMaxResults).toBe(5);
+    expect(config.perplexityApiKey).toBeUndefined();
+    expect(config.perplexitySearchUrl).toBe("https://api.perplexity.ai/chat/completions");
+    expect(config.perplexityModel).toBe("sonar");
+    expect(config.perplexityTimeoutMs).toBe(20000);
     expect(config.oauthOpenAiMode).toBe("mock");
     expect(config.openAiResponsesEnabled).toBe(true);
     expect(config.openAiResponsesUrl).toBe("https://api.openai.com/v1/responses");
@@ -75,10 +84,19 @@ describe("loadConfig", () => {
       ALFRED_APPROVAL_DEFAULT: "false",
       ALFRED_WEB_SEARCH_ENABLED: "false",
       ALFRED_WEB_SEARCH_REQUIRE_APPROVAL: "false",
+      ALFRED_WEB_SEARCH_PROVIDER: "brave",
       ALFRED_FILE_WRITE_ENABLED: "true",
       ALFRED_FILE_WRITE_REQUIRE_APPROVAL: "false",
       ALFRED_FILE_WRITE_NOTES_ONLY: "false",
       ALFRED_FILE_WRITE_NOTES_DIR: "scratch",
+      BRAVE_SEARCH_API_KEY: "brave-key",
+      BRAVE_SEARCH_URL: "https://brave.example/search",
+      BRAVE_SEARCH_TIMEOUT_MS: "9000",
+      BRAVE_SEARCH_MAX_RESULTS: "7",
+      PERPLEXITY_API_KEY: "px-key",
+      PERPLEXITY_SEARCH_URL: "https://perplexity.example/chat",
+      PERPLEXITY_MODEL: "sonar-pro",
+      PERPLEXITY_TIMEOUT_MS: "19000",
       OAUTH_OPENAI_MODE: "live",
       OAUTH_OPENAI_CLIENT_ID: "client",
       OAUTH_OPENAI_TOKEN_URL: "https://example.test/token",
@@ -126,10 +144,19 @@ describe("loadConfig", () => {
     expect(config.alfredApprovalDefault).toBe(false);
     expect(config.alfredWebSearchEnabled).toBe(false);
     expect(config.alfredWebSearchRequireApproval).toBe(false);
+    expect(config.alfredWebSearchProvider).toBe("brave");
     expect(config.alfredFileWriteEnabled).toBe(true);
     expect(config.alfredFileWriteRequireApproval).toBe(false);
     expect(config.alfredFileWriteNotesOnly).toBe(false);
     expect(config.alfredFileWriteNotesDir).toBe("scratch");
+    expect(config.braveSearchApiKey).toBe("brave-key");
+    expect(config.braveSearchUrl).toBe("https://brave.example/search");
+    expect(config.braveSearchTimeoutMs).toBe(9000);
+    expect(config.braveSearchMaxResults).toBe(7);
+    expect(config.perplexityApiKey).toBe("px-key");
+    expect(config.perplexitySearchUrl).toBe("https://perplexity.example/chat");
+    expect(config.perplexityModel).toBe("sonar-pro");
+    expect(config.perplexityTimeoutMs).toBe(19000);
     expect(config.oauthOpenAiMode).toBe("live");
     expect(config.oauthOpenAiClientId).toBe("client");
     expect(config.openAiResponsesEnabled).toBe(false);

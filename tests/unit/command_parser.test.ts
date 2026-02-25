@@ -34,7 +34,13 @@ describe("parseCommand", () => {
     expect(parseCommand("/policy")).toEqual({ kind: "policy_status" });
     expect(parseCommand("/web latest openai oauth docs")).toEqual({
       kind: "web_search",
-      query: "latest openai oauth docs"
+      query: "latest openai oauth docs",
+      provider: undefined
+    });
+    expect(parseCommand("/web --provider=brave latest ai news")).toEqual({
+      kind: "web_search",
+      query: "latest ai news",
+      provider: "brave"
     });
     expect(parseCommand("/write notes/today.md Remember to call mom")).toEqual({
       kind: "file_write",

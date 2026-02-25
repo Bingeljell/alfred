@@ -13,7 +13,7 @@ export type ParsedCommand =
   | { kind: "auth_status" }
   | { kind: "auth_limits" }
   | { kind: "auth_disconnect" }
-  | { kind: "web_search"; query: string }
+  | { kind: "web_search"; query: string; provider?: "openai" | "brave" | "perplexity" }
   | { kind: "file_write"; relativePath: string; text: string }
   | { kind: "policy_status" }
   | { kind: "side_effect_send"; text: string }
@@ -111,9 +111,12 @@ export function parseCommand(text: string): ParsedCommand | null {
   }
 
   if (value.toLowerCase().startsWith("/web ")) {
-    const query = value.slice("/web ".length).trim();
+    const payload = value.slice("/web ".length).trim();
+    const providerMatch = payload.match(/^--provider=(openai|brave|perplexity)\s+/i);
+    const provider = providerMatch?.[1]?.toLowerCase() as "openai" | "brave" | "perplexity" | undefined;
+    const query = provider ? payload.slice(providerMatch?.[0]?.length ?? 0).trim() : payload;
     if (query) {
-      return { kind: "web_search", query };
+      return { kind: "web_search", query, provider };
     }
   }
 

@@ -112,6 +112,7 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  ALFRED_WEB_SEARCH_PROVIDER: z.enum(["openai", "brave", "perplexity", "auto"]).optional().default("openai"),
   ALFRED_FILE_WRITE_ENABLED: z
     .string()
     .optional()
@@ -125,6 +126,26 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
   ALFRED_FILE_WRITE_NOTES_DIR: z.string().optional().default("notes"),
+  BRAVE_SEARCH_API_KEY: z.string().optional(),
+  BRAVE_SEARCH_URL: z.string().optional().default("https://api.search.brave.com/res/v1/web/search"),
+  BRAVE_SEARCH_TIMEOUT_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 12000))
+    .pipe(z.number().int().min(1000).max(60000)),
+  BRAVE_SEARCH_MAX_RESULTS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 5))
+    .pipe(z.number().int().min(1).max(20)),
+  PERPLEXITY_API_KEY: z.string().optional(),
+  PERPLEXITY_SEARCH_URL: z.string().optional().default("https://api.perplexity.ai/chat/completions"),
+  PERPLEXITY_MODEL: z.string().optional().default("sonar"),
+  PERPLEXITY_TIMEOUT_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 20000))
+    .pipe(z.number().int().min(1000).max(120000)),
   OAUTH_STATE_TTL_SEC: z
     .string()
     .optional()
@@ -225,10 +246,19 @@ export type AppConfig = {
   alfredApprovalDefault: boolean;
   alfredWebSearchEnabled: boolean;
   alfredWebSearchRequireApproval: boolean;
+  alfredWebSearchProvider: "openai" | "brave" | "perplexity" | "auto";
   alfredFileWriteEnabled: boolean;
   alfredFileWriteRequireApproval: boolean;
   alfredFileWriteNotesOnly: boolean;
   alfredFileWriteNotesDir: string;
+  braveSearchApiKey?: string;
+  braveSearchUrl: string;
+  braveSearchTimeoutMs: number;
+  braveSearchMaxResults: number;
+  perplexityApiKey?: string;
+  perplexitySearchUrl: string;
+  perplexityModel: string;
+  perplexityTimeoutMs: number;
   oauthStateTtlMs: number;
   oauthTokenEncryptionKey?: string;
   oauthOpenAiMode: "mock" | "live";
@@ -304,10 +334,19 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     alfredApprovalDefault: parsed.ALFRED_APPROVAL_DEFAULT,
     alfredWebSearchEnabled: parsed.ALFRED_WEB_SEARCH_ENABLED,
     alfredWebSearchRequireApproval: parsed.ALFRED_WEB_SEARCH_REQUIRE_APPROVAL,
+    alfredWebSearchProvider: parsed.ALFRED_WEB_SEARCH_PROVIDER,
     alfredFileWriteEnabled: parsed.ALFRED_FILE_WRITE_ENABLED,
     alfredFileWriteRequireApproval: parsed.ALFRED_FILE_WRITE_REQUIRE_APPROVAL,
     alfredFileWriteNotesOnly: parsed.ALFRED_FILE_WRITE_NOTES_ONLY,
     alfredFileWriteNotesDir: parsed.ALFRED_FILE_WRITE_NOTES_DIR.trim() || "notes",
+    braveSearchApiKey: parsed.BRAVE_SEARCH_API_KEY,
+    braveSearchUrl: parsed.BRAVE_SEARCH_URL,
+    braveSearchTimeoutMs: parsed.BRAVE_SEARCH_TIMEOUT_MS,
+    braveSearchMaxResults: parsed.BRAVE_SEARCH_MAX_RESULTS,
+    perplexityApiKey: parsed.PERPLEXITY_API_KEY,
+    perplexitySearchUrl: parsed.PERPLEXITY_SEARCH_URL,
+    perplexityModel: parsed.PERPLEXITY_MODEL,
+    perplexityTimeoutMs: parsed.PERPLEXITY_TIMEOUT_MS,
     oauthStateTtlMs: parsed.OAUTH_STATE_TTL_SEC * 1000,
     oauthTokenEncryptionKey: parsed.OAUTH_TOKEN_ENCRYPTION_KEY,
     oauthOpenAiMode: parsed.OAUTH_OPENAI_MODE,
