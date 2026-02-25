@@ -372,6 +372,10 @@ export function renderWebConsoleHtml(): string {
         <h2>Persisted Transcript</h2>
         <div class="actions">
           <button class="secondary" id="transcriptRefresh">Refresh Transcript</button>
+          <label class="inline-control" for="transcriptAllSessions">
+            <input type="checkbox" id="transcriptAllSessions" checked />
+            All sessions
+          </label>
         </div>
         <div class="transcript-frame">
           <pre id="sessionTranscript"></pre>
@@ -621,6 +625,7 @@ export function renderWebConsoleHtml(): string {
       const $ = (id) => document.getElementById(id);
       const log = $("log");
       const sessionTranscript = $("sessionTranscript");
+      const transcriptAllSessions = $("transcriptAllSessions");
       const statusLine = $("statusLine");
       const authSummary = $("authSummary");
       const mapSummary = $("mapSummary");
@@ -650,6 +655,22 @@ export function renderWebConsoleHtml(): string {
       const sourceHeartbeatCard = $("sourceHeartbeatCard");
       const sourceHeartbeatValue = $("sourceHeartbeatValue");
       const sourceHeartbeatMeta = $("sourceHeartbeatMeta");
+      const heartbeatEditableInputIds = [
+        "heartbeatSessionId",
+        "heartbeatIntervalMinutes",
+        "heartbeatStartHour",
+        "heartbeatEndHour",
+        "heartbeatDedupeMinutes",
+        "heartbeatBacklogThreshold",
+        "heartbeatErrorLookbackMinutes",
+        "heartbeatStuckJobThresholdMinutes",
+        "heartbeatEnabled",
+        "heartbeatRequireIdleQueue",
+        "heartbeatSuppressOk",
+        "heartbeatAlertOnAuthDisconnected",
+        "heartbeatAlertOnWhatsAppDisconnected",
+        "heartbeatAlertOnStuckJobs"
+      ];
       const authPreference = $("authPreference");
       const mapWhatsAppJid = $("mapWhatsAppJid");
       const mapAuthSessionId = $("mapAuthSessionId");
@@ -667,6 +688,7 @@ export function renderWebConsoleHtml(): string {
       let streamUsingSse = false;
       let transcriptPollInFlight = false;
       let transcriptPollTimer = null;
+      let heartbeatFormDirty = false;
       const sourceFingerprints = Object.create(null);
       const seenStreamEventIds = new Set();
 
@@ -1033,20 +1055,22 @@ export function renderWebConsoleHtml(): string {
           lastSignals.whatsAppAvailable === true ? (lastSignals.whatsAppConnected === true ? "up" : "down") : "n/a";
         const stuckJobs = toInteger(lastSignals.stuckRunningJobCount, 0);
 
-        $("heartbeatEnabled").checked = enabled;
-        $("heartbeatRequireIdleQueue").checked = requireIdleQueue;
-        $("heartbeatSuppressOk").checked = suppressOk;
-        $("heartbeatAlertOnAuthDisconnected").checked = alertOnAuthDisconnected;
-        $("heartbeatAlertOnWhatsAppDisconnected").checked = alertOnWhatsAppDisconnected;
-        $("heartbeatAlertOnStuckJobs").checked = alertOnStuckJobs;
-        $("heartbeatIntervalMinutes").value = String(intervalMinutes);
-        $("heartbeatStartHour").value = String(startHour);
-        $("heartbeatEndHour").value = String(endHour);
-        $("heartbeatDedupeMinutes").value = String(dedupeMinutes);
-        $("heartbeatSessionId").value = sessionId;
-        $("heartbeatBacklogThreshold").value = String(threshold);
-        $("heartbeatErrorLookbackMinutes").value = String(lookback);
-        $("heartbeatStuckJobThresholdMinutes").value = String(stuckThreshold);
+        if (!heartbeatFormDirty) {
+          $("heartbeatEnabled").checked = enabled;
+          $("heartbeatRequireIdleQueue").checked = requireIdleQueue;
+          $("heartbeatSuppressOk").checked = suppressOk;
+          $("heartbeatAlertOnAuthDisconnected").checked = alertOnAuthDisconnected;
+          $("heartbeatAlertOnWhatsAppDisconnected").checked = alertOnWhatsAppDisconnected;
+          $("heartbeatAlertOnStuckJobs").checked = alertOnStuckJobs;
+          $("heartbeatIntervalMinutes").value = String(intervalMinutes);
+          $("heartbeatStartHour").value = String(startHour);
+          $("heartbeatEndHour").value = String(endHour);
+          $("heartbeatDedupeMinutes").value = String(dedupeMinutes);
+          $("heartbeatSessionId").value = sessionId;
+          $("heartbeatBacklogThreshold").value = String(threshold);
+          $("heartbeatErrorLookbackMinutes").value = String(lookback);
+          $("heartbeatStuckJobThresholdMinutes").value = String(stuckThreshold);
+        }
 
         heartbeatSummary.textContent =
           "Heartbeat " +
@@ -1410,13 +1434,19 @@ export function renderWebConsoleHtml(): string {
         };
       }
 
-      function renderSessionTranscript(events, sessionId) {
-        if (!sessionId) {
-          sessionTranscript.textContent = "Set a Session ID to load persisted transcript.";
+      function renderSessionTranscript(events, options) {
+        const allSessions = options?.allSessions === true;
+        const sessionId = options?.sessionId ? String(options.sessionId) : "";
+        if (!allSessions && !sessionId) {
+          sessionTranscript.textContent = "Set a Session ID or enable All sessions to load persisted transcript.";
           return;
         }
         if (!Array.isArray(events) || events.length === 0) {
-          sessionTranscript.textContent = "No persisted transcript yet for " + sessionId + ".";
+          if (allSessions) {
+            sessionTranscript.textContent = "No persisted transcript yet across sessions.";
+          } else {
+            sessionTranscript.textContent = "No persisted transcript yet for " + sessionId + ".";
+          }
           return;
         }
 
@@ -1424,6 +1454,10 @@ export function renderWebConsoleHtml(): string {
           const at = event?.createdAt ? String(event.createdAt).slice(11, 19) : "--:--:--";
           const direction = event?.direction === "outbound" ? "assistant" : event?.direction === "inbound" ? "user" : "system";
           const text = event?.text ? String(event.text).replace(/\\s+/g, " ").trim() : "";
+          const transcriptSessionId = event?.sessionId ? String(event.sessionId) : "system";
+          if (allSessions) {
+            return "[" + at + "] [" + transcriptSessionId + "] " + direction + ": " + text;
+          }
           return "[" + at + "] " + direction + ": " + text;
         });
         sessionTranscript.textContent = lines.join("\\n");
@@ -1437,21 +1471,23 @@ export function renderWebConsoleHtml(): string {
         transcriptPollInFlight = true;
         try {
           const sessionId = $("sessionId").value.trim();
-          if (!sessionId) {
-            renderSessionTranscript([], "");
+          const allSessions = transcriptAllSessions.checked === true;
+          if (!allSessions && !sessionId) {
+            renderSessionTranscript([], { sessionId: "", allSessions: false });
             return;
           }
+          const baseUrl = allSessions
+            ? "/v1/stream/events?kinds=chat,command&limit=200&noisy=true"
+            : "/v1/stream/events?sessionId=" + encodeURIComponent(sessionId) + "&kinds=chat,command&limit=80&noisy=true";
           const response = await api(
             "GET",
-            "/v1/stream/events?sessionId=" +
-              encodeURIComponent(sessionId) +
-              "&kinds=chat,command&limit=80&noisy=true"
+            baseUrl
           );
           if (!response.ok) {
             return;
           }
           const events = Array.isArray(response.data?.events) ? response.data.events : [];
-          renderSessionTranscript(events, sessionId);
+          renderSessionTranscript(events, { sessionId, allSessions });
         } finally {
           transcriptPollInFlight = false;
         }
@@ -1707,6 +1743,9 @@ export function renderWebConsoleHtml(): string {
           api("POST", "/v1/heartbeat/configure", payload)
         );
         pushLog("HEARTBEAT_CONFIGURE", response);
+        if (response.ok) {
+          heartbeatFormDirty = false;
+        }
         renderHeartbeatSummary(response.data);
         setStatus("Last action: HEARTBEAT_CONFIGURE (" + response.status + ")", response.ok ? "success" : "error");
       });
@@ -1891,6 +1930,13 @@ export function renderWebConsoleHtml(): string {
         setStatus("Persisted transcript refreshed.", "success");
       });
 
+      $("transcriptAllSessions").addEventListener("change", async () => {
+        await runButtonAction($("transcriptRefresh"), "TRANSCRIPT_SCOPE_UPDATE", async () => {
+          await pollTranscriptSilently();
+          return { ok: true, status: 200, data: { allSessions: transcriptAllSessions.checked === true } };
+        });
+      });
+
       $("includeNoisyStream").addEventListener("change", async () => {
         seenStreamEventIds.clear();
         await runButtonAction($("streamRefresh"), "STREAM_MODE_UPDATE", async () => {
@@ -1920,6 +1966,18 @@ export function renderWebConsoleHtml(): string {
         }
         void pollTranscriptSilently();
       });
+
+      for (const inputId of heartbeatEditableInputIds) {
+        const node = $(inputId);
+        if (!node) {
+          continue;
+        }
+        const markDirty = () => {
+          heartbeatFormDirty = true;
+        };
+        node.addEventListener("input", markDirty);
+        node.addEventListener("change", markDirty);
+      }
 
       pushLog("READY", "Web console loaded. Use controls above.");
       mapAuthSessionId.value = selectedOAuthSession();

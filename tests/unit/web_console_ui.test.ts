@@ -77,6 +77,9 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("id=\"sessionTranscript\"");
     expect(html).toContain("class=\"transcript-frame\"");
     expect(html).toContain("id=\"transcriptRefresh\"");
+    expect(html).toContain("id=\"transcriptAllSessions\"");
+    expect(html).toContain("All sessions");
+    expect(html).toContain("TRANSCRIPT_SCOPE_UPDATE");
     expect(html).toContain(".transcript-frame {");
     expect(html).toContain("width: min(100%, 800px);");
     expect(html).toContain("max-width: 800px;");
@@ -88,6 +91,8 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("min-width: 0;");
     expect(html).toContain("pollTranscriptSilently");
     expect(html).toContain("startTranscriptAutoPoll");
+    expect(html).toContain("heartbeatFormDirty");
+    expect(html).toContain("heartbeatEditableInputIds");
     expect(html).toContain("sessionTranscript.textContent = lines.join(");
     expect(html).toContain("replace(");
     expect(html).toContain(".status[data-state=\"busy\"]");
