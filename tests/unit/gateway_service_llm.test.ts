@@ -95,6 +95,60 @@ describe("GatewayService llm path", () => {
     expect(String(calls[0]?.[1] ?? "")).toContain("Query: latest OpenAI OAuth docs");
   });
 
+  it("enqueues in-flight status for direct web search execution", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-web-progress-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const notifications = {
+      enqueue: vi.fn().mockResolvedValue({ id: "n1" })
+    };
+
+    const webSearch = {
+      search: vi.fn().mockResolvedValue({
+        provider: "brave",
+        text: "Brave web results:\n1. Result - https://example.com"
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      notifications as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        approvalDefault: true,
+        webSearchEnabled: true,
+        webSearchRequireApproval: false
+      },
+      webSearch as never
+    );
+
+    const result = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "/web --provider=brave latest openai news",
+      requestJob: false
+    });
+
+    expect(result.response).toContain("Web search provider: brave");
+    expect(notifications.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "owner@s.whatsapp.net",
+        status: "running"
+      })
+    );
+  });
+
   it("enforces file-write policy with notes-only workspace scope", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-write-policy-unit-"));
     const workspaceDir = path.join(stateDir, "workspace");

@@ -14,13 +14,14 @@ Web Console Manual Checklist
 10. Run Memory Search/Sync/Status actions and confirm responses are shown in the log panel.
 11. Send `/policy` and confirm workspace + approval policy values match your `.env`.
 12. Send `/web latest OpenAI docs` and confirm approval token is requested (default policy), then send `approve <token>` and confirm web-result text is returned.
-13. Trigger a pending approval (`send test approval`) and reply `yes`; confirm approved action executes without token.
-14. Trigger another pending approval and reply `no`; confirm action is rejected.
-15. Set `ALFRED_WEB_SEARCH_PROVIDER=brave` with `BRAVE_SEARCH_API_KEY`, restart gateway, run `/web --provider=brave latest OpenAI updates`, and confirm provider label + Brave-formatted links appear.
-16. Set `PERPLEXITY_API_KEY`, run `/web --provider=perplexity latest OpenAI updates`, and confirm provider label + cited output appears.
-17. Run `/web --provider=openai latest OpenAI updates` and confirm Codex/OpenAI path still works.
-18. Send `/write notes/manual.md hello` and confirm default response says file-write is disabled.
-19. Set `ALFRED_FILE_WRITE_ENABLED=true`, restart gateway, retry `/write notes/manual.md hello`, approve token, then confirm file is appended under `workspace/alfred/notes/manual.md`.
+13. For `/web` commands, confirm an in-flight status message (for example `Working on web search ...`) appears in stream/WhatsApp before the final result on slower providers.
+14. Trigger a pending approval (`send test approval`) and reply `yes`; confirm approved action executes without token.
+15. Trigger another pending approval and reply `no`; confirm action is rejected.
+16. Set `ALFRED_WEB_SEARCH_PROVIDER=brave` with `BRAVE_SEARCH_API_KEY`, restart gateway, run `/web --provider=brave latest OpenAI updates`, and confirm provider label + Brave-formatted links appear.
+17. Set `PERPLEXITY_API_KEY`, run `/web --provider=perplexity latest OpenAI updates`, and confirm provider label + cited output appears.
+18. Run `/web --provider=openai latest OpenAI updates` and confirm Codex/OpenAI path still works.
+19. Send `/write notes/manual.md hello` and confirm default response says file-write is disabled.
+20. Set `ALFRED_FILE_WRITE_ENABLED=true`, restart gateway, retry `/write notes/manual.md hello`, approve token, then confirm file is appended under `workspace/alfred/notes/manual.md`.
 
 Heartbeat Manual Checklist
 1. Open `/ui` and use the Heartbeat section.

@@ -512,6 +512,10 @@ export class GatewayService {
           return `Approval required for web search. Reply: approve ${approval.token}`;
         }
 
+        await this.queueInFlightStatus(
+          sessionId,
+          `Working on web search (${command.provider ?? this.capabilityPolicy.webSearchProvider})...`
+        );
         return this.executeWebSearch(
           authSessionId,
           command.query,
@@ -563,7 +567,7 @@ export class GatewayService {
         if (!approval) {
           return `Approval token invalid or expired: ${command.token}`;
         }
-        return this.executeApprovedAction(approval, authSessionId, authPreference);
+        return this.executeApprovedAction(approval, sessionId, authSessionId, authPreference);
       }
 
       case "reject": {
@@ -620,12 +624,13 @@ export class GatewayService {
     if (!approval) {
       return { handled: false, response: "" };
     }
-    const response = await this.executeApprovedAction(approval, authSessionId, authPreference);
+    const response = await this.executeApprovedAction(approval, sessionId, authSessionId, authPreference);
     return { handled: true, response };
   }
 
   private async executeApprovedAction(
     approval: { action: string; payload: Record<string, unknown> },
+    channelSessionId: string,
     authSessionId: string,
     authPreference: LlmAuthPreference
   ): Promise<string> {
@@ -644,6 +649,7 @@ export class GatewayService {
       if (!query) {
         return "Approved action failed: missing web search query.";
       }
+      await this.queueInFlightStatus(channelSessionId, `Working on web search (${provider ?? this.capabilityPolicy.webSearchProvider})...`);
       const output = await this.executeWebSearch(targetAuthSessionId, query, requestedAuthPreference, provider);
       return `Approved action executed: web_search\n${output}`;
     }
@@ -662,6 +668,21 @@ export class GatewayService {
     }
 
     return `Approved action executed: ${approval.action}`;
+  }
+
+  private async queueInFlightStatus(sessionId: string, text: string): Promise<void> {
+    if (!this.notificationStore) {
+      return;
+    }
+    try {
+      await this.notificationStore.enqueue({
+        sessionId,
+        text,
+        status: "running"
+      });
+    } catch {
+      // best-effort progress status only
+    }
   }
 
   private async executeChatTurn(sessionId: string, text: string, authPreference: LlmAuthPreference): Promise<string> {
