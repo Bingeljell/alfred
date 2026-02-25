@@ -14,8 +14,11 @@ Web Console Manual Checklist
 10. Run Memory Search/Sync/Status actions and confirm responses are shown in the log panel.
 11. Send `/policy` and confirm workspace + approval policy values match your `.env`.
 12. Send `/web latest OpenAI docs` and confirm approval token is requested (default policy), then send `approve <token>` and confirm web-result text is returned.
-13. Send `/write notes/manual.md hello` and confirm default response says file-write is disabled.
-14. Set `ALFRED_FILE_WRITE_ENABLED=true`, restart gateway, retry `/write notes/manual.md hello`, approve token, then confirm file is appended under `workspace/alfred/notes/manual.md`.
+13. Set `ALFRED_WEB_SEARCH_PROVIDER=brave` with `BRAVE_SEARCH_API_KEY`, restart gateway, run `/web --provider=brave latest OpenAI updates`, and confirm provider label + Brave-formatted links appear.
+14. Set `PERPLEXITY_API_KEY`, run `/web --provider=perplexity latest OpenAI updates`, and confirm provider label + cited output appears.
+15. Run `/web --provider=openai latest OpenAI updates` and confirm Codex/OpenAI path still works.
+16. Send `/write notes/manual.md hello` and confirm default response says file-write is disabled.
+17. Set `ALFRED_FILE_WRITE_ENABLED=true`, restart gateway, retry `/write notes/manual.md hello`, approve token, then confirm file is appended under `workspace/alfred/notes/manual.md`.
 
 Heartbeat Manual Checklist
 1. Open `/ui` and use the Heartbeat section.
