@@ -17,7 +17,8 @@ export type ParsedCommand =
   | { kind: "file_write"; relativePath: string; text: string }
   | { kind: "policy_status" }
   | { kind: "side_effect_send"; text: string }
-  | { kind: "approve"; token: string };
+  | { kind: "approve"; token: string }
+  | { kind: "reject"; token: string };
 
 export function parseCommand(text: string): ParsedCommand | null {
   const value = text.trim();
@@ -140,6 +141,13 @@ export function parseCommand(text: string): ParsedCommand | null {
     const token = value.slice(8).trim();
     if (token) {
       return { kind: "approve", token };
+    }
+  }
+
+  if (value.toLowerCase().startsWith("reject ")) {
+    const token = value.slice(7).trim();
+    if (token) {
+      return { kind: "reject", token };
     }
   }
 

@@ -186,6 +186,7 @@ Deliverables:
 - Heartbeat reliability loop: add periodic heartbeat scheduler with active-hour and idle-queue gating, deduped alert delivery, explicit dependency checks (OpenAI auth disconnect, WhatsApp disconnect, long-running jobs), and operator controls (`/v1/heartbeat/status`, `/v1/heartbeat/configure`, `/v1/heartbeat/run`) exposed in `/ui`.
 - Capability policy baseline: enforce approval-by-default for external capabilities, route web research through `/web`, add workspace-scoped `/write` command with notes-only policy controls, and keep file-write disabled by default unless explicitly enabled in env.
 - Multi-provider web research runtime: support OpenAI/Codex, Brave Search API, and Perplexity API providers with env-configured default selection and command-time provider override.
+- Approval UX hardening: support tokenless yes/no approval decisions scoped to latest pending action per session across web and WhatsApp channels.
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.

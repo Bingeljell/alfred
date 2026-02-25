@@ -52,4 +52,8 @@ describe("parseCommand", () => {
   it("returns null for unsupported input", () => {
     expect(parseCommand("hello world")).toBeNull();
   });
+
+  it("parses explicit reject command", () => {
+    expect(parseCommand("reject abc123")).toEqual({ kind: "reject", token: "abc123" });
+  });
 });

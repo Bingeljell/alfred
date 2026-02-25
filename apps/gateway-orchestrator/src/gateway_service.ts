@@ -18,6 +18,7 @@ import type { MemoryResult, MemoryService } from "../../../packages/memory/src";
 import type { WebSearchProvider } from "./builtins/web_search_service";
 
 type LlmAuthPreference = "auto" | "oauth" | "api_key";
+type ImplicitApprovalDecision = "approve_latest" | "reject_latest";
 type ExternalCapability = "web_search" | "file_write";
 
 type CapabilityPolicy = {
@@ -179,6 +180,31 @@ export class GatewayService {
           mode: "chat",
           response
         };
+      }
+
+      const implicitApproval = this.parseImplicitApprovalDecision(inbound.text);
+      if (implicitApproval) {
+        const decisionResult = await this.executeImplicitApprovalDecision(
+          inbound.sessionId,
+          implicitApproval,
+          authSessionId,
+          authPreference
+        );
+        if (decisionResult.handled) {
+          await this.recordConversation(inbound.sessionId, "outbound", decisionResult.response, {
+            source: "gateway",
+            channel: "internal",
+            kind: "command",
+            metadata: {
+              authSessionId
+            }
+          });
+          return {
+            accepted: true,
+            mode: "chat",
+            response: decisionResult.response
+          };
+        }
       }
 
       const response = await this.executeChatTurn(authSessionId, inbound.text, authPreference);
@@ -537,42 +563,105 @@ export class GatewayService {
         if (!approval) {
           return `Approval token invalid or expired: ${command.token}`;
         }
+        return this.executeApprovedAction(approval, authSessionId, authPreference);
+      }
 
-        if (approval.action === "send_text") {
-          const text = String(approval.payload.text ?? "");
-          return `Approved action executed: send '${text}'`;
+      case "reject": {
+        if (!this.approvalStore) {
+          return "Approvals are not configured.";
         }
-        if (approval.action === "web_search") {
-          if (!this.capabilityPolicy.webSearchEnabled) {
-            return "Approved action failed: web search is disabled by policy.";
-          }
-          const query = String(approval.payload.query ?? "").trim();
-          const provider = this.normalizeWebSearchProvider(approval.payload.provider);
-          const targetAuthSessionId = String(approval.payload.authSessionId ?? authSessionId).trim() || authSessionId;
-          const requestedAuthPreference = this.normalizeAuthPreference(approval.payload.authPreference);
-          if (!query) {
-            return "Approved action failed: missing web search query.";
-          }
-          const output = await this.executeWebSearch(targetAuthSessionId, query, requestedAuthPreference, provider);
-          return `Approved action executed: web_search\n${output}`;
+        const approval = await this.approvalStore.consume(sessionId, command.token);
+        if (!approval) {
+          return `Approval token invalid or expired: ${command.token}`;
         }
-        if (approval.action === "file_write") {
-          if (!this.capabilityPolicy.fileWriteEnabled) {
-            return "Approved action failed: file write is disabled by policy.";
-          }
-          const relativePath = String(approval.payload.relativePath ?? "").trim();
-          const text = String(approval.payload.text ?? "");
-          const resolved = this.resolveWorkspacePath(relativePath);
-          if (!resolved.ok) {
-            return `Approved action failed: ${resolved.error}`;
-          }
-          const output = await this.executeFileWrite(resolved.absolutePath, text);
-          return `Approved action executed: file_write\n${output}`;
-        }
-
-        return `Approved action executed: ${approval.action}`;
+        return `Rejected action: ${approval.action}`;
       }
     }
+  }
+
+  private parseImplicitApprovalDecision(rawText: string): ImplicitApprovalDecision | null {
+    const value = rawText.trim().toLowerCase();
+    if (!value) {
+      return null;
+    }
+    if (value === "yes" || value === "y" || value === "approve" || value === "/approve") {
+      return "approve_latest";
+    }
+    if (value === "no" || value === "n" || value === "reject" || value === "/reject") {
+      return "reject_latest";
+    }
+    return null;
+  }
+
+  private async executeImplicitApprovalDecision(
+    sessionId: string,
+    decision: ImplicitApprovalDecision,
+    authSessionId: string,
+    authPreference: LlmAuthPreference
+  ): Promise<{ handled: boolean; response: string }> {
+    if (!this.approvalStore) {
+      return { handled: false, response: "" };
+    }
+
+    const pending = await this.approvalStore.peekLatest(sessionId);
+    if (!pending) {
+      return { handled: false, response: "" };
+    }
+
+    if (decision === "reject_latest") {
+      const discarded = await this.approvalStore.discardLatest(sessionId);
+      if (!discarded) {
+        return { handled: false, response: "" };
+      }
+      return { handled: true, response: `Rejected action: ${discarded.action}` };
+    }
+
+    const approval = await this.approvalStore.consumeLatest(sessionId);
+    if (!approval) {
+      return { handled: false, response: "" };
+    }
+    const response = await this.executeApprovedAction(approval, authSessionId, authPreference);
+    return { handled: true, response };
+  }
+
+  private async executeApprovedAction(
+    approval: { action: string; payload: Record<string, unknown> },
+    authSessionId: string,
+    authPreference: LlmAuthPreference
+  ): Promise<string> {
+    if (approval.action === "send_text") {
+      const text = String(approval.payload.text ?? "");
+      return `Approved action executed: send '${text}'`;
+    }
+    if (approval.action === "web_search") {
+      if (!this.capabilityPolicy.webSearchEnabled) {
+        return "Approved action failed: web search is disabled by policy.";
+      }
+      const query = String(approval.payload.query ?? "").trim();
+      const provider = this.normalizeWebSearchProvider(approval.payload.provider);
+      const targetAuthSessionId = String(approval.payload.authSessionId ?? authSessionId).trim() || authSessionId;
+      const requestedAuthPreference = this.normalizeAuthPreference(approval.payload.authPreference ?? authPreference);
+      if (!query) {
+        return "Approved action failed: missing web search query.";
+      }
+      const output = await this.executeWebSearch(targetAuthSessionId, query, requestedAuthPreference, provider);
+      return `Approved action executed: web_search\n${output}`;
+    }
+    if (approval.action === "file_write") {
+      if (!this.capabilityPolicy.fileWriteEnabled) {
+        return "Approved action failed: file write is disabled by policy.";
+      }
+      const relativePath = String(approval.payload.relativePath ?? "").trim();
+      const text = String(approval.payload.text ?? "");
+      const resolved = this.resolveWorkspacePath(relativePath);
+      if (!resolved.ok) {
+        return `Approved action failed: ${resolved.error}`;
+      }
+      const output = await this.executeFileWrite(resolved.absolutePath, text);
+      return `Approved action executed: file_write\n${output}`;
+    }
+
+    return `Approved action executed: ${approval.action}`;
   }
 
   private async executeChatTurn(sessionId: string, text: string, authPreference: LlmAuthPreference): Promise<string> {

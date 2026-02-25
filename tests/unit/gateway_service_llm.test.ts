@@ -10,6 +10,32 @@ import { ConversationStore } from "../../apps/gateway-orchestrator/src/builtins/
 import { ApprovalStore } from "../../apps/gateway-orchestrator/src/builtins/approval_store";
 
 describe("GatewayService llm path", () => {
+  it("treats yes/no as normal chat when no pending approval exists", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-implicit-approve-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "normal chat response",
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(queueStore, undefined, undefined, undefined, undefined, approvalStore, undefined, llm);
+    const chat = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "yes",
+      requestJob: false
+    });
+
+    expect(chat.response).toContain("normal chat response");
+    expect(llm.generateText).toHaveBeenCalledTimes(1);
+  });
+
   it("supports approval-gated web search command", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-web-search-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);

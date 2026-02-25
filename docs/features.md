@@ -172,6 +172,7 @@ Acceptance criteria:
 - Brave and Perplexity providers support dedicated API credentials/config (`BRAVE_SEARCH_*`, `PERPLEXITY_*`) while OpenAI provider reuses current Codex/OpenAI chat path.
 - `/write <relative-path> <text>` writes only inside workspace, is disabled by default, and can be restricted to notes-only paths.
 - `/policy` command reports active capability policy state for manual verification.
+- Pending approvals can be resolved with natural yes/no replies (`yes` approves latest pending action, `no` rejects latest pending action) in both web chat and WhatsApp, while token-based `approve <token>` remains supported.
 
 Testing:
 - Automated: command parser, config parsing, and gateway-service unit tests for web-search approvals and file-write policy enforcement.

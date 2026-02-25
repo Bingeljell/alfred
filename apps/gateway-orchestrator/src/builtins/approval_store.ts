@@ -48,21 +48,51 @@ export class ApprovalStore {
 
   async consume(sessionId: string, token: string): Promise<ApprovalRecord | null> {
     const state = await this.read();
+    this.pruneExpired(state);
     const idx = state.approvals.findIndex((item) => item.token === token && item.sessionId === sessionId);
 
     if (idx < 0) {
+      await this.write(state);
       return null;
     }
 
     const record = state.approvals[idx];
     state.approvals.splice(idx, 1);
     await this.write(state);
+    return record;
+  }
 
-    if (new Date(record.expiresAt) < new Date()) {
+  async peekLatest(sessionId: string): Promise<ApprovalRecord | null> {
+    const state = await this.read();
+    this.pruneExpired(state);
+    await this.write(state);
+
+    const reversed = [...state.approvals].reverse();
+    const found = reversed.find((item) => item.sessionId === sessionId);
+    return found ?? null;
+  }
+
+  async consumeLatest(sessionId: string): Promise<ApprovalRecord | null> {
+    const state = await this.read();
+    this.pruneExpired(state);
+    const idx = [...state.approvals]
+      .map((item, index) => ({ item, index }))
+      .reverse()
+      .find((entry) => entry.item.sessionId === sessionId)?.index;
+
+    if (idx === undefined) {
+      await this.write(state);
       return null;
     }
 
+    const record = state.approvals[idx];
+    state.approvals.splice(idx, 1);
+    await this.write(state);
     return record;
+  }
+
+  async discardLatest(sessionId: string): Promise<ApprovalRecord | null> {
+    return this.consumeLatest(sessionId);
   }
 
   private async read(): Promise<ApprovalState> {
@@ -79,5 +109,16 @@ export class ApprovalStore {
     const temp = `${this.filePath}.tmp`;
     await fs.writeFile(temp, JSON.stringify(state, null, 2), "utf8");
     await fs.rename(temp, this.filePath);
+  }
+
+  private pruneExpired(state: ApprovalState): void {
+    const now = Date.now();
+    state.approvals = state.approvals.filter((item) => {
+      const expires = Date.parse(item.expiresAt);
+      if (!Number.isFinite(expires)) {
+        return false;
+      }
+      return expires >= now;
+    });
   }
 }

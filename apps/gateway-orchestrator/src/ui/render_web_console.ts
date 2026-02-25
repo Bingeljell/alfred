@@ -367,7 +367,7 @@ export function renderWebConsoleHtml(): string {
           <button class="secondary" id="sendJob">Send as Async Job</button>
           <button class="secondary" id="healthBtn">Health</button>
         </div>
-        <div class="hint">Quick commands: <span class="pill">/task add ...</span><span class="pill">/note add ...</span><span class="pill">/remind &lt;ISO&gt; ...</span><span class="pill">/web --provider=brave ...</span><span class="pill">/auth connect</span><span class="pill">/auth status</span><span class="pill">/auth limits</span><span class="pill">send ...</span><span class="pill">approve &lt;token&gt;</span></div>
+        <div class="hint">Quick commands: <span class="pill">/task add ...</span><span class="pill">/note add ...</span><span class="pill">/remind &lt;ISO&gt; ...</span><span class="pill">/web --provider=brave ...</span><span class="pill">/auth connect</span><span class="pill">/auth status</span><span class="pill">/auth limits</span><span class="pill">send ...</span><span class="pill">yes / no</span><span class="pill">approve &lt;token&gt;</span><span class="pill">reject &lt;token&gt;</span></div>
         <div class="status" id="statusLine"></div>
         <h2>Persisted Transcript</h2>
         <div class="actions">

@@ -135,7 +135,35 @@ describe("phase 5 integration", () => {
 
     expect(gate.response).toContain("Approval required");
 
-    const token = String(gate.response?.split("approve ")[1] ?? "").trim();
+    const rejected = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "no",
+      requestJob: false
+    });
+    expect(rejected.response).toContain("Rejected action:");
+
+    const gateAgain = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "send transfer money",
+      requestJob: false
+    });
+    expect(gateAgain.response).toContain("Approval required");
+
+    const approvedByYes = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "yes",
+      requestJob: false
+    });
+    expect(approvedByYes.response).toContain("Approved action executed");
+
+    const gateThird = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "send transfer money",
+      requestJob: false
+    });
+    expect(gateThird.response).toContain("Approval required");
+
+    const token = String(gateThird.response?.split("approve ")[1] ?? "").trim();
     const approved = await service.handleInbound({
       sessionId: "owner@s.whatsapp.net",
       text: `approve ${token}`,
