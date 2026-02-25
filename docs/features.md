@@ -16,6 +16,8 @@ Acceptance criteria:
 - Chat lane is serialized per user for deterministic context.
 - Health endpoint reports service status.
 - Gateway acts as control plane only (turn orchestration, policy, routing, persistence, delivery); heavy/background execution is delegated to worker lanes.
+- Gateway records explicit run-phase transitions (`normalize -> session -> directives -> plan -> policy -> route -> persist -> dispatch`) in a durable run ledger.
+- Run records include immutable run spec basics (session key, idempotency key, model/provider, policy snapshot, skill snapshot) and can be queried via API.
 
 Testing:
 - Automated: lane routing and config tests.

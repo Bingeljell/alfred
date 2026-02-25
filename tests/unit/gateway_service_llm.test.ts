@@ -8,6 +8,7 @@ import { OpenAIResponsesService } from "../../apps/gateway-orchestrator/src/llm/
 import { IdentityProfileStore } from "../../apps/gateway-orchestrator/src/auth/identity_profile_store";
 import { ConversationStore } from "../../apps/gateway-orchestrator/src/builtins/conversation_store";
 import { ApprovalStore } from "../../apps/gateway-orchestrator/src/builtins/approval_store";
+import { RunLedgerStore } from "../../apps/gateway-orchestrator/src/builtins/run_ledger_store";
 
 describe("GatewayService llm path", () => {
   it("treats yes/no as normal chat when no pending approval exists", async () => {
@@ -237,7 +238,8 @@ describe("GatewayService llm path", () => {
       },
       undefined,
       undefined,
-      planner as never
+      planner as never,
+      undefined
     );
 
     const result = await service.handleInbound({
@@ -595,6 +597,66 @@ describe("GatewayService llm path", () => {
     const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(calls.length).toBe(1);
     expect(calls[0]?.[2]).toEqual({ authPreference: "api_key" });
+  });
+
+  it("records run-ledger phases for a successful chat turn", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-run-ledger-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const runLedger = new RunLedgerStore(stateDir);
+    await runLedger.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "run ledger response",
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      runLedger
+    );
+
+    const result = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "hello run ledger",
+      requestJob: false,
+      metadata: {
+        idempotencyKey: "run-ledger-key-1"
+      }
+    });
+    expect(result.response).toContain("run ledger response");
+
+    const runs = await runLedger.listRuns({ sessionKey: "owner@s.whatsapp.net", limit: 5 });
+    expect(runs.length).toBeGreaterThan(0);
+    const run = runs[0];
+    expect(run?.status).toBe("completed");
+    expect(run?.spec.idempotencyKey).toBe("run-ledger-key-1");
+    const phases = new Set(run?.events.filter((event) => event.type === "phase").map((event) => event.phase));
+    expect(phases.has("session")).toBe(true);
+    expect(phases.has("directives")).toBe(true);
+    expect(phases.has("route")).toBe(true);
+    expect(phases.has("persist")).toBe(true);
+    expect(run?.events.some((event) => event.type === "completed")).toBe(true);
   });
 
   it("injects recent persisted conversation context into prompt", async () => {

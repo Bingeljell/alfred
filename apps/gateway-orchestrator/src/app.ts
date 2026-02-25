@@ -14,6 +14,7 @@ import { OAuthService } from "./auth/oauth_service";
 import { CodexAuthService, type CodexLoginStartMode } from "./codex/auth_service";
 import { ConversationStore } from "./builtins/conversation_store";
 import { IdentityProfileStore } from "./auth/identity_profile_store";
+import { RunLedgerStore } from "./builtins/run_ledger_store";
 
 const CancelParamsSchema = z.object({
   jobId: z.string().min(1)
@@ -181,6 +182,7 @@ export function createGatewayApp(
     codexApiKey?: string;
     conversationStore?: ConversationStore;
     identityProfileStore?: IdentityProfileStore;
+    runLedger?: RunLedgerStore;
     whatsAppLiveManager?: {
       status: () => unknown | Promise<unknown>;
       connect: () => Promise<unknown>;
@@ -257,7 +259,8 @@ export function createGatewayApp(
     options?.capabilityPolicy,
     options?.webSearchService,
     options?.pagedResponseStore,
-    options?.intentPlanner
+    options?.intentPlanner,
+    options?.runLedger
   );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;
@@ -268,6 +271,7 @@ export function createGatewayApp(
   const memoryCompactionService = options?.memoryCompactionService;
   const conversationStore = options?.conversationStore;
   const identityProfileStore = options?.identityProfileStore;
+  const runLedger = options?.runLedger;
   const baileysInboundToken = options?.baileysInboundToken?.trim() ? options.baileysInboundToken.trim() : undefined;
   void dedupeStore.ensureReady();
   app.use(express.json());
@@ -357,6 +361,36 @@ export function createGatewayApp(
       until: until || undefined
     });
     res.status(200).json({ events });
+  });
+
+  app.get("/v1/runs", async (req, res) => {
+    if (!runLedger) {
+      res.status(404).json({ error: "run_ledger_not_configured" });
+      return;
+    }
+
+    const sessionKey = typeof req.query.sessionKey === "string" ? req.query.sessionKey.trim() : "";
+    const limitRaw = Number(req.query.limit ?? 50);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, Math.floor(limitRaw))) : 50;
+    const runs = await runLedger.listRuns({
+      sessionKey: sessionKey || undefined,
+      limit
+    });
+    res.status(200).json({ runs });
+  });
+
+  app.get("/v1/runs/:runId", async (req, res) => {
+    if (!runLedger) {
+      res.status(404).json({ error: "run_ledger_not_configured" });
+      return;
+    }
+
+    const run = await runLedger.getRun(req.params.runId);
+    if (!run) {
+      res.status(404).json({ error: "run_not_found" });
+      return;
+    }
+    res.status(200).json(run);
   });
 
   app.get("/v1/stream/events/subscribe", async (req, res) => {

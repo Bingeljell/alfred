@@ -28,6 +28,8 @@ Web Console Manual Checklist
 24. Send an ambiguous request (for example: `help me with models`) and confirm Alfred asks a clarifying question instead of executing uncertain work.
 25. Confirm `STREAM_PLANNER_TRACE` appears in Console Output for planner-routed turns and includes intent/confidence/chosen action metadata.
 26. Send `/policy` and confirm `approvalMode: balanced` (or your configured mode) is reported.
+27. Call `GET /v1/runs?sessionKey=<your-session>&limit=5` and confirm latest run includes phase events (`session`, `directives`, `route`, `persist`, `dispatch`) and run spec metadata.
+28. Call `GET /v1/runs/<runId>` for one run from step 27 and confirm final status/event (`completed` or `failed`) is present.
 
 Heartbeat Manual Checklist
 1. Open `/ui` and use the Heartbeat section.

@@ -16,6 +16,7 @@ import { ConversationStore } from "./builtins/conversation_store";
 import { IdentityProfileStore } from "./auth/identity_profile_store";
 import type { MemoryResult, MemoryService } from "../../../packages/memory/src";
 import type { WebSearchProvider } from "./builtins/web_search_service";
+import type { RunQueueMode } from "./builtins/run_ledger_store";
 
 type LlmAuthPreference = "auto" | "oauth" | "api_key";
 type ImplicitApprovalDecision = "approve_latest" | "reject_latest";
@@ -116,6 +117,35 @@ export class GatewayService {
         provider?: WebSearchProvider;
         reason: string;
       }>;
+    },
+    private readonly runLedger?: {
+      startRun: (input: {
+        sessionKey: string;
+        queueMode?: RunQueueMode;
+        idempotencyKey?: string;
+        model?: string;
+        provider?: string;
+        toolPolicySnapshot?: Record<string, unknown>;
+        skillsSnapshot?: { hash?: string; content?: string[] };
+      }) => Promise<{
+        acquired: boolean;
+        run: { runId: string };
+        activeRunId?: string;
+      }>;
+      transitionPhase: (
+        runId: string,
+        phase: "normalize" | "session" | "directives" | "plan" | "policy" | "route" | "persist" | "dispatch",
+        message?: string,
+        payload?: Record<string, unknown>
+      ) => Promise<unknown>;
+      appendEvent: (
+        runId: string,
+        type: "note" | "queued" | "progress" | "tool_event" | "partial",
+        phase?: "normalize" | "session" | "directives" | "plan" | "policy" | "route" | "persist" | "dispatch",
+        message?: string,
+        payload?: Record<string, unknown>
+      ) => Promise<unknown>;
+      completeRun: (runId: string, status: "completed" | "failed" | "cancelled", message?: string) => Promise<unknown>;
     }
   ) {
     this.webSearchService = webSearchService;
@@ -154,6 +184,80 @@ export class GatewayService {
     const channel = provider === "baileys" ? "baileys" : "direct";
     const authSessionId = await this.resolveAuthSessionId(inbound.sessionId, provider);
     const authPreference = this.normalizeAuthPreference(inbound.metadata?.authPreference);
+    const queueMode = this.normalizeQueueMode(inbound.metadata?.queueMode);
+    const idempotencyKey = this.resolveIdempotencyKey(inbound.metadata?.idempotencyKey);
+    const runStart = await this.runLedger?.startRun({
+      sessionKey: authSessionId,
+      queueMode,
+      idempotencyKey,
+      model: authPreference === "oauth" ? "openai-codex/default" : this.codexApiKey ? "openai/default" : "none",
+      provider: authPreference === "oauth" ? "openai-codex" : "openai",
+      toolPolicySnapshot: {
+        approvalMode: this.capabilityPolicy.approvalMode,
+        approvalDefault: this.capabilityPolicy.approvalDefault,
+        webSearchEnabled: this.capabilityPolicy.webSearchEnabled,
+        webSearchRequireApproval: this.capabilityPolicy.webSearchRequireApproval,
+        webSearchProvider: this.capabilityPolicy.webSearchProvider,
+        fileWriteEnabled: this.capabilityPolicy.fileWriteEnabled,
+        fileWriteRequireApproval: this.capabilityPolicy.fileWriteRequireApproval,
+        fileWriteNotesOnly: this.capabilityPolicy.fileWriteNotesOnly,
+        fileWriteNotesDir: this.capabilityPolicy.fileWriteNotesDir
+      },
+      skillsSnapshot: this.buildSkillsSnapshot()
+    });
+    const runId = runStart?.run.runId;
+
+    const markPhase = async (
+      phase: "normalize" | "session" | "directives" | "plan" | "policy" | "route" | "persist" | "dispatch",
+      message?: string,
+      details?: Record<string, unknown>
+    ): Promise<void> => {
+      if (!runId || !this.runLedger) {
+        return;
+      }
+      try {
+        await this.runLedger.transitionPhase(runId, phase, message, details);
+      } catch {
+        // best-effort observability
+      }
+    };
+    const markRunNote = async (message: string, details?: Record<string, unknown>): Promise<void> => {
+      if (!runId || !this.runLedger) {
+        return;
+      }
+      try {
+        await this.runLedger.appendEvent(runId, "note", undefined, message, details);
+      } catch {
+        // best-effort observability
+      }
+    };
+
+    await markPhase("normalize", "Inbound payload normalized", {
+      source,
+      channel,
+      requestJob: inbound.requestJob,
+      queueMode
+    });
+    await markPhase("session", "Resolved session routing", {
+      sessionId: inbound.sessionId,
+      authSessionId,
+      authPreference
+    });
+
+    if (runStart && !runStart.acquired) {
+      await markPhase("dispatch", "Session is currently busy", {
+        activeRunId: runStart.activeRunId
+      });
+      if (runId && this.runLedger) {
+        await this.runLedger.completeRun(runId, "cancelled", `session_busy:${String(runStart.activeRunId ?? "unknown")}`);
+      }
+      return {
+        accepted: true,
+        mode: "chat",
+        response: `Session is busy with run ${String(runStart.activeRunId ?? "unknown")}. Please retry shortly.`
+      };
+    }
+
     await this.recordConversation(inbound.sessionId, "inbound", inbound.text ?? "", {
       source,
       channel,
@@ -161,117 +265,108 @@ export class GatewayService {
       metadata: {
         ...(inbound.metadata && typeof inbound.metadata === "object" ? inbound.metadata : {}),
         authSessionId,
-        authPreference
+        authPreference,
+        runId
       }
     });
 
-    if (inbound.requestJob) {
-      const job = await this.store.createJob({
-        type: "stub_task",
-        payload: {
-          text: inbound.text,
-          sessionId: inbound.sessionId,
-          ...inbound.metadata
-        },
-        priority: 5
-      });
+    let runFailure: string | null = null;
+    try {
+      await markPhase("directives", "Resolving directives and command surface");
 
-      await this.queueJobNotification(inbound.sessionId, job.id, "queued", `Job ${job.id} is queued`);
-      await this.recordConversation(inbound.sessionId, "outbound", `Job ${job.id} queued`, {
-        source: "gateway",
-        channel: "internal",
-        kind: "job",
-        metadata: { jobId: job.id, status: "queued" }
-      });
+      if (inbound.requestJob) {
+        await markPhase("route", "Inbound requested async job");
+        const job = await this.store.createJob({
+          type: "stub_task",
+          payload: {
+            text: inbound.text,
+            sessionId: inbound.sessionId,
+            ...inbound.metadata
+          },
+          priority: 5
+        });
 
-      return {
-        accepted: true,
-        mode: "async-job",
-        jobId: job.id
-      };
-    }
-
-    if (inbound.text) {
-      const paging = await this.handlePagingRequest(inbound.sessionId, inbound.text);
-      if (paging) {
-        await this.recordConversation(inbound.sessionId, "outbound", paging, {
+        await this.queueJobNotification(inbound.sessionId, job.id, "queued", `Job ${job.id} is queued`);
+        await markRunNote("Async job queued from inbound request", { jobId: job.id });
+        await markPhase("persist", "Persisting async job acknowledgement", { jobId: job.id });
+        await this.recordConversation(inbound.sessionId, "outbound", `Job ${job.id} queued`, {
           source: "gateway",
           channel: "internal",
-          kind: "command",
-          metadata: { authSessionId }
+          kind: "job",
+          metadata: { jobId: job.id, status: "queued", runId }
         });
+
         return {
           accepted: true,
-          mode: "chat",
-          response: paging
+          mode: "async-job",
+          jobId: job.id
         };
       }
 
-      const activeJob = await this.findLatestActiveJob(inbound.sessionId);
-      const plan = await this.intentPlanner?.plan(authSessionId, inbound.text, {
-        authPreference,
-        hasActiveJob: activeJob !== null
-      });
-      let plannerTraceLogged = false;
-      const recordPlannerTrace = async (chosenAction: string, extra?: Record<string, unknown>): Promise<void> => {
-        if (!plan || plannerTraceLogged) {
-          return;
-        }
-        plannerTraceLogged = true;
-        const confidence = Number.isFinite(plan.confidence) ? plan.confidence : 0;
-        const message = `Planner selected ${plan.intent} (${Math.round(confidence * 100)}%) -> ${chosenAction}`;
-        await this.recordConversation(inbound.sessionId, "system", message, {
-          source: "gateway",
-          channel: "internal",
-          kind: "command",
-          metadata: {
-            authSessionId,
-            plannerTrace: true,
-            plannerIntent: plan.intent,
-            plannerConfidence: confidence,
-            plannerReason: plan.reason,
-            plannerNeedsWorker: plan.needsWorker,
-            plannerProvider: plan.provider,
-            plannerQuery: plan.query,
-            plannerQuestion: plan.question,
-            plannerChosenAction: chosenAction,
-            ...(extra ?? {})
-          }
-        });
-      };
-
-      if (plan?.intent === "clarify") {
-        await recordPlannerTrace("ask_clarification");
-        const question = plan.question?.trim() || "Can you clarify what output you want first?";
-        await this.recordConversation(inbound.sessionId, "outbound", question, {
-          source: "gateway",
-          channel: "internal",
-          kind: "chat",
-          metadata: {
-            authSessionId,
-            plannerIntent: plan.intent,
-            plannerConfidence: plan.confidence,
-            plannerReason: plan.reason
-          }
-        });
-        return {
-          accepted: true,
-          mode: "chat",
-          response: question
-        };
-      }
-
-      if (plan?.intent === "status_query") {
-        const progressStatus = await this.answerProgressQuery(inbound.sessionId, inbound.text);
-        if (progressStatus) {
-          await recordPlannerTrace("reply_progress_status");
-          await this.recordConversation(inbound.sessionId, "outbound", progressStatus, {
+      if (inbound.text) {
+        const paging = await this.handlePagingRequest(inbound.sessionId, inbound.text);
+        if (paging) {
+          await markPhase("persist", "Serving paged response");
+          await this.recordConversation(inbound.sessionId, "outbound", paging, {
             source: "gateway",
             channel: "internal",
-            kind: "job",
+            kind: "command",
+            metadata: { authSessionId, runId }
+          });
+          return {
+            accepted: true,
+            mode: "chat",
+            response: paging
+          };
+        }
+
+        await markPhase("plan", "Planning intent");
+        const activeJob = await this.findLatestActiveJob(inbound.sessionId);
+        const plan = await this.intentPlanner?.plan(authSessionId, inbound.text, {
+          authPreference,
+          hasActiveJob: activeJob !== null
+        });
+        let plannerTraceLogged = false;
+        const recordPlannerTrace = async (chosenAction: string, extra?: Record<string, unknown>): Promise<void> => {
+          if (!plan || plannerTraceLogged) {
+            return;
+          }
+          plannerTraceLogged = true;
+          const confidence = Number.isFinite(plan.confidence) ? plan.confidence : 0;
+          const message = `Planner selected ${plan.intent} (${Math.round(confidence * 100)}%) -> ${chosenAction}`;
+          await this.recordConversation(inbound.sessionId, "system", message, {
+            source: "gateway",
+            channel: "internal",
+            kind: "command",
             metadata: {
               authSessionId,
-              progressQuery: true,
+              runId,
+              plannerTrace: true,
+              plannerIntent: plan.intent,
+              plannerConfidence: confidence,
+              plannerReason: plan.reason,
+              plannerNeedsWorker: plan.needsWorker,
+              plannerProvider: plan.provider,
+              plannerQuery: plan.query,
+              plannerQuestion: plan.question,
+              plannerChosenAction: chosenAction,
+              ...(extra ?? {})
+            }
+          });
+        };
+
+        await markPhase("policy", "Evaluating policy and approvals");
+        if (plan?.intent === "clarify") {
+          await recordPlannerTrace("ask_clarification");
+          const question = plan.question?.trim() || "Can you clarify what output you want first?";
+          await markPhase("persist", "Persisting clarification");
+          await this.recordConversation(inbound.sessionId, "outbound", question, {
+            source: "gateway",
+            channel: "internal",
+            kind: "chat",
+            metadata: {
+              authSessionId,
+              runId,
               plannerIntent: plan.intent,
               plannerConfidence: plan.confidence,
               plannerReason: plan.reason
@@ -280,52 +375,185 @@ export class GatewayService {
           return {
             accepted: true,
             mode: "chat",
+            response: question
+          };
+        }
+
+        if (plan?.intent === "status_query") {
+          const progressStatus = await this.answerProgressQuery(inbound.sessionId, inbound.text);
+          if (progressStatus) {
+            await recordPlannerTrace("reply_progress_status");
+            await markPhase("persist", "Persisting status-query response");
+            await this.recordConversation(inbound.sessionId, "outbound", progressStatus, {
+              source: "gateway",
+              channel: "internal",
+              kind: "job",
+              metadata: {
+                authSessionId,
+                runId,
+                progressQuery: true,
+                plannerIntent: plan.intent,
+                plannerConfidence: plan.confidence,
+                plannerReason: plan.reason
+              }
+            });
+            return {
+              accepted: true,
+              mode: "chat",
+              response: progressStatus
+            };
+          }
+        }
+
+        if (plan?.intent === "web_research" && plan.needsWorker && plan.query?.trim()) {
+          await markPhase("route", "Routing planner research to worker queue");
+          const job = await this.enqueueLongTaskJob(inbound.sessionId, {
+            taskType: "web_search",
+            query: plan.query.trim(),
+            provider: plan.provider ?? this.capabilityPolicy.webSearchProvider,
+            authSessionId,
+            authPreference,
+            reason: `planner_${plan.reason}`
+          });
+          await recordPlannerTrace("enqueue_worker_web_search", { jobId: job.id, taskType: "web_search" });
+          await markRunNote("Planner delegated to worker", { jobId: job.id, reason: plan.reason });
+          const response = `Queued research as job ${job.id}. I will share concise progress and final results here.`;
+          await markPhase("persist", "Persisting worker delegation response");
+          await this.recordConversation(inbound.sessionId, "outbound", response, {
+            source: "gateway",
+            channel: "internal",
+            kind: "job",
+            metadata: {
+              authSessionId,
+              runId,
+              plannerIntent: plan.intent,
+              plannerConfidence: plan.confidence,
+              plannerReason: plan.reason,
+              jobId: job.id
+            }
+          });
+          return {
+            accepted: true,
+            mode: "async-job",
+            response,
+            jobId: job.id
+          };
+        }
+
+        const command = parseCommand(inbound.text);
+        if (command) {
+          await markPhase("route", "Routing command execution", { command: command.kind });
+          await recordPlannerTrace("execute_command", { command: command.kind });
+          const response = await this.executeCommand(inbound.sessionId, command, authSessionId, authPreference);
+          await markPhase("persist", "Persisting command response", { command: command.kind });
+          await this.recordConversation(inbound.sessionId, "outbound", response, {
+            source: "gateway",
+            channel: "internal",
+            kind: "command",
+            metadata: {
+              authSessionId,
+              runId
+            }
+          });
+          return {
+            accepted: true,
+            mode: "chat",
+            response
+          };
+        }
+
+        const implicitApproval = this.parseImplicitApprovalDecision(inbound.text);
+        if (implicitApproval) {
+          const decisionResult = await this.executeImplicitApprovalDecision(
+            inbound.sessionId,
+            implicitApproval,
+            authSessionId,
+            authPreference
+          );
+          if (decisionResult.handled) {
+            await markPhase("route", "Routing implicit approval decision", { decision: implicitApproval });
+            await recordPlannerTrace("resolve_approval_decision", { decision: implicitApproval });
+            await markPhase("persist", "Persisting implicit approval response");
+            await this.recordConversation(inbound.sessionId, "outbound", decisionResult.response, {
+              source: "gateway",
+              channel: "internal",
+              kind: "command",
+              metadata: {
+                authSessionId,
+                runId
+              }
+            });
+            return {
+              accepted: true,
+              mode: "chat",
+              response: decisionResult.response
+            };
+          }
+        }
+
+        const progressStatus = await this.answerProgressQuery(inbound.sessionId, inbound.text);
+        if (progressStatus) {
+          await markPhase("route", "Routing progress-query fallback");
+          await recordPlannerTrace("reply_progress_status_fallback");
+          await markPhase("persist", "Persisting progress fallback response");
+          await this.recordConversation(inbound.sessionId, "outbound", progressStatus, {
+            source: "gateway",
+            channel: "internal",
+            kind: "job",
+            metadata: {
+              authSessionId,
+              runId,
+              progressQuery: true
+            }
+          });
+          return {
+            accepted: true,
+            mode: "chat",
             response: progressStatus
           };
         }
-      }
 
-      if (plan?.intent === "web_research" && plan.needsWorker && plan.query?.trim()) {
-        const job = await this.enqueueLongTaskJob(inbound.sessionId, {
-          taskType: "web_search",
-          query: plan.query.trim(),
-          provider: plan.provider ?? this.capabilityPolicy.webSearchProvider,
-          authSessionId,
-          authPreference,
-          reason: `planner_${plan.reason}`
-        });
-        await recordPlannerTrace("enqueue_worker_web_search", { jobId: job.id, taskType: "web_search" });
-        const response = `Queued research as job ${job.id}. I will share concise progress and final results here.`;
+        const routed = await this.routeLongTaskIfNeeded(inbound.sessionId, inbound.text, authSessionId, authPreference);
+        if (routed) {
+          await markPhase("route", "Routing heuristic long task to worker", {
+            taskType: routed.taskType,
+            reason: routed.reason
+          });
+          await recordPlannerTrace("enqueue_heuristic_long_task", { jobId: routed.jobId, taskType: routed.taskType });
+          await markRunNote("Heuristic delegation to worker", { jobId: routed.jobId, reason: routed.reason });
+          await markPhase("persist", "Persisting heuristic worker delegation response");
+          await this.recordConversation(inbound.sessionId, "outbound", routed.response, {
+            source: "gateway",
+            channel: "internal",
+            kind: "job",
+            metadata: {
+              authSessionId,
+              runId,
+              routedTaskType: routed.taskType,
+              reason: routed.reason,
+              jobId: routed.jobId
+            }
+          });
+          return {
+            accepted: true,
+            mode: "async-job",
+            response: routed.response,
+            jobId: routed.jobId
+          };
+        }
+
+        await markPhase("route", "Running local chat turn");
+        await recordPlannerTrace("run_chat_turn");
+        const response = await this.executeChatTurn(authSessionId, inbound.text, authPreference);
+        await markPhase("persist", "Persisting chat response");
         await this.recordConversation(inbound.sessionId, "outbound", response, {
           source: "gateway",
           channel: "internal",
-          kind: "job",
+          kind: "chat",
           metadata: {
             authSessionId,
-            plannerIntent: plan.intent,
-            plannerConfidence: plan.confidence,
-            plannerReason: plan.reason,
-            jobId: job.id
-          }
-        });
-        return {
-          accepted: true,
-          mode: "async-job",
-          response,
-          jobId: job.id
-        };
-      }
-
-      const command = parseCommand(inbound.text);
-      if (command) {
-        await recordPlannerTrace("execute_command", { command: command.kind });
-        const response = await this.executeCommand(inbound.sessionId, command, authSessionId, authPreference);
-        await this.recordConversation(inbound.sessionId, "outbound", response, {
-          source: "gateway",
-          channel: "internal",
-          kind: "command",
-          metadata: {
-            authSessionId
+            runId,
+            authPreference
           }
         });
         return {
@@ -335,96 +563,21 @@ export class GatewayService {
         };
       }
 
-      const implicitApproval = this.parseImplicitApprovalDecision(inbound.text);
-      if (implicitApproval) {
-        const decisionResult = await this.executeImplicitApprovalDecision(
-          inbound.sessionId,
-          implicitApproval,
-          authSessionId,
-          authPreference
-        );
-        if (decisionResult.handled) {
-          await recordPlannerTrace("resolve_approval_decision", { decision: implicitApproval });
-          await this.recordConversation(inbound.sessionId, "outbound", decisionResult.response, {
-            source: "gateway",
-            channel: "internal",
-            kind: "command",
-            metadata: {
-              authSessionId
-            }
-          });
-          return {
-            accepted: true,
-            mode: "chat",
-            response: decisionResult.response
-          };
-        }
-      }
-
-      const progressStatus = await this.answerProgressQuery(inbound.sessionId, inbound.text);
-      if (progressStatus) {
-        await recordPlannerTrace("reply_progress_status_fallback");
-        await this.recordConversation(inbound.sessionId, "outbound", progressStatus, {
-          source: "gateway",
-          channel: "internal",
-          kind: "job",
-          metadata: {
-            authSessionId,
-            progressQuery: true
-          }
-        });
-        return {
-          accepted: true,
-          mode: "chat",
-          response: progressStatus
-        };
-      }
-
-      const routed = await this.routeLongTaskIfNeeded(inbound.sessionId, inbound.text, authSessionId, authPreference);
-      if (routed) {
-        await recordPlannerTrace("enqueue_heuristic_long_task", { jobId: routed.jobId, taskType: routed.taskType });
-        await this.recordConversation(inbound.sessionId, "outbound", routed.response, {
-          source: "gateway",
-          channel: "internal",
-          kind: "job",
-          metadata: {
-            authSessionId,
-            routedTaskType: routed.taskType,
-            reason: routed.reason,
-            jobId: routed.jobId
-          }
-        });
-        return {
-          accepted: true,
-          mode: "async-job",
-          response: routed.response,
-          jobId: routed.jobId
-        };
-      }
-
-      await recordPlannerTrace("run_chat_turn");
-      const response = await this.executeChatTurn(authSessionId, inbound.text, authPreference);
-      await this.recordConversation(inbound.sessionId, "outbound", response, {
-        source: "gateway",
-        channel: "internal",
-        kind: "chat",
-        metadata: {
-          authSessionId,
-          authPreference
-        }
-      });
+      await markPhase("persist", "No inbound chat text received");
       return {
         accepted: true,
         mode: "chat",
-        response
+        response: "No chat text received."
       };
+    } catch (error) {
+      runFailure = error instanceof Error ? error.message : String(error);
+      throw error;
+    } finally {
+      if (runId && this.runLedger) {
+        await markPhase("dispatch", runFailure ? "Dispatch ended with failure" : "Dispatch completed");
+        await this.runLedger.completeRun(runId, runFailure ? "failed" : "completed", runFailure ?? undefined);
+      }
     }
-
-    return {
-      accepted: true,
-      mode: "chat",
-      response: "No chat text received."
-    };
   }
 
   async createJob(payload: unknown): Promise<{ jobId: string; status: string }> {
@@ -1126,6 +1279,46 @@ export class GatewayService {
       return "api_key";
     }
     return "auto";
+  }
+
+  private normalizeQueueMode(raw: unknown): RunQueueMode {
+    if (typeof raw !== "string") {
+      return "steer";
+    }
+    const value = raw.trim().toLowerCase();
+    if (value === "collect") {
+      return "collect";
+    }
+    if (value === "followup") {
+      return "followup";
+    }
+    return "steer";
+  }
+
+  private resolveIdempotencyKey(raw: unknown): string | undefined {
+    if (typeof raw !== "string") {
+      return undefined;
+    }
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    return trimmed.slice(0, 128);
+  }
+
+  private buildSkillsSnapshot(): { hash: string; content: string[] } {
+    const content = [
+      "intent_planner",
+      "web_search",
+      "memory_search",
+      "reminders",
+      "notes",
+      "tasks",
+      "approval_gate",
+      "file_write_policy"
+    ];
+    const hash = content.join("|");
+    return { hash, content };
   }
 
   private normalizeWebSearchProvider(raw: unknown): WebSearchProvider | undefined {
