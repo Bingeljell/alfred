@@ -26,4 +26,22 @@ describe("ApprovalStore", () => {
     const empty = await store.peekLatest("owner@s.whatsapp.net");
     expect(empty).toBeNull();
   });
+
+  it("lists pending approvals by session and globally", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-approval-store-list-"));
+    const store = new ApprovalStore(stateDir);
+    await store.ensureReady();
+
+    const first = await store.create("a@s.whatsapp.net", "send_text", { text: "one" });
+    await store.create("b@s.whatsapp.net", "send_text", { text: "two" });
+    const third = await store.create("a@s.whatsapp.net", "web_search", { query: "latest docs" });
+
+    const bySession = await store.listBySession("a@s.whatsapp.net", 10);
+    expect(bySession.length).toBe(2);
+    expect(bySession[0]?.token).toBe(third.token);
+    expect(bySession[1]?.token).toBe(first.token);
+
+    const globalPending = await store.listPending(10);
+    expect(globalPending.length).toBe(3);
+  });
 });

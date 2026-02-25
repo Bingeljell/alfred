@@ -62,6 +62,27 @@ export class ApprovalStore {
     return record;
   }
 
+  async listBySession(sessionId: string, limit = 10): Promise<ApprovalRecord[]> {
+    const state = await this.read();
+    this.pruneExpired(state);
+    await this.write(state);
+
+    const bounded = Math.max(1, Math.min(100, Math.floor(limit)));
+    return state.approvals
+      .filter((item) => item.sessionId === sessionId)
+      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+      .slice(0, bounded);
+  }
+
+  async listPending(limit = 100): Promise<ApprovalRecord[]> {
+    const state = await this.read();
+    this.pruneExpired(state);
+    await this.write(state);
+
+    const bounded = Math.max(1, Math.min(500, Math.floor(limit)));
+    return [...state.approvals].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)).slice(0, bounded);
+  }
+
   async peekLatest(sessionId: string): Promise<ApprovalRecord | null> {
     const state = await this.read();
     this.pruneExpired(state);

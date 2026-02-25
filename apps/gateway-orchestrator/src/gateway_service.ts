@@ -633,6 +633,24 @@ export class GatewayService {
     return this.store.retryJob(jobId);
   }
 
+  async listPendingApprovals(
+    sessionId: string,
+    limit = 10
+  ): Promise<Array<{ token: string; action: string; createdAt: string; expiresAt: string; payloadPreview: string }>> {
+    if (!this.approvalStore) {
+      return [];
+    }
+
+    const pending = await this.approvalStore.listBySession(sessionId, limit);
+    return pending.map((item) => ({
+      token: item.token,
+      action: item.action,
+      createdAt: item.createdAt,
+      expiresAt: item.expiresAt,
+      payloadPreview: this.buildApprovalPayloadPreview(item.payload)
+    }));
+  }
+
   async handleBaileysInbound(payload: unknown, dedupeStore: MessageDedupeStore): Promise<{
     accepted: boolean;
     duplicate: boolean;
@@ -873,6 +891,25 @@ export class GatewayService {
         ].join("\n");
       }
 
+      case "approval_pending": {
+        if (!this.approvalStore) {
+          return "Approvals are not configured.";
+        }
+        const pending = await this.approvalStore.listBySession(sessionId, 5);
+        if (pending.length === 0) {
+          return "No pending approvals for this session.";
+        }
+        const lines = pending.map((item) => {
+          const preview = this.buildApprovalPayloadPreview(item.payload);
+          return `- ${item.action} token=${item.token} expires=${item.expiresAt}${preview ? ` payload=${preview}` : ""}`;
+        });
+        return [
+          `Pending approvals (${pending.length}):`,
+          ...lines,
+          "Reply yes/no for latest, or approve <token> / reject <token> for explicit resolution."
+        ].join("\n");
+      }
+
       case "supervisor_status": {
         if (!this.supervisorStore) {
           return "Supervisor is not configured.";
@@ -953,7 +990,7 @@ export class GatewayService {
             authSessionId,
             authPreference
           });
-          return `Approval required for web search. Reply: approve ${approval.token}`;
+          return `Approval required for web search. Reply yes/no, or approve ${approval.token}`;
         }
         const provider = command.provider ?? this.capabilityPolicy.webSearchProvider;
         const job = await this.enqueueLongTaskJob(sessionId, {
@@ -986,7 +1023,7 @@ export class GatewayService {
             relativePath: command.relativePath,
             text: command.text
           });
-          return `Approval required for file write. Reply: approve ${approval.token}`;
+          return `Approval required for file write. Reply yes/no, or approve ${approval.token}`;
         }
 
         return this.executeFileWrite(resolved.absolutePath, command.text);
@@ -998,7 +1035,7 @@ export class GatewayService {
         }
 
         const approval = await this.approvalStore.create(sessionId, "send_text", { text: command.text });
-        return `Approval required for side-effect action. Reply: approve ${approval.token}`;
+        return `Approval required for side-effect action. Reply yes/no, or approve ${approval.token}`;
       }
 
       case "approve": {
@@ -1270,6 +1307,29 @@ export class GatewayService {
     }
 
     return `Approved action executed: ${approval.action}`;
+  }
+
+  private buildApprovalPayloadPreview(payload: Record<string, unknown>): string {
+    if (!payload || typeof payload !== "object") {
+      return "";
+    }
+
+    const query = typeof payload.query === "string" ? payload.query.trim() : "";
+    if (query) {
+      return query.replace(/\s+/g, " ").slice(0, 140);
+    }
+
+    const relativePath = typeof payload.relativePath === "string" ? payload.relativePath.trim() : "";
+    if (relativePath) {
+      return relativePath.slice(0, 140);
+    }
+
+    const text = typeof payload.text === "string" ? payload.text.trim() : "";
+    if (text) {
+      return text.replace(/\s+/g, " ").slice(0, 140);
+    }
+
+    return "";
   }
 
   private async queueInFlightStatus(sessionId: string, text: string): Promise<void> {

@@ -17,22 +17,27 @@ Web Console Manual Checklist
 13. For `/web` commands, confirm an in-flight status message (for example `Working on web search ...`) appears in stream/WhatsApp before the final result on slower providers.
 14. Trigger a pending approval (`send test approval`) and reply `yes`; confirm approved action executes without token.
 15. Trigger another pending approval and reply `no`; confirm action is rejected.
-16. Set `ALFRED_WEB_SEARCH_PROVIDER=brave` with `BRAVE_SEARCH_API_KEY`, restart gateway, run `/web --provider=brave latest OpenAI updates`, and confirm provider label + Brave-formatted links appear.
-17. Set `PERPLEXITY_API_KEY`, run `/web --provider=perplexity latest OpenAI updates`, and confirm provider label + cited output appears.
-18. Run `/web --provider=openai latest OpenAI updates` and confirm Codex/OpenAI path still works.
-19. Send `/write notes/manual.md hello` and confirm default response says file-write is disabled.
-20. Set `ALFRED_FILE_WRITE_ENABLED=true`, restart gateway, retry `/write notes/manual.md hello`, approve token, then confirm file is appended under `workspace/alfred/notes/manual.md`.
-21. Send a long research-style prompt (for example: `research best stable diffusion models and compare options`) and confirm immediate async-job acknowledgment is returned (not a long blocking turn).
-22. Wait for worker updates and confirm progress notifications appear (running/progress/succeeded) and `status?` returns latest active job state.
-23. If response is paged, send `#next` repeatedly and confirm each page is returned until completion.
-24. Send an ambiguous request (for example: `help me with models`) and confirm Alfred asks a clarifying question instead of executing uncertain work.
-25. Confirm `STREAM_PLANNER_TRACE` appears in Console Output for planner-routed turns and includes intent/confidence/chosen action metadata.
-26. Send `/policy` and confirm `approvalMode: balanced` (or your configured mode) is reported.
-27. Call `GET /v1/runs?sessionKey=<your-session>&limit=5` and confirm latest run includes phase events (`session`, `directives`, `route`, `persist`, `dispatch`) and run spec metadata.
-28. Call `GET /v1/runs/<runId>` for one run from step 27 and confirm final status/event (`completed` or `failed`) is present.
-29. Send `/supervise web --providers=openai,brave compare stable diffusion options` and confirm response includes supervisor id + child count.
-30. Call `GET /v1/supervisors` and `GET /v1/supervisors/<id>` and verify child job statuses move from queued/running to terminal.
-31. Set `WORKER_CONCURRENCY=2`, restart worker, trigger two long web jobs, and confirm both progress concurrently in stream output.
+16. Trigger a pending approval and run `/approval pending`; confirm action/token/expiry are shown.
+17. Resolve a pending action via API:
+   - `GET /v1/approvals/pending?sessionId=<session>`
+   - `POST /v1/approvals/resolve` with `{ "sessionId":"<session>", "decision":"approve", "token":"<token>" }`
+   Confirm approval is executed and pending list shrinks.
+18. Set `ALFRED_WEB_SEARCH_PROVIDER=brave` with `BRAVE_SEARCH_API_KEY`, restart gateway, run `/web --provider=brave latest OpenAI updates`, and confirm provider label + Brave-formatted links appear.
+19. Set `PERPLEXITY_API_KEY`, run `/web --provider=perplexity latest OpenAI updates`, and confirm provider label + cited output appears.
+20. Run `/web --provider=openai latest OpenAI updates` and confirm Codex/OpenAI path still works.
+21. Send `/write notes/manual.md hello` and confirm default response says file-write is disabled.
+22. Set `ALFRED_FILE_WRITE_ENABLED=true`, restart gateway, retry `/write notes/manual.md hello`, approve token, then confirm file is appended under `workspace/alfred/notes/manual.md`.
+23. Send a long research-style prompt (for example: `research best stable diffusion models and compare options`) and confirm immediate async-job acknowledgment is returned (not a long blocking turn).
+24. Wait for worker updates and confirm progress notifications appear (running/progress/succeeded) and `status?` returns latest active job state.
+25. If response is paged, send `#next` repeatedly and confirm each page is returned until completion.
+26. Send an ambiguous request (for example: `help me with models`) and confirm Alfred asks a clarifying question instead of executing uncertain work.
+27. Confirm `STREAM_PLANNER_TRACE` appears in Console Output for planner-routed turns and includes intent/confidence/chosen action metadata.
+28. Send `/policy` and confirm `approvalMode: balanced` (or your configured mode) is reported.
+29. Call `GET /v1/runs?sessionKey=<your-session>&limit=5` and confirm latest run includes phase events (`session`, `directives`, `route`, `persist`, `dispatch`) and run spec metadata.
+30. Call `GET /v1/runs/<runId>` for one run from step 29 and confirm final status/event (`completed` or `failed`) is present.
+31. Send `/supervise web --providers=openai,brave compare stable diffusion options` and confirm response includes supervisor id + child count.
+32. Call `GET /v1/supervisors` and `GET /v1/supervisors/<id>` and verify child job statuses move from queued/running to terminal.
+33. Set `WORKER_CONCURRENCY=2`, restart worker, trigger two long web jobs, and confirm both progress concurrently in stream output.
 
 Heartbeat Manual Checklist
 1. Open `/ui` and use the Heartbeat section.

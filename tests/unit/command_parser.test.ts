@@ -32,6 +32,8 @@ describe("parseCommand", () => {
 
   it("parses capability and policy commands", () => {
     expect(parseCommand("/policy")).toEqual({ kind: "policy_status" });
+    expect(parseCommand("/approval")).toEqual({ kind: "approval_pending" });
+    expect(parseCommand("/approval pending")).toEqual({ kind: "approval_pending" });
     expect(parseCommand("/web latest openai oauth docs")).toEqual({
       kind: "web_search",
       query: "latest openai oauth docs",
@@ -76,5 +78,7 @@ describe("parseCommand", () => {
 
   it("parses explicit reject command", () => {
     expect(parseCommand("reject abc123")).toEqual({ kind: "reject", token: "abc123" });
+    expect(parseCommand("/approve abc123")).toEqual({ kind: "approve", token: "abc123" });
+    expect(parseCommand("/reject abc123")).toEqual({ kind: "reject", token: "abc123" });
   });
 });

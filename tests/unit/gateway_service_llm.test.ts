@@ -102,6 +102,38 @@ describe("GatewayService llm path", () => {
     expect(calls.length).toBe(0);
   });
 
+  it("shows pending approvals and resolves with slash token commands", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-approval-pending-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const service = new GatewayService(queueStore, undefined, undefined, undefined, undefined, approvalStore);
+    const gated = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "send hello from approval test",
+      requestJob: false
+    });
+    expect(gated.response).toContain("Approval required");
+
+    const pending = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "/approval pending",
+      requestJob: false
+    });
+    expect(pending.response).toContain("Pending approvals");
+    expect(pending.response).toContain("send_text");
+
+    const token = String(gated.response?.split("approve ")[1] ?? "").trim();
+    const approved = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `/approve ${token}`,
+      requestJob: false
+    });
+    expect(approved.response).toContain("Approved action executed: send 'hello from approval test'");
+  });
+
   it("creates supervised fan-out web jobs and exposes supervisor status", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-supervisor-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);

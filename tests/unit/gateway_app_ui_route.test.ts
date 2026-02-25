@@ -38,6 +38,8 @@ describe("gateway web console routes", () => {
     expect(routes).toContain("GET /v1/runs/:runId");
     expect(routes).toContain("GET /v1/supervisors");
     expect(routes).toContain("GET /v1/supervisors/:id");
+    expect(routes).toContain("GET /v1/approvals/pending");
+    expect(routes).toContain("POST /v1/approvals/resolve");
     expect(routes).toContain("GET /v1/identity/mappings");
     expect(routes).toContain("GET /v1/identity/resolve");
     expect(routes).toContain("POST /v1/identity/mappings");

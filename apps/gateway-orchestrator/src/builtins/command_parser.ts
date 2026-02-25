@@ -25,6 +25,7 @@ export type ParsedCommand =
   | { kind: "supervisor_status"; id: string }
   | { kind: "file_write"; relativePath: string; text: string }
   | { kind: "policy_status" }
+  | { kind: "approval_pending" }
   | { kind: "side_effect_send"; text: string }
   | { kind: "approve"; token: string }
   | { kind: "reject"; token: string };
@@ -118,6 +119,10 @@ export function parseCommand(text: string): ParsedCommand | null {
 
   if (value.toLowerCase() === "/policy") {
     return { kind: "policy_status" };
+  }
+
+  if (value.toLowerCase() === "/approval" || value.toLowerCase() === "/approval pending") {
+    return { kind: "approval_pending" };
   }
 
   if (value.toLowerCase().startsWith("/web ")) {
@@ -216,15 +221,17 @@ export function parseCommand(text: string): ParsedCommand | null {
     return { kind: "side_effect_send", text: value.slice(5).trim() };
   }
 
-  if (value.toLowerCase().startsWith("approve ")) {
-    const token = value.slice(8).trim();
+  if (value.toLowerCase().startsWith("approve ") || value.toLowerCase().startsWith("/approve ")) {
+    const offset = value.toLowerCase().startsWith("/approve ") ? 9 : 8;
+    const token = value.slice(offset).trim();
     if (token) {
       return { kind: "approve", token };
     }
   }
 
-  if (value.toLowerCase().startsWith("reject ")) {
-    const token = value.slice(7).trim();
+  if (value.toLowerCase().startsWith("reject ") || value.toLowerCase().startsWith("/reject ")) {
+    const offset = value.toLowerCase().startsWith("/reject ") ? 8 : 7;
+    const token = value.slice(offset).trim();
     if (token) {
       return { kind: "reject", token };
     }

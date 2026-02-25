@@ -192,10 +192,12 @@ Acceptance criteria:
 - `/write <relative-path> <text>` writes only inside workspace, is disabled by default, and can be restricted to notes-only paths.
 - `/policy` command reports active capability policy state for manual verification.
 - Pending approvals can be resolved with natural yes/no replies (`yes` approves latest pending action, `no` rejects latest pending action) in both web chat and WhatsApp, while token-based `approve <token>` remains supported.
+- `/approval` / `/approval pending` reports pending approval state (action/token/expiry) for session-level operator visibility.
+- Approval state is queryable and resolvable via API (`GET /v1/approvals/pending`, `POST /v1/approvals/resolve`) for cross-channel control surfaces.
 
 Testing:
-- Automated: command parser, config parsing, and gateway-service unit tests for web-search approvals and file-write policy enforcement.
-- Manual: run `/policy`, `/web ...`, and `/write ...` with different `ALFRED_*` env combinations and verify approval/workspace behavior.
+- Automated: approval-store, command parser, app-route, and gateway-service unit tests for pending approval visibility, token/yes-no resolution, web-search approvals, and file-write policy enforcement.
+- Manual: run `/policy`, `/approval pending`, `/web ...`, `/write ...`, and approval API endpoints with different `ALFRED_*` env combinations and verify cross-channel approval/workspace behavior.
 
 ## 11) Daily Memory Compaction
 

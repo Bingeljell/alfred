@@ -62,6 +62,14 @@ const MemoryCompactionRunBodySchema = z.object({
   targetDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
 });
 
+const ApprovalResolveBodySchema = z.object({
+  sessionId: z.string().min(1),
+  decision: z.enum(["approve", "reject"]),
+  token: z.string().min(1).optional(),
+  authSessionId: z.string().min(1).optional(),
+  authPreference: z.enum(["auto", "oauth", "api_key"]).optional()
+});
+
 const DEFAULT_STREAM_KINDS = ["chat", "command", "job", "error"] as const;
 const ConversationSourceValues = ["gateway", "whatsapp", "auth", "memory", "worker", "system"] as const;
 const ConversationChannelValues = ["direct", "baileys", "api", "internal"] as const;
@@ -424,6 +432,52 @@ export function createGatewayApp(
       return;
     }
     res.status(200).json(run);
+  });
+
+  app.get("/v1/approvals/pending", async (req, res) => {
+    const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
+    if (!sessionId) {
+      res.status(400).json({ error: "sessionId_required" });
+      return;
+    }
+
+    const rawLimit = Number(req.query.limit ?? 10);
+    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(100, Math.floor(rawLimit))) : 10;
+    const pending = await service.listPendingApprovals(sessionId, limit);
+    res.status(200).json({
+      sessionId,
+      count: pending.length,
+      pending
+    });
+  });
+
+  app.post("/v1/approvals/resolve", async (req, res) => {
+    const parsed = ApprovalResolveBodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_approval_resolve_request", detail: parsed.error.flatten() });
+      return;
+    }
+
+    const payload = parsed.data;
+    const text =
+      payload.decision === "approve"
+        ? payload.token
+          ? `approve ${payload.token}`
+          : "yes"
+        : payload.token
+          ? `reject ${payload.token}`
+          : "no";
+
+    const result = await service.handleInbound({
+      sessionId: payload.sessionId,
+      text,
+      requestJob: false,
+      metadata: {
+        ...(payload.authSessionId ? { authSessionId: payload.authSessionId } : {}),
+        ...(payload.authPreference ? { authPreference: payload.authPreference } : {})
+      }
+    });
+    res.status(200).json(result);
   });
 
   app.get("/v1/stream/events/subscribe", async (req, res) => {
