@@ -115,6 +115,7 @@ Acceptance criteria:
 - Stream API supports low-noise mode by default (`chat`/`command`/`job`/`error`) with optional noisy-event inclusion in `/ui` for deeper diagnostics.
 - Stream persistence has retention and noise controls (`STREAM_MAX_EVENTS`, `STREAM_RETENTION_DAYS`, `STREAM_DEDUPE_WINDOW_MS`) to keep long-running state bounded.
 - `/ui` includes a persisted session transcript panel so operators can reload and inspect prior conversation turns after refresh/restart.
+- Transcript panel supports day-scoped filtering (default `today`) so operators can inspect historical days without rendering full multi-day transcript payloads in one view.
 
 Testing:
 - Automated: route-level/UI render tests for live WhatsApp endpoints plus unit coverage for Baileys runtime filtering/token authorization.

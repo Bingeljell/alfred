@@ -77,9 +77,13 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("id=\"sessionTranscript\"");
     expect(html).toContain("class=\"transcript-frame\"");
     expect(html).toContain("id=\"transcriptRefresh\"");
+    expect(html).toContain("id=\"transcriptDate\"");
     expect(html).toContain("id=\"transcriptAllSessions\"");
     expect(html).toContain("All sessions");
     expect(html).toContain("TRANSCRIPT_SCOPE_UPDATE");
+    expect(html).toContain("TRANSCRIPT_DAY_UPDATE");
+    expect(html).toContain("resolveTranscriptDateBounds");
+    expect(html).toContain("&until=");
     expect(html).toContain(".transcript-frame {");
     expect(html).toContain("width: min(100%, 800px);");
     expect(html).toContain("max-width: 800px;");

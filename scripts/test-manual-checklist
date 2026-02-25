@@ -6,14 +6,16 @@ Web Console Manual Checklist
 2. Start gateway: npm run dev:gateway
 3. Open http://localhost:3000/ui
 4. Confirm `Persisted Transcript` loads prior turns for the selected Session ID after refresh/restart.
-5. Use `LLM Auth Mode` = `Auto (Recommended)` and send a chat message; confirm response appears in log panel and transcript updates.
-6. Switch `LLM Auth Mode` to `API key only` (without API key configured) and confirm explicit backend guidance is returned (not silent `ack:`).
-7. Send as async job and confirm jobId appears and can be checked with Job Controls.
-8. Run Memory Search/Sync/Status actions and confirm responses are shown in the log panel.
-9. Send `/policy` and confirm workspace + approval policy values match your `.env`.
-10. Send `/web latest OpenAI docs` and confirm approval token is requested (default policy), then send `approve <token>` and confirm web-result text is returned.
-11. Send `/write notes/manual.md hello` and confirm default response says file-write is disabled.
-12. Set `ALFRED_FILE_WRITE_ENABLED=true`, restart gateway, retry `/write notes/manual.md hello`, approve token, then confirm file is appended under `workspace/alfred/notes/manual.md`.
+5. Keep transcript `Day` set to today and verify only same-day entries render.
+6. Change transcript `Day` to a prior date and verify historical entries load for that day without rendering full multi-day history.
+7. Use `LLM Auth Mode` = `Auto (Recommended)` and send a chat message; confirm response appears in log panel and transcript updates.
+8. Switch `LLM Auth Mode` to `API key only` (without API key configured) and confirm explicit backend guidance is returned (not silent `ack:`).
+9. Send as async job and confirm jobId appears and can be checked with Job Controls.
+10. Run Memory Search/Sync/Status actions and confirm responses are shown in the log panel.
+11. Send `/policy` and confirm workspace + approval policy values match your `.env`.
+12. Send `/web latest OpenAI docs` and confirm approval token is requested (default policy), then send `approve <token>` and confirm web-result text is returned.
+13. Send `/write notes/manual.md hello` and confirm default response says file-write is disabled.
+14. Set `ALFRED_FILE_WRITE_ENABLED=true`, restart gateway, retry `/write notes/manual.md hello`, approve token, then confirm file is appended under `workspace/alfred/notes/manual.md`.
 
 Heartbeat Manual Checklist
 1. Open `/ui` and use the Heartbeat section.

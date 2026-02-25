@@ -290,6 +290,7 @@ export function createGatewayApp(
     const directions = parseCsvFilter(req.query.directions, ConversationDirectionValues);
     const text = typeof req.query.text === "string" ? req.query.text.trim() : "";
     const since = typeof req.query.since === "string" ? req.query.since.trim() : "";
+    const until = typeof req.query.until === "string" ? req.query.until.trim() : "";
 
     const events = await conversationStore.query({
       sessionId: sessionId || undefined,
@@ -299,7 +300,8 @@ export function createGatewayApp(
       channels,
       directions,
       text: text || undefined,
-      since: since || undefined
+      since: since || undefined,
+      until: until || undefined
     });
     res.status(200).json({ events });
   });
@@ -322,12 +324,15 @@ export function createGatewayApp(
     const directions = parseCsvFilter(req.query.directions, ConversationDirectionValues);
     const text = typeof req.query.text === "string" ? req.query.text.trim().toLowerCase() : "";
     const since = typeof req.query.since === "string" ? req.query.since.trim() : "";
+    const until = typeof req.query.until === "string" ? req.query.until.trim() : "";
     const sourceSet = sources ? new Set(sources) : null;
     const channelSet = channels ? new Set(channels) : null;
     const kindSet = kinds ? new Set(kinds) : null;
     const directionSet = directions ? new Set(directions) : null;
     const sinceUnixMs = since ? Date.parse(since) : Number.NaN;
     const sinceEnabled = Number.isFinite(sinceUnixMs);
+    const untilUnixMs = until ? Date.parse(until) : Number.NaN;
+    const untilEnabled = Number.isFinite(untilUnixMs);
 
     res.setHeader("content-type", "text/event-stream");
     res.setHeader("cache-control", "no-cache");
@@ -342,7 +347,8 @@ export function createGatewayApp(
       channels,
       directions,
       text: text || undefined,
-      since: since || undefined
+      since: since || undefined,
+      until: until || undefined
     });
     for (const event of initialEvents) {
       res.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -370,6 +376,12 @@ export function createGatewayApp(
       if (sinceEnabled) {
         const eventUnixMs = Date.parse(event.createdAt);
         if (Number.isFinite(eventUnixMs) && eventUnixMs < sinceUnixMs) {
+          return;
+        }
+      }
+      if (untilEnabled) {
+        const eventUnixMs = Date.parse(event.createdAt);
+        if (Number.isFinite(eventUnixMs) && eventUnixMs >= untilUnixMs) {
           return;
         }
       }

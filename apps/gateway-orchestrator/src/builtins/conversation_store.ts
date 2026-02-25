@@ -32,6 +32,7 @@ export type ConversationQuery = {
   directions?: ConversationDirection[];
   text?: string;
   since?: string;
+  until?: string;
 };
 
 export class ConversationStore {
@@ -142,6 +143,8 @@ export class ConversationStore {
     const textFilter = query.text?.trim().toLowerCase() ?? "";
     const sinceUnixMs = query.since ? Date.parse(query.since) : Number.NaN;
     const sinceActive = Number.isFinite(sinceUnixMs);
+    const untilUnixMs = query.until ? Date.parse(query.until) : Number.NaN;
+    const untilActive = Number.isFinite(untilUnixMs);
 
     const filtered = state.events.filter((event) => {
       if (query.sessionId && event.sessionId !== query.sessionId) {
@@ -165,6 +168,12 @@ export class ConversationStore {
       if (sinceActive) {
         const eventUnixMs = Date.parse(event.createdAt);
         if (Number.isFinite(eventUnixMs) && eventUnixMs < sinceUnixMs) {
+          return false;
+        }
+      }
+      if (untilActive) {
+        const eventUnixMs = Date.parse(event.createdAt);
+        if (Number.isFinite(eventUnixMs) && eventUnixMs >= untilUnixMs) {
           return false;
         }
       }

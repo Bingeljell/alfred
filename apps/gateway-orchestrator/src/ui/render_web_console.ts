@@ -314,7 +314,7 @@ export function renderWebConsoleHtml(): string {
         width: 100%;
         max-width: 100%;
         margin: 0;
-        max-height: 260px;
+        max-height: 320px;
         overflow: auto;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
@@ -372,6 +372,10 @@ export function renderWebConsoleHtml(): string {
         <h2>Persisted Transcript</h2>
         <div class="actions">
           <button class="secondary" id="transcriptRefresh">Refresh Transcript</button>
+          <label class="inline-control" for="transcriptDate">
+            Day
+            <input type="date" id="transcriptDate" />
+          </label>
           <label class="inline-control" for="transcriptAllSessions">
             <input type="checkbox" id="transcriptAllSessions" checked />
             All sessions
@@ -625,6 +629,7 @@ export function renderWebConsoleHtml(): string {
       const $ = (id) => document.getElementById(id);
       const log = $("log");
       const sessionTranscript = $("sessionTranscript");
+      const transcriptDate = $("transcriptDate");
       const transcriptAllSessions = $("transcriptAllSessions");
       const statusLine = $("statusLine");
       const authSummary = $("authSummary");
@@ -1434,18 +1439,44 @@ export function renderWebConsoleHtml(): string {
         };
       }
 
+      function localIsoDate(value) {
+        const year = value.getFullYear();
+        const month = String(value.getMonth() + 1).padStart(2, "0");
+        const day = String(value.getDate()).padStart(2, "0");
+        return year + "-" + month + "-" + day;
+      }
+
+      function resolveTranscriptDateBounds() {
+        const raw = transcriptDate?.value ? String(transcriptDate.value).trim() : "";
+        if (!raw) {
+          return null;
+        }
+        const start = new Date(raw + "T00:00:00");
+        if (!Number.isFinite(start.getTime())) {
+          return null;
+        }
+        const end = new Date(start);
+        end.setDate(end.getDate() + 1);
+        return {
+          day: raw,
+          since: start.toISOString(),
+          until: end.toISOString()
+        };
+      }
+
       function renderSessionTranscript(events, options) {
         const allSessions = options?.allSessions === true;
         const sessionId = options?.sessionId ? String(options.sessionId) : "";
+        const dayLabel = options?.day ? String(options.day) : "selected day";
         if (!allSessions && !sessionId) {
           sessionTranscript.textContent = "Set a Session ID or enable All sessions to load persisted transcript.";
           return;
         }
         if (!Array.isArray(events) || events.length === 0) {
           if (allSessions) {
-            sessionTranscript.textContent = "No persisted transcript yet across sessions.";
+            sessionTranscript.textContent = "No persisted transcript yet across sessions for " + dayLabel + ".";
           } else {
-            sessionTranscript.textContent = "No persisted transcript yet for " + sessionId + ".";
+            sessionTranscript.textContent = "No persisted transcript yet for " + sessionId + " on " + dayLabel + ".";
           }
           return;
         }
@@ -1472,22 +1503,31 @@ export function renderWebConsoleHtml(): string {
         try {
           const sessionId = $("sessionId").value.trim();
           const allSessions = transcriptAllSessions.checked === true;
+          const dayBounds = resolveTranscriptDateBounds();
+          const dayLabel = dayBounds?.day ?? "all days";
           if (!allSessions && !sessionId) {
-            renderSessionTranscript([], { sessionId: "", allSessions: false });
+            renderSessionTranscript([], { sessionId: "", allSessions: false, day: dayLabel });
             return;
           }
           const baseUrl = allSessions
-            ? "/v1/stream/events?kinds=chat,command&limit=200&noisy=true"
-            : "/v1/stream/events?sessionId=" + encodeURIComponent(sessionId) + "&kinds=chat,command&limit=80&noisy=true";
+            ? "/v1/stream/events?kinds=chat,command&limit=240&noisy=true"
+            : "/v1/stream/events?sessionId=" + encodeURIComponent(sessionId) + "&kinds=chat,command&limit=160&noisy=true";
+          const withBounds = dayBounds
+            ? baseUrl +
+              "&since=" +
+              encodeURIComponent(dayBounds.since) +
+              "&until=" +
+              encodeURIComponent(dayBounds.until)
+            : baseUrl;
           const response = await api(
             "GET",
-            baseUrl
+            withBounds
           );
           if (!response.ok) {
             return;
           }
           const events = Array.isArray(response.data?.events) ? response.data.events : [];
-          renderSessionTranscript(events, { sessionId, allSessions });
+          renderSessionTranscript(events, { sessionId, allSessions, day: dayLabel });
         } finally {
           transcriptPollInFlight = false;
         }
@@ -1937,6 +1977,17 @@ export function renderWebConsoleHtml(): string {
         });
       });
 
+      $("transcriptDate").addEventListener("change", async () => {
+        await runButtonAction($("transcriptRefresh"), "TRANSCRIPT_DAY_UPDATE", async () => {
+          await pollTranscriptSilently();
+          return {
+            ok: true,
+            status: 200,
+            data: { day: transcriptDate.value || "all" }
+          };
+        });
+      });
+
       $("includeNoisyStream").addEventListener("change", async () => {
         seenStreamEventIds.clear();
         await runButtonAction($("streamRefresh"), "STREAM_MODE_UPDATE", async () => {
@@ -1980,6 +2031,9 @@ export function renderWebConsoleHtml(): string {
       }
 
       pushLog("READY", "Web console loaded. Use controls above.");
+      if (!transcriptDate.value) {
+        transcriptDate.value = localIsoDate(new Date());
+      }
       mapAuthSessionId.value = selectedOAuthSession();
       mapWhatsAppJid.value = $("sessionId").value.trim() || "owner@s.whatsapp.net";
       updateMapSummary("No mapping action yet.", "idle");

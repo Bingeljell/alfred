@@ -182,6 +182,7 @@ Deliverables:
 - Operator auth-path control: allow per-request auth preference selection (`auto`, `oauth`, `api_key`) in `/ui` for deterministic fallback testing.
 - Memory-aware chat path: inject top cited memory hits into chat prompts and return explicit memory references for recall traceability.
 - Conversation continuity path: surface persisted session transcript in `/ui` and inject bounded recent session turns into chat prompts for restart-safe continuity.
+- Transcript operability hardening: add day-scoped transcript filtering in `/ui` with bounded `since`/`until` reads so long-running histories stay navigable.
 - Heartbeat reliability loop: add periodic heartbeat scheduler with active-hour and idle-queue gating, deduped alert delivery, explicit dependency checks (OpenAI auth disconnect, WhatsApp disconnect, long-running jobs), and operator controls (`/v1/heartbeat/status`, `/v1/heartbeat/configure`, `/v1/heartbeat/run`) exposed in `/ui`.
 - Capability policy baseline: enforce approval-by-default for external capabilities, route web research through `/web`, add workspace-scoped `/write` command with notes-only policy controls, and keep file-write disabled by default unless explicitly enabled in env.
 - Retention workers (artifacts/logs).
