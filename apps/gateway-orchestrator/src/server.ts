@@ -16,6 +16,7 @@ import { HeartbeatService } from "./builtins/heartbeat_service";
 import { ConversationStore } from "./builtins/conversation_store";
 import { WebSearchService } from "./builtins/web_search_service";
 import { MemoryCompactionService } from "./builtins/memory_compaction_service";
+import { MemoryCheckpointService } from "./builtins/memory_checkpoint_service";
 import { PagedResponseStore } from "./builtins/paged_response_store";
 import { SystemPromptCatalog } from "./builtins/system_prompt_catalog";
 import { IntentPlanner } from "./builtins/intent_planner";
@@ -196,6 +197,9 @@ async function main(): Promise<void> {
       sessionId: config.memoryCompactionSessionId
     }
   });
+  const memoryCheckpointService = new MemoryCheckpointService(config.stateDir, {
+    memoryService
+  });
 
   await store.ensureReady();
   await dedupeStore.ensureReady();
@@ -210,6 +214,7 @@ async function main(): Promise<void> {
   await supervisorStore.ensureReady();
   await heartbeatService.ensureReady();
   await memoryCompactionService.ensureReady();
+  await memoryCheckpointService.ensureReady();
   await identityProfileStore.ensureReady();
   await oauthService.ensureReady();
   await fs.mkdir(config.alfredWorkspaceDir, { recursive: true });
@@ -320,6 +325,7 @@ async function main(): Promise<void> {
     identityProfileStore,
     heartbeatService,
     memoryCompactionService,
+    memoryCheckpointService,
     pagedResponseStore,
     runLedger,
     supervisorStore,
@@ -342,6 +348,7 @@ async function main(): Promise<void> {
     store: notificationStore,
     adapter: whatsAppAdapter,
     conversationStore,
+    memoryCheckpointService,
     pollIntervalMs: config.notificationPollMs
   });
   const reminderDispatcher = startReminderDispatcher({

@@ -415,6 +415,7 @@ export function renderWebConsoleHtml(): string {
               <button class="secondary" id="memorySearch">Search</button>
               <button class="secondary" id="memorySync">Sync</button>
               <button class="secondary" id="memoryStatus">Status</button>
+              <button class="secondary" id="memoryCheckpointStatus">Checkpoint Status</button>
             </div>
           </div>
         </div>
@@ -1752,6 +1753,14 @@ export function renderWebConsoleHtml(): string {
         const response = await runButtonAction($("memoryStatus"), "MEMORY_STATUS", () => api("GET", "/v1/memory/status"));
         pushLog("MEMORY_STATUS", response);
         setStatus("Last action: MEMORY_STATUS (" + response.status + ")", response.ok ? "success" : "error");
+      });
+
+      $("memoryCheckpointStatus").addEventListener("click", async () => {
+        const response = await runButtonAction($("memoryCheckpointStatus"), "MEMORY_CHECKPOINT_STATUS", () =>
+          api("GET", "/v1/memory/checkpoints/status")
+        );
+        pushLog("MEMORY_CHECKPOINT_STATUS", response);
+        setStatus("Last action: MEMORY_CHECKPOINT_STATUS (" + response.status + ")", response.ok ? "success" : "error");
       });
 
       function buildHeartbeatConfigPayload() {

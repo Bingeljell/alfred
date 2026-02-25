@@ -1,6 +1,7 @@
 import type { WhatsAppAdapter } from "../../../packages/provider-adapters/src";
 import { OutboundNotificationStore } from "./notification_store";
 import { ConversationStore } from "./builtins/conversation_store";
+import type { MemoryCheckpointClass } from "./builtins/memory_checkpoint_service";
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -14,11 +15,23 @@ export function startNotificationDispatcher(options: {
   store: OutboundNotificationStore;
   adapter: WhatsAppAdapter;
   conversationStore?: ConversationStore;
+  memoryCheckpointService?: {
+    checkpoint: (input: {
+      sessionId: string;
+      class: MemoryCheckpointClass;
+      source: string;
+      summary: string;
+      details?: string;
+      dedupeKey?: string;
+      day?: string;
+    }) => Promise<unknown>;
+  };
   pollIntervalMs?: number;
 }): NotificationDispatcherHandle {
   const store = options.store;
   const adapter = options.adapter;
   const conversationStore = options.conversationStore;
+  const memoryCheckpointService = options.memoryCheckpointService;
   const pollIntervalMs = options.pollIntervalMs ?? 250;
 
   let active = true;
@@ -54,6 +67,23 @@ export function startNotificationDispatcher(options: {
               });
             } catch {
               // best-effort observability
+            }
+          }
+          if (memoryCheckpointService) {
+            const status = String(message.status ?? "").trim().toLowerCase();
+            if (status === "succeeded" || status === "failed" || status === "cancelled") {
+              try {
+                await memoryCheckpointService.checkpoint({
+                  sessionId: message.sessionId,
+                  class: status === "succeeded" ? "fact" : "todo",
+                  source: "worker_notification",
+                  summary: `Job ${message.jobId ?? "unknown"} ${status}`,
+                  details: message.text,
+                  dedupeKey: `worker_notification:${message.jobId ?? message.id}:${status}`
+                });
+              } catch {
+                // best-effort checkpointing
+              }
             }
           }
         } catch {

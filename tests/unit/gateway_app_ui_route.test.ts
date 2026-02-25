@@ -32,6 +32,7 @@ describe("gateway web console routes", () => {
     expect(routes).toContain("POST /v1/heartbeat/run");
     expect(routes).toContain("GET /v1/memory/compaction/status");
     expect(routes).toContain("POST /v1/memory/compaction/run");
+    expect(routes).toContain("GET /v1/memory/checkpoints/status");
     expect(routes).toContain("GET /v1/stream/events");
     expect(routes).toContain("GET /v1/stream/events/subscribe");
     expect(routes).toContain("GET /v1/runs");

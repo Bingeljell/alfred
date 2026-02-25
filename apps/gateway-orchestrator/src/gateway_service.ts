@@ -18,6 +18,7 @@ import type { MemoryResult, MemoryService } from "../../../packages/memory/src";
 import type { WebSearchProvider } from "./builtins/web_search_service";
 import type { RunQueueMode } from "./builtins/run_ledger_store";
 import type { SupervisorStore } from "./builtins/supervisor_store";
+import type { MemoryCheckpointClass } from "./builtins/memory_checkpoint_service";
 
 type LlmAuthPreference = "auto" | "oauth" | "api_key";
 type ImplicitApprovalDecision = "approve_latest" | "reject_latest";
@@ -27,6 +28,11 @@ type RoutedLongTask = {
   query: string;
   provider?: WebSearchProvider;
   reason: string;
+};
+
+type MemoryReference = {
+  source: string;
+  class: MemoryCheckpointClass;
 };
 
 type CapabilityPolicy = {
@@ -148,7 +154,18 @@ export class GatewayService {
       ) => Promise<unknown>;
       completeRun: (runId: string, status: "completed" | "failed" | "cancelled", message?: string) => Promise<unknown>;
     },
-    private readonly supervisorStore?: SupervisorStore
+    private readonly supervisorStore?: SupervisorStore,
+    private readonly memoryCheckpointService?: {
+      checkpoint: (input: {
+        sessionId: string;
+        class: MemoryCheckpointClass;
+        source: string;
+        summary: string;
+        details?: string;
+        dedupeKey?: string;
+        day?: string;
+      }) => Promise<unknown>;
+    }
   ) {
     this.webSearchService = webSearchService;
     this.capabilityPolicy = {
@@ -725,6 +742,12 @@ export class GatewayService {
         }
 
         const task = await this.taskStore.add(sessionId, command.text);
+        await this.recordMemoryCheckpoint(sessionId, {
+          class: "todo",
+          source: "task_add",
+          summary: `Task added: ${task.text}`,
+          dedupeKey: `task_add:${sessionId}:${task.id}`
+        });
         return `Task added (${task.id}): ${task.text}`;
       }
 
@@ -776,6 +799,12 @@ export class GatewayService {
           return `Task not found: ${command.id}`;
         }
 
+        await this.recordMemoryCheckpoint(sessionId, {
+          class: "decision",
+          source: "task_done",
+          summary: `Task completed: ${done.text}`,
+          dedupeKey: `task_done:${sessionId}:${done.id}`
+        });
         return `Task completed: ${done.id}`;
       }
 
@@ -1058,6 +1087,12 @@ export class GatewayService {
         if (!approval) {
           return `Approval token invalid or expired: ${command.token}`;
         }
+        await this.recordMemoryCheckpoint(sessionId, {
+          class: "decision",
+          source: "approval_reject",
+          summary: `Rejected action: ${approval.action}`,
+          dedupeKey: `approval_reject:${sessionId}:${approval.token}`
+        });
         return `Rejected action: ${approval.action}`;
       }
     }
@@ -1097,6 +1132,12 @@ export class GatewayService {
       if (!discarded) {
         return { handled: false, response: "" };
       }
+      await this.recordMemoryCheckpoint(sessionId, {
+        class: "decision",
+        source: "approval_reject",
+        summary: `Rejected action: ${discarded.action}`,
+        dedupeKey: `approval_reject:${sessionId}:${discarded.token}`
+      });
       return { handled: true, response: `Rejected action: ${discarded.action}` };
     }
 
@@ -1269,6 +1310,13 @@ export class GatewayService {
   ): Promise<string> {
     if (approval.action === "send_text") {
       const text = String(approval.payload.text ?? "");
+      await this.recordMemoryCheckpoint(channelSessionId, {
+        class: "decision",
+        source: "approval_execute",
+        summary: "Approved send_text action",
+        details: text,
+        dedupeKey: `approval_execute:${channelSessionId}:send_text:${text.slice(0, 40)}`
+      });
       return `Approved action executed: send '${text}'`;
     }
     if (approval.action === "web_search") {
@@ -1290,6 +1338,13 @@ export class GatewayService {
         authPreference: requestedAuthPreference,
         reason: "approved_web_search"
       });
+      await this.recordMemoryCheckpoint(channelSessionId, {
+        class: "decision",
+        source: "approval_execute",
+        summary: `Approved web_search action (${provider ?? this.capabilityPolicy.webSearchProvider})`,
+        details: query,
+        dedupeKey: `approval_execute:${channelSessionId}:web_search:${query.slice(0, 40)}`
+      });
       return `Approved action executed: web_search (queued job ${job.id}).`;
     }
     if (approval.action === "file_write") {
@@ -1303,9 +1358,22 @@ export class GatewayService {
         return `Approved action failed: ${resolved.error}`;
       }
       const output = await this.executeFileWrite(resolved.absolutePath, text);
+      await this.recordMemoryCheckpoint(channelSessionId, {
+        class: "decision",
+        source: "approval_execute",
+        summary: "Approved file_write action",
+        details: relativePath,
+        dedupeKey: `approval_execute:${channelSessionId}:file_write:${relativePath}`
+      });
       return `Approved action executed: file_write\n${output}`;
     }
 
+    await this.recordMemoryCheckpoint(channelSessionId, {
+      class: "decision",
+      source: "approval_execute",
+      summary: `Approved action executed: ${approval.action}`,
+      dedupeKey: `approval_execute:${channelSessionId}:${approval.action}`
+    });
     return `Approved action executed: ${approval.action}`;
   }
 
@@ -1360,11 +1428,13 @@ export class GatewayService {
         return this.noModelResponse(authPreference);
       }
 
-      if (prepared.sources.length === 0) {
+      if (prepared.references.length === 0) {
         return llmText;
       }
 
-      return `${llmText}\n\nMemory references:\n${prepared.sources.map((source) => `- ${source}`).join("\n")}`;
+      return `${llmText}\n\nMemory references:\n${prepared.references
+        .map((reference) => `- [${reference.class}] ${reference.source}`)
+        .join("\n")}`;
     } catch (error) {
       return this.humanizeLlmError(error);
     }
@@ -1517,10 +1587,10 @@ export class GatewayService {
     sessionId: string,
     input: string,
     authPreference: LlmAuthPreference
-  ): Promise<{ prompt: string; sources: string[] }> {
+  ): Promise<{ prompt: string; references: MemoryReference[] }> {
     const trimmed = input.trim();
     if (!trimmed) {
-      return { prompt: input, sources: [] };
+      return { prompt: input, references: [] };
     }
 
     const providerManagedContext = await this.shouldUseProviderManagedContext(authPreference);
@@ -1528,7 +1598,7 @@ export class GatewayService {
 
     if (!this.memoryService) {
       if (historyLines.length === 0) {
-        return { prompt: input, sources: [] };
+        return { prompt: input, references: [] };
       }
       const promptWithoutMemory = [
         "You are answering using recent persisted conversation context when relevant.",
@@ -1536,7 +1606,7 @@ export class GatewayService {
         historyLines.join("\n"),
         `User message: ${trimmed}`
       ].join("\n\n");
-      return { prompt: promptWithoutMemory, sources: [] };
+      return { prompt: promptWithoutMemory, references: [] };
     }
 
     let results: MemoryResult[] = [];
@@ -1546,12 +1616,24 @@ export class GatewayService {
         minScore: 0.05
       });
     } catch {
-      return { prompt: input, sources: [] };
+      return { prompt: input, references: [] };
     }
 
     if (results.length === 0 && historyLines.length === 0) {
-      return { prompt: input, sources: [] };
+      return { prompt: input, references: [] };
     }
+
+    const requestedClasses = this.detectRequestedMemoryClasses(trimmed);
+    const classifiedResults = results.map((item) => ({
+      item,
+      class: this.classifyMemoryResult(item)
+    }));
+    const filteredResults =
+      requestedClasses.length === 0
+        ? classifiedResults
+        : classifiedResults.filter((entry) => requestedClasses.includes(entry.class));
+    const selectedResults =
+      filteredResults.length > 0 ? filteredResults : requestedClasses.length === 0 ? classifiedResults : [];
 
     const promptParts = [
       "You are answering with optional memory context.",
@@ -1561,11 +1643,14 @@ export class GatewayService {
       promptParts.push("Recent conversation context (oldest first):");
       promptParts.push(historyLines.join("\n"));
     }
-    if (results.length > 0) {
-      const snippets = results.map((item, index) => {
-        const normalizedSnippet = item.snippet.replace(/\s+/g, " ").trim().slice(0, 320);
-        return `[${index + 1}] ${item.source}\n${normalizedSnippet}`;
+    if (selectedResults.length > 0) {
+      const snippets = selectedResults.map((entry, index) => {
+        const normalizedSnippet = entry.item.snippet.replace(/\s+/g, " ").trim().slice(0, 320);
+        return `[${index + 1}] [${entry.class}] ${entry.item.source}\n${normalizedSnippet}`;
       });
+      if (requestedClasses.length > 0) {
+        promptParts.push(`Requested memory classes: ${requestedClasses.join(", ")}`);
+      }
       promptParts.push("Memory snippets:");
       promptParts.push(snippets.join("\n\n"));
     }
@@ -1575,8 +1660,47 @@ export class GatewayService {
 
     return {
       prompt,
-      sources: results.map((item) => item.source)
+      references: selectedResults.map((entry) => ({
+        source: entry.item.source,
+        class: entry.class
+      }))
     };
+  }
+
+  private detectRequestedMemoryClasses(query: string): MemoryCheckpointClass[] {
+    const lower = query.toLowerCase();
+    const classes = new Set<MemoryCheckpointClass>();
+    if (/\b(decide|decision|agreed|agree|approved|approval)\b/.test(lower)) {
+      classes.add("decision");
+    }
+    if (/\b(prefer|prefers|preference|like|usually|style)\b/.test(lower)) {
+      classes.add("preference");
+    }
+    if (/\b(todo|task|reminder|pending|follow[- ]?up)\b/.test(lower)) {
+      classes.add("todo");
+    }
+    if (/\b(fact|remember|what is|when|where|who)\b/.test(lower)) {
+      classes.add("fact");
+    }
+    return [...classes];
+  }
+
+  private classifyMemoryResult(result: MemoryResult): MemoryCheckpointClass {
+    const combined = `${result.path}\n${result.snippet}`.toLowerCase();
+    const explicit = combined.match(/class:\s*(decision|todo|preference|fact)/);
+    if (explicit?.[1] === "decision" || explicit?.[1] === "todo" || explicit?.[1] === "preference" || explicit?.[1] === "fact") {
+      return explicit[1];
+    }
+    if (/\b(decide|decision|approved|rejected|policy)\b/.test(combined)) {
+      return "decision";
+    }
+    if (/\b(todo|task|reminder|pending)\b/.test(combined)) {
+      return "todo";
+    }
+    if (/\b(prefer|prefers|preference|likes|style)\b/.test(combined)) {
+      return "preference";
+    }
+    return "fact";
   }
 
   private async buildRecentConversationContext(sessionId: string, currentInput: string): Promise<string[]> {
@@ -1626,6 +1750,33 @@ export class GatewayService {
     }
 
     return selected.reverse();
+  }
+
+  private async recordMemoryCheckpoint(
+    sessionId: string,
+    checkpoint: {
+      class: MemoryCheckpointClass;
+      source: string;
+      summary: string;
+      details?: string;
+      dedupeKey?: string;
+    }
+  ): Promise<void> {
+    if (!this.memoryCheckpointService) {
+      return;
+    }
+    try {
+      await this.memoryCheckpointService.checkpoint({
+        sessionId,
+        class: checkpoint.class,
+        source: checkpoint.source,
+        summary: checkpoint.summary,
+        details: checkpoint.details,
+        dedupeKey: checkpoint.dedupeKey
+      });
+    } catch {
+      // best-effort checkpointing; never block runtime turns
+    }
   }
 
   private requiresApproval(capability: ExternalCapability): boolean {

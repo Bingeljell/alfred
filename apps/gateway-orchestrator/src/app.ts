@@ -16,6 +16,7 @@ import { ConversationStore } from "./builtins/conversation_store";
 import { IdentityProfileStore } from "./auth/identity_profile_store";
 import { RunLedgerStore } from "./builtins/run_ledger_store";
 import { SupervisorStore } from "./builtins/supervisor_store";
+import type { MemoryCheckpointClass } from "./builtins/memory_checkpoint_service";
 
 const CancelParamsSchema = z.object({
   jobId: z.string().min(1)
@@ -231,6 +232,18 @@ export function createGatewayApp(
       }) => Promise<unknown>;
       runNow: (options?: { force?: boolean; trigger?: string; targetDate?: string }) => Promise<unknown>;
     };
+    memoryCheckpointService?: {
+      status: () => Promise<unknown> | unknown;
+      checkpoint: (input: {
+        sessionId: string;
+        class: MemoryCheckpointClass;
+        source: string;
+        summary: string;
+        details?: string;
+        dedupeKey?: string;
+        day?: string;
+      }) => Promise<unknown>;
+    };
     pagedResponseStore?: {
       popNext: (sessionId: string) => Promise<{ page: string; remaining: number } | null>;
       clear: (sessionId: string) => Promise<void>;
@@ -271,7 +284,8 @@ export function createGatewayApp(
     options?.pagedResponseStore,
     options?.intentPlanner,
     options?.runLedger,
-    options?.supervisorStore
+    options?.supervisorStore,
+    options?.memoryCheckpointService
   );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;
@@ -280,6 +294,7 @@ export function createGatewayApp(
   const whatsAppLiveManager = options?.whatsAppLiveManager;
   const heartbeatService = options?.heartbeatService;
   const memoryCompactionService = options?.memoryCompactionService;
+  const memoryCheckpointService = options?.memoryCheckpointService;
   const conversationStore = options?.conversationStore;
   const identityProfileStore = options?.identityProfileStore;
   const runLedger = options?.runLedger;
@@ -778,6 +793,16 @@ export function createGatewayApp(
     } catch (error) {
       res.status(400).json({ error: "invalid_memory_compaction_run_request", detail: String(error) });
     }
+  });
+
+  app.get("/v1/memory/checkpoints/status", async (_req, res) => {
+    if (!memoryCheckpointService) {
+      res.status(404).json({ error: "memory_checkpoints_not_configured" });
+      return;
+    }
+
+    const status = await memoryCheckpointService.status();
+    res.status(200).json(status);
   });
 
   app.get("/v1/memory/search", async (req, res) => {

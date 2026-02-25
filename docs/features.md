@@ -248,6 +248,23 @@ Testing:
 - Automated: unit coverage for planner JSON parsing/heuristic fallback, config parsing for planner + approval mode, and gateway routing behavior under planner decisions.
 - Manual: send ambiguous prompt to verify clarification, send research prompt to verify planner-based worker delegation, confirm `STREAM_PLANNER_TRACE` appears in `/ui`, and verify `/policy` reports current approval mode.
 
+## 14) Memory V2 for Autonomy
+
+Description:
+- Add checkpoint-style durable memory writes at meaningful boundaries and class-aware retrieval so long-running autonomy remains auditable without context bloat.
+
+Acceptance criteria:
+- Gateway writes memory checkpoints on key decision/task boundaries (for example task add/done and approval execute/reject).
+- Worker terminal notifications (`succeeded`/`failed`/`cancelled`) are checkpointed as durable memory signals.
+- Checkpoint writes are deduplicated and capped per day to prevent unbounded memory growth.
+- Memory retrieval for chat supports class-aware context (`fact`, `preference`, `todo`, `decision`) with query-driven filtering.
+- Daily compaction output includes class distribution metadata (`memory_class_counts`) and class-tagged notable events.
+- Operator endpoint is available for checkpoint runtime visibility: `GET /v1/memory/checkpoints/status`.
+
+Testing:
+- Automated: unit coverage for checkpoint write/dedupe/day-limit behavior, class-aware chat-memory retrieval filtering, compaction class-tag output compatibility, and route/UI registration.
+- Manual: execute task/approval flows and verify checkpoint status updates, ask class-targeted recall questions (for example decisions vs preferences), and run compaction status/manual run to confirm class counts appear in memory digest notes.
+
 ## Security Baseline (v1)
 
 - Side-effect actions require explicit confirmation.

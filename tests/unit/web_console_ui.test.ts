@@ -9,6 +9,7 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("/v1/messages/inbound");
     expect(html).toContain("/v1/whatsapp/baileys/inbound");
     expect(html).toContain("/v1/memory/search");
+    expect(html).toContain("/v1/memory/checkpoints/status");
     expect(html).toContain("/v1/heartbeat/status");
     expect(html).toContain("/v1/heartbeat/configure");
     expect(html).toContain("/v1/heartbeat/run");
@@ -35,6 +36,7 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("id=\"heartbeatAlertOnWhatsAppDisconnected\"");
     expect(html).toContain("id=\"heartbeatAlertOnStuckJobs\"");
     expect(html).toContain("id=\"heartbeatStuckJobThresholdMinutes\"");
+    expect(html).toContain("id=\"memoryCheckpointStatus\"");
     expect(html).toContain("id=\"sourceHeartbeatCard\"");
     expect(html).toContain("id=\"sourceHeartbeatValue\"");
     expect(html).toContain("id=\"sourceHeartbeatMeta\"");

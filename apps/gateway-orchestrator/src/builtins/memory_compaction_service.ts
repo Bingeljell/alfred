@@ -485,6 +485,7 @@ function buildCompactionNote(
   const directionCounts = countBy(ordered, (item) => item.direction);
   const sessionCounts = countBy(ordered, (item) => item.sessionId);
   const commandCounts = countCommands(ordered);
+  const memoryClassCounts = countBy(ordered, (item) => classifyEventForMemory(item));
   const notable = selectNotableEvents(ordered, 12);
 
   const lines: string[] = [
@@ -496,7 +497,8 @@ function buildCompactionNote(
     `sessions_active: ${Object.keys(sessionCounts).length}`,
     `kind_counts: ${formatCounts(kindCounts)}`,
     `direction_counts: ${formatCounts(directionCounts)}`,
-    `source_counts: ${formatCounts(sourceCounts)}`
+    `source_counts: ${formatCounts(sourceCounts)}`,
+    `memory_class_counts: ${formatCounts(memoryClassCounts)}`
   ];
 
   if (Object.keys(commandCounts).length > 0) {
@@ -504,7 +506,7 @@ function buildCompactionNote(
   }
 
   lines.push("notable_events:");
-  lines.push(...notable.map((event) => `- ${formatEventLine(event)}`));
+  lines.push(...notable.map((event) => `- [${classifyEventForMemory(event)}] ${formatEventLine(event)}`));
 
   const note = lines.join("\n");
   if (note.length <= maxNoteChars) {
@@ -540,7 +542,7 @@ function countCommands(items: ConversationRecord[]): Record<string, number> {
 }
 
 function selectNotableEvents(items: ConversationRecord[], limit: number): ConversationRecord[] {
-  const nonChat = items.filter((item) => item.kind !== "chat");
+  const nonChat = items.filter((item) => item.kind !== "chat" || classifyEventForMemory(item) !== "fact");
   const chat = items.filter((item) => item.kind === "chat");
   const selected = [...nonChat.slice(-Math.floor(limit / 2)), ...chat.slice(-Math.ceil(limit / 2))];
   const unique = new Map<string, ConversationRecord>();
@@ -548,6 +550,20 @@ function selectNotableEvents(items: ConversationRecord[], limit: number): Conver
     unique.set(item.id, item);
   }
   return [...unique.values()].slice(-limit);
+}
+
+function classifyEventForMemory(event: ConversationRecord): "fact" | "preference" | "todo" | "decision" {
+  const text = event.text.toLowerCase();
+  if (/\b\/task\s+add\b|\btodo\b|\bremind\b|\bfollow[- ]?up\b/.test(text)) {
+    return "todo";
+  }
+  if (/\b\/task\s+done\b|\bapproved\b|\brejected\b|\bdecision\b|\bpolicy\b/.test(text)) {
+    return "decision";
+  }
+  if (/\bprefer\b|\bpreference\b|\blike to\b|\bstyle\b/.test(text)) {
+    return "preference";
+  }
+  return "fact";
 }
 
 function formatCounts(counts: Record<string, number>): string {

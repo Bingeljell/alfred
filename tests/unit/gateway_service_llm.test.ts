@@ -647,12 +647,79 @@ describe("GatewayService llm path", () => {
     });
     expect(chat.response).toContain("Here is what I found.");
     expect(chat.response).toContain("Memory references:");
+    expect(chat.response).toContain("[preference]");
     expect(chat.response).toContain("memory/2026-02-23.md:10:14");
 
     const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(calls.length).toBe(1);
     expect(String(calls[0]?.[1] ?? "")).toContain("Memory snippets:");
+    expect(String(calls[0]?.[1] ?? "")).toContain("[preference]");
     expect(String(calls[0]?.[1] ?? "")).toContain("memory/2026-02-23.md:10:14");
+  });
+
+  it("filters memory snippets by requested class for decision queries", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-llm-memory-class-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "Decision context applied.",
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const memory = {
+      searchMemory: vi.fn().mockResolvedValue([
+        {
+          path: "memory/2026-02-25.md",
+          startLine: 5,
+          endLine: 8,
+          score: 0.91,
+          snippet: "[memory-checkpoint] class: decision summary: Approved web search action",
+          source: "memory/2026-02-25.md:5:8"
+        },
+        {
+          path: "memory/2026-02-25.md",
+          startLine: 20,
+          endLine: 23,
+          score: 0.84,
+          snippet: "[memory-checkpoint] class: preference summary: User prefers concise answers",
+          source: "memory/2026-02-25.md:20:23"
+        }
+      ])
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      memory as never
+    );
+
+    const chat = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "What decision did we make about approval mode?",
+      requestJob: false
+    });
+    expect(chat.response).toContain("[decision]");
+    expect(chat.response).not.toContain("[preference]");
+
+    const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(String(calls[0]?.[1] ?? "")).toContain("Requested memory classes: decision");
+    expect(String(calls[0]?.[1] ?? "")).toContain("[decision]");
+    expect(String(calls[0]?.[1] ?? "")).not.toContain("[preference]");
   });
 
   it("forwards requested auth preference to llm service", async () => {

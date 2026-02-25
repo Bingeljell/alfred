@@ -201,6 +201,7 @@ Deliverables:
 - Turn state-machine + run ledger: persist per-turn orchestration phases and immutable run-spec metadata, with run inspection APIs (`/v1/runs`, `/v1/runs/:runId`).
 - Supervisor + fan-out baseline: support gateway-supervised parent/child web fan-out jobs, child budget controls, and supervisor status APIs (`/v1/supervisors`, `/v1/supervisors/:id`).
 - Worker concurrency baseline: allow configurable parallel workers (`WORKER_CONCURRENCY`) while keeping gateway as orchestration source of truth.
+- Memory V2 autonomy baseline: add checkpoint memory writes on decisions/task boundaries, class-aware retrieval (`fact`/`preference`/`todo`/`decision`), dedupe/day-cap guards, class-tagged compaction summaries, and checkpoint status API (`/v1/memory/checkpoints/status`).
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.
