@@ -199,6 +199,8 @@ Deliverables:
 - Approval-mode policy: support `strict`/`balanced`/`relaxed` capability approval modes with `balanced` as default for early autonomy with bounded risk.
 - Planner trace observability: emit a planner decision trace event (intent/confidence/reason/chosen action) to the unified stream so `/ui` operators can diagnose routing decisions quickly.
 - Turn state-machine + run ledger: persist per-turn orchestration phases and immutable run-spec metadata, with run inspection APIs (`/v1/runs`, `/v1/runs/:runId`).
+- Supervisor + fan-out baseline: support gateway-supervised parent/child web fan-out jobs, child budget controls, and supervisor status APIs (`/v1/supervisors`, `/v1/supervisors/:id`).
+- Worker concurrency baseline: allow configurable parallel workers (`WORKER_CONCURRENCY`) while keeping gateway as orchestration source of truth.
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.

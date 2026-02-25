@@ -47,6 +47,27 @@ describe("parseCommand", () => {
       relativePath: "notes/today.md",
       text: "Remember to call mom"
     });
+    expect(parseCommand("/supervise web compare sd models")).toEqual({
+      kind: "supervise_web",
+      query: "compare sd models",
+      providers: undefined,
+      maxRetries: undefined,
+      timeBudgetMs: undefined,
+      tokenBudget: undefined
+    });
+    expect(
+      parseCommand(
+        "/supervise web --providers=openai,brave --max-retries=2 --time-budget-ms=90000 --token-budget=6000 compare sd models"
+      )
+    ).toEqual({
+      kind: "supervise_web",
+      query: "compare sd models",
+      providers: ["openai", "brave"],
+      maxRetries: 2,
+      timeBudgetMs: 90000,
+      tokenBudget: 6000
+    });
+    expect(parseCommand("/supervisor status sup-123")).toEqual({ kind: "supervisor_status", id: "sup-123" });
   });
 
   it("returns null for unsupported input", () => {

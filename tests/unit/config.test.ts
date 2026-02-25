@@ -6,6 +6,7 @@ describe("loadConfig", () => {
     const config = loadConfig({});
     expect(config.port).toBe(3000);
     expect(config.workerPollMs).toBe(250);
+    expect(config.workerConcurrency).toBe(1);
     expect(config.memoryCompactionEnabled).toBe(true);
     expect(config.memoryCompactionIntervalMs).toBe(3600000);
     expect(config.memoryCompactionMaxDaysPerRun).toBe(2);
@@ -77,6 +78,7 @@ describe("loadConfig", () => {
       PORT: "4010",
       STATE_DIR: "./tmp/state-a",
       WORKER_POLL_MS: "500",
+      WORKER_CONCURRENCY: "3",
       MEMORY_COMPACTION_ENABLED: "false",
       MEMORY_COMPACTION_INTERVAL_MS: "900000",
       MEMORY_COMPACTION_MAX_DAYS_PER_RUN: "3",
@@ -148,6 +150,7 @@ describe("loadConfig", () => {
 
     expect(config.port).toBe(4010);
     expect(config.workerPollMs).toBe(500);
+    expect(config.workerConcurrency).toBe(3);
     expect(config.memoryCompactionEnabled).toBe(false);
     expect(config.memoryCompactionIntervalMs).toBe(900000);
     expect(config.memoryCompactionMaxDaysPerRun).toBe(3);

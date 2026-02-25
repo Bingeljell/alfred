@@ -13,6 +13,11 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ? Number(v) : 250))
     .pipe(z.number().int().min(25).max(60000)),
+  WORKER_CONCURRENCY: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 1))
+    .pipe(z.number().int().min(1).max(8)),
   NOTIFICATION_POLL_MS: z
     .string()
     .optional()
@@ -266,6 +271,7 @@ export type AppConfig = {
   port: number;
   stateDir: string;
   workerPollMs: number;
+  workerConcurrency: number;
   notificationPollMs: number;
   reminderPollMs: number;
   memoryCompactionEnabled: boolean;
@@ -365,6 +371,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     port: parsed.PORT,
     stateDir: path.resolve(parsed.STATE_DIR),
     workerPollMs: parsed.WORKER_POLL_MS,
+    workerConcurrency: parsed.WORKER_CONCURRENCY,
     notificationPollMs: parsed.NOTIFICATION_POLL_MS,
     reminderPollMs: parsed.REMINDER_POLL_MS,
     memoryCompactionEnabled: parsed.MEMORY_COMPACTION_ENABLED,

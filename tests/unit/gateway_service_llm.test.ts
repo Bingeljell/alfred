@@ -9,6 +9,7 @@ import { IdentityProfileStore } from "../../apps/gateway-orchestrator/src/auth/i
 import { ConversationStore } from "../../apps/gateway-orchestrator/src/builtins/conversation_store";
 import { ApprovalStore } from "../../apps/gateway-orchestrator/src/builtins/approval_store";
 import { RunLedgerStore } from "../../apps/gateway-orchestrator/src/builtins/run_ledger_store";
+import { SupervisorStore } from "../../apps/gateway-orchestrator/src/builtins/supervisor_store";
 
 describe("GatewayService llm path", () => {
   it("treats yes/no as normal chat when no pending approval exists", async () => {
@@ -99,6 +100,65 @@ describe("GatewayService llm path", () => {
 
     const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(calls.length).toBe(0);
+  });
+
+  it("creates supervised fan-out web jobs and exposes supervisor status", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-supervisor-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const supervisorStore = new SupervisorStore(stateDir);
+    await supervisorStore.ensureReady();
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        approvalDefault: true,
+        webSearchEnabled: true,
+        webSearchRequireApproval: false
+      },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      supervisorStore
+    );
+
+    const created = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "/supervise web --providers=openai,brave compare stable diffusion options",
+      requestJob: false
+    });
+    expect(created.response).toContain("Supervisor");
+    expect(created.response).toContain("queued 2 child jobs");
+    const supervisorId = created.response?.match(/Supervisor\s+([^\s]+)\s+queued/i)?.[1] ?? "";
+    expect(supervisorId).toBeTruthy();
+
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(2);
+    const supervisorIds = new Set(jobs.map((job) => String(job.payload.supervisorId ?? "")));
+    expect(supervisorIds.size).toBe(1);
+    expect([...supervisorIds][0]).toBe(supervisorId);
+
+    const status = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `/supervisor status ${supervisorId}`,
+      requestJob: false
+    });
+    expect(status.response).toContain(`Supervisor ${supervisorId}`);
+    expect(status.response).toContain("status=running");
   });
 
   it("queues web search command for worker with immediate status updates", async () => {

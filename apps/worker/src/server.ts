@@ -11,6 +11,7 @@ import { CodexAuthService } from "../../gateway-orchestrator/src/codex/auth_serv
 import { CodexThreadStore } from "../../gateway-orchestrator/src/codex/thread_store";
 import { CodexChatService } from "../../gateway-orchestrator/src/llm/codex_chat_service";
 import { PagedResponseStore } from "../../gateway-orchestrator/src/builtins/paged_response_store";
+import { SupervisorStore } from "../../gateway-orchestrator/src/builtins/supervisor_store";
 import { startWorker } from "./worker";
 
 async function main(): Promise<void> {
@@ -19,6 +20,7 @@ async function main(): Promise<void> {
   const store = new FileBackedQueueStore(config.stateDir);
   const notificationStore = new OutboundNotificationStore(config.stateDir);
   const pagedResponseStore = new PagedResponseStore(config.stateDir);
+  const supervisorStore = new SupervisorStore(config.stateDir);
   const oauthService = new OAuthService({
     stateDir: config.stateDir,
     publicBaseUrl: config.publicBaseUrl,
@@ -87,6 +89,7 @@ async function main(): Promise<void> {
   await store.ensureReady();
   await notificationStore.ensureReady();
   await pagedResponseStore.ensureReady();
+  await supervisorStore.ensureReady();
   await oauthService.ensureReady();
   if (codexAuthService) {
     try {
@@ -98,131 +101,222 @@ async function main(): Promise<void> {
     }
   }
   const jobNotificationState = new Map<string, { lastProgressAt: number; lastProgressText: string }>();
+  const processor: Parameters<typeof startWorker>[0]["processor"] = async (job, context) => {
+    const taskType = String(job.payload.taskType ?? "").trim().toLowerCase();
+    const sessionId = typeof job.payload.sessionId === "string" ? job.payload.sessionId : "";
+    const authSessionId =
+      typeof job.payload.authSessionId === "string" && job.payload.authSessionId.trim()
+        ? job.payload.authSessionId.trim()
+        : sessionId;
+    const authPreference = normalizeAuthPreference(job.payload.authPreference);
 
-  const handle = startWorker({
-    store,
-    pollIntervalMs: config.workerPollMs,
-    workerId: "worker-main",
-    processor: async (job, context) => {
-      const taskType = String(job.payload.taskType ?? "").trim().toLowerCase();
-      if (taskType !== "web_search") {
-        const action = String(job.payload.action ?? job.payload.text ?? job.type);
+    if (taskType === "chat_turn") {
+      const input = String(job.payload.text ?? "").trim();
+      if (!input) {
         return {
-          summary: `processed:${action}`,
-          processedAt: new Date().toISOString()
+          summary: "chat_turn_missing_input",
+          responseText: "Follow-up could not run: missing input text."
         };
       }
-
-      const sessionId = typeof job.payload.sessionId === "string" ? job.payload.sessionId : "";
-      const query = String(job.payload.query ?? "").trim();
-      const authSessionId =
-        typeof job.payload.authSessionId === "string" && job.payload.authSessionId.trim()
-          ? job.payload.authSessionId.trim()
-          : sessionId;
-      const authPreference = normalizeAuthPreference(job.payload.authPreference);
-      const provider = normalizeWebSearchProvider(job.payload.provider) ?? config.alfredWebSearchProvider;
-
-      if (!query) {
-        return {
-          summary: "web_search_missing_query",
-          responseText: "Web search task failed: missing query."
-        };
-      }
-
       await context.reportProgress({
-        step: "queued",
-        message: `Starting web search for: ${query.slice(0, 140)}`
+        step: "planning",
+        message: "Running queued follow-up turn..."
       });
+      const generated = await llmService.generateText(authSessionId || sessionId, input, { authPreference });
+      const text = generated?.text?.trim();
+      if (!text) {
+        return {
+          summary: "chat_turn_no_response",
+          responseText: "No model response is available for this follow-up turn."
+        };
+      }
+      return {
+        summary: "chat_turn_completed",
+        responseText: text
+      };
+    }
+
+    if (taskType !== "web_search") {
+      const action = String(job.payload.action ?? job.payload.text ?? job.type);
+      return {
+        summary: `processed:${action}`,
+        processedAt: new Date().toISOString()
+      };
+    }
+
+    const query = String(job.payload.query ?? "").trim();
+    const provider = normalizeWebSearchProvider(job.payload.provider) ?? config.alfredWebSearchProvider;
+    const maxRetries = clampInt(job.payload.maxRetries, 0, 5, 1);
+    const timeBudgetMs = clampInt(job.payload.timeBudgetMs, 5000, 10 * 60 * 1000, 120_000);
+    const tokenBudget = clampInt(job.payload.tokenBudget, 128, 50_000, 8_000);
+
+    if (!query) {
+      return {
+        summary: "web_search_missing_query",
+        responseText: "Web search task failed: missing query."
+      };
+    }
+
+    await context.reportProgress({
+      step: "queued",
+      message: `Starting web search for: ${query.slice(0, 140)}`
+    });
+
+    let attempt = 0;
+    let resultText = "";
+    let resultProvider: "openai" | "brave" | "perplexity" | null = null;
+    let lastError: unknown = null;
+
+    while (attempt <= maxRetries) {
+      attempt += 1;
       await context.reportProgress({
         step: "searching",
-        message: `Searching via ${provider}...`
+        message: `Searching via ${provider} (attempt ${attempt}/${maxRetries + 1})...`
       });
-      const result = await webSearchService.search(query, {
-        provider,
-        authSessionId,
-        authPreference
-      });
-      if (!result?.text?.trim()) {
-        return {
-          summary: "web_search_no_results",
-          responseText: "No web search result is available for this query."
-        };
-      }
-
-      await context.reportProgress({
-        step: "synthesizing",
-        message: "Formatting final response..."
-      });
-      const fullText = `Web search provider: ${result.provider}\n${result.text.trim()}`;
-      const pages = paginateResponse(fullText, 1400, 8);
-      const firstPage = pages[0] ?? fullText;
-      if (sessionId && pages.length > 1) {
-        await pagedResponseStore.setPages(sessionId, pages.slice(1));
-      } else if (sessionId) {
-        await pagedResponseStore.clear(sessionId);
-      }
-
-      const responseText =
-        pages.length > 1 ? `${firstPage}\n\nReply #next for more (${pages.length - 1} remaining).` : firstPage;
-
-      return {
-        summary: `web_search_${result.provider}`,
-        responseText,
-        provider: result.provider,
-        pageCount: pages.length
-      };
-    },
-    onStatusChange: async (event) => {
-      if (!event.sessionId) {
-        return;
-      }
-
-      const summary = event.summary ? ` (${event.summary})` : "";
-      const status = event.status === "progress" ? "running" : event.status;
-      const now = Date.now();
-      const notifyState = jobNotificationState.get(event.jobId) ?? { lastProgressAt: 0, lastProgressText: "" };
-
-      let text: string | null = null;
-      if (event.status === "running") {
-        text = `Working on job ${event.jobId}...`;
-      } else if (event.status === "progress") {
-        const nextText = String(event.summary ?? "still working");
-        const shouldSend =
-          now - notifyState.lastProgressAt >= 45_000 && nextText.trim() && nextText !== notifyState.lastProgressText;
-        if (shouldSend) {
-          text = `Still working on job ${event.jobId}: ${nextText}`;
-          notifyState.lastProgressAt = now;
-          notifyState.lastProgressText = nextText;
-          jobNotificationState.set(event.jobId, notifyState);
+      try {
+        const result = await withTimeout(
+          webSearchService.search(query, {
+            provider,
+            authSessionId,
+            authPreference
+          }),
+          timeBudgetMs,
+          "web_search_time_budget_exceeded"
+        );
+        if (result?.text?.trim()) {
+          resultText = result.text.trim();
+          resultProvider = result.provider;
+          break;
         }
-      } else if (event.status === "succeeded" && event.responseText) {
-        text = event.responseText;
-      } else {
-        text = `Job ${event.jobId} is ${event.status}${summary}`;
+      } catch (error) {
+        lastError = error;
       }
 
-      if (!text) {
-        return;
+      if (attempt <= maxRetries) {
+        await context.reportProgress({
+          step: "retrying",
+          message: `Retrying web search (${attempt}/${maxRetries})...`
+        });
       }
+    }
 
+    if (!resultText || !resultProvider) {
+      const reason = lastError instanceof Error ? lastError.message : "no_result";
+      return {
+        summary: "web_search_no_results",
+        responseText: `No web search result is available for this query. Reason: ${reason}`
+      };
+    }
+
+    await context.reportProgress({
+      step: "synthesizing",
+      message: "Formatting final response..."
+    });
+    const fullText = `Web search provider: ${resultProvider}\n${resultText}`;
+    const pages = paginateResponse(fullText, 1400, 8);
+    const firstPage = pages[0] ?? fullText;
+    if (sessionId && pages.length > 1) {
+      await pagedResponseStore.setPages(sessionId, pages.slice(1));
+    } else if (sessionId) {
+      await pagedResponseStore.clear(sessionId);
+    }
+
+    const responseText =
+      pages.length > 1 ? `${firstPage}\n\nReply #next for more (${pages.length - 1} remaining).` : firstPage;
+
+    return {
+      summary: `web_search_${resultProvider}`,
+      responseText,
+      provider: resultProvider,
+      pageCount: pages.length,
+      retriesUsed: Math.max(0, attempt - 1),
+      tokenBudget
+    };
+  };
+
+  const onStatusChange: Parameters<typeof startWorker>[0]["onStatusChange"] = async (event) => {
+    if (!event.sessionId) {
+      return;
+    }
+
+    const summary = event.summary ? ` (${event.summary})` : "";
+    const status = event.status === "progress" ? "running" : event.status;
+    const now = Date.now();
+    const notifyState = jobNotificationState.get(event.jobId) ?? { lastProgressAt: 0, lastProgressText: "" };
+
+    let text: string | null = null;
+    if (event.status === "running") {
+      text = `Working on job ${event.jobId}...`;
+    } else if (event.status === "progress") {
+      const nextText = String(event.summary ?? "still working");
+      const shouldSend =
+        now - notifyState.lastProgressAt >= 45_000 && nextText.trim() && nextText !== notifyState.lastProgressText;
+      if (shouldSend) {
+        text = `Still working on job ${event.jobId}: ${nextText}`;
+        notifyState.lastProgressAt = now;
+        notifyState.lastProgressText = nextText;
+        jobNotificationState.set(event.jobId, notifyState);
+      }
+    } else if (event.status === "succeeded" && event.responseText) {
+      text = event.responseText;
+    } else {
+      text = `Job ${event.jobId} is ${event.status}${summary}`;
+    }
+
+    if (text) {
       await notificationStore.enqueue({
         sessionId: event.sessionId,
         jobId: event.jobId,
         status,
         text
       });
+    }
 
-      if (event.status === "succeeded" || event.status === "failed" || event.status === "cancelled") {
-        jobNotificationState.delete(event.jobId);
+    const job = await store.getJob(event.jobId);
+    const supervisorId =
+      job && typeof job.payload.supervisorId === "string" && job.payload.supervisorId.trim()
+        ? job.payload.supervisorId.trim()
+        : "";
+    if (supervisorId) {
+      const update = await supervisorStore.updateChildByJob(event.jobId, {
+        status: event.status === "progress" ? "running" : event.status,
+        summary: event.summary,
+        error: event.status === "failed" ? event.summary : undefined,
+        retriesUsed:
+          job && typeof job.result?.retriesUsed === "number" && Number.isFinite(job.result?.retriesUsed)
+            ? Math.max(0, Math.floor(job.result.retriesUsed))
+            : undefined
+      });
+      if (update && update.transitionedToTerminal) {
+        await notificationStore.enqueue({
+          sessionId: update.run.sessionId,
+          status: update.run.status === "completed" ? "succeeded" : "failed",
+          jobId: event.jobId,
+          text: supervisorStore.summarize(update.run)
+        });
       }
     }
-  });
+
+    if (event.status === "succeeded" || event.status === "failed" || event.status === "cancelled") {
+      jobNotificationState.delete(event.jobId);
+    }
+  };
+
+  const handles = Array.from({ length: config.workerConcurrency }, (_, index) =>
+    startWorker({
+      store,
+      pollIntervalMs: config.workerPollMs,
+      workerId: `worker-main-${index + 1}`,
+      processor,
+      onStatusChange
+    })
+  );
 
   // eslint-disable-next-line no-console
-  console.log(`[worker] running with poll interval ${config.workerPollMs}ms`);
+  console.log(`[worker] running with poll interval ${config.workerPollMs}ms and concurrency ${config.workerConcurrency}`);
 
   const shutdown = async () => {
-    await handle.stop();
+    await Promise.all(handles.map((handle) => handle.stop()));
     if (codexAuthService) {
       await codexAuthService.stop();
     }
@@ -318,4 +412,37 @@ function paginateResponse(text: string, maxCharsPerPage: number, maxPages: numbe
     return [compact.slice(0, maxCharsPerPage)];
   }
   return pages.slice(0, maxPages);
+}
+
+function clampInt(raw: unknown, min: number, max: number, fallback: number): number {
+  const numeric = typeof raw === "number" ? raw : Number.NaN;
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  const value = Math.floor(numeric);
+  if (value < min) {
+    return min;
+  }
+  if (value > max) {
+    return max;
+  }
+  return value;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutHandle: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(message));
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }

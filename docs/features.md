@@ -37,6 +37,21 @@ Testing:
 - Automated: queue handoff integration test.
 - Manual: submit job, keep chatting, observe status updates.
 
+## 2.1) Supervisor Fan-out + Multi-worker Execution
+
+Description:
+- Add gateway-supervised fan-out runs that spawn bounded child jobs and track parent/child lifecycle while worker concurrency processes them in parallel.
+
+Acceptance criteria:
+- Gateway supports supervised web fan-out command path (`/supervise web ...`) with provider selection and child budget controls.
+- Supervisor store persists parent/child status and exposes summary/status APIs (`/v1/supervisors`, `/v1/supervisors/:id`).
+- Worker supports configurable concurrency (`WORKER_CONCURRENCY`) and can execute queued follow-up chat turns when sessions are busy (`queueMode=collect|followup`).
+- Child jobs include bounded retries, time budgets, and token-budget metadata.
+
+Testing:
+- Automated: parser/config tests for new controls, gateway fan-out unit coverage, supervisor-store lifecycle tests, and worker progress regression tests.
+- Manual: run `/supervise web --providers=openai,brave ...`, verify child jobs + supervisor status, and confirm worker parallelism with `WORKER_CONCURRENCY>1`.
+
 ## 3) External Skill Integration Contract (No In-repo Skills)
 
 Description:

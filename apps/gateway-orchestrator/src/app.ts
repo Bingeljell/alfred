@@ -15,6 +15,7 @@ import { CodexAuthService, type CodexLoginStartMode } from "./codex/auth_service
 import { ConversationStore } from "./builtins/conversation_store";
 import { IdentityProfileStore } from "./auth/identity_profile_store";
 import { RunLedgerStore } from "./builtins/run_ledger_store";
+import { SupervisorStore } from "./builtins/supervisor_store";
 
 const CancelParamsSchema = z.object({
   jobId: z.string().min(1)
@@ -183,6 +184,7 @@ export function createGatewayApp(
     conversationStore?: ConversationStore;
     identityProfileStore?: IdentityProfileStore;
     runLedger?: RunLedgerStore;
+    supervisorStore?: SupervisorStore;
     whatsAppLiveManager?: {
       status: () => unknown | Promise<unknown>;
       connect: () => Promise<unknown>;
@@ -260,7 +262,8 @@ export function createGatewayApp(
     options?.webSearchService,
     options?.pagedResponseStore,
     options?.intentPlanner,
-    options?.runLedger
+    options?.runLedger,
+    options?.supervisorStore
   );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;
@@ -272,6 +275,7 @@ export function createGatewayApp(
   const conversationStore = options?.conversationStore;
   const identityProfileStore = options?.identityProfileStore;
   const runLedger = options?.runLedger;
+  const supervisorStore = options?.supervisorStore;
   const baileysInboundToken = options?.baileysInboundToken?.trim() ? options.baileysInboundToken.trim() : undefined;
   void dedupeStore.ensureReady();
   app.use(express.json());
@@ -388,6 +392,35 @@ export function createGatewayApp(
     const run = await runLedger.getRun(req.params.runId);
     if (!run) {
       res.status(404).json({ error: "run_not_found" });
+      return;
+    }
+    res.status(200).json(run);
+  });
+
+  app.get("/v1/supervisors", async (req, res) => {
+    if (!supervisorStore) {
+      res.status(404).json({ error: "supervisor_not_configured" });
+      return;
+    }
+
+    const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
+    const limitRaw = Number(req.query.limit ?? 50);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 50;
+    const runs = await supervisorStore.list({
+      sessionId: sessionId || undefined,
+      limit
+    });
+    res.status(200).json({ runs });
+  });
+
+  app.get("/v1/supervisors/:id", async (req, res) => {
+    if (!supervisorStore) {
+      res.status(404).json({ error: "supervisor_not_configured" });
+      return;
+    }
+    const run = await supervisorStore.get(req.params.id);
+    if (!run) {
+      res.status(404).json({ error: "supervisor_not_found" });
       return;
     }
     res.status(200).json(run);

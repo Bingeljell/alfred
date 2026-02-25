@@ -17,6 +17,7 @@ import { IdentityProfileStore } from "./auth/identity_profile_store";
 import type { MemoryResult, MemoryService } from "../../../packages/memory/src";
 import type { WebSearchProvider } from "./builtins/web_search_service";
 import type { RunQueueMode } from "./builtins/run_ledger_store";
+import type { SupervisorStore } from "./builtins/supervisor_store";
 
 type LlmAuthPreference = "auto" | "oauth" | "api_key";
 type ImplicitApprovalDecision = "approve_latest" | "reject_latest";
@@ -146,7 +147,8 @@ export class GatewayService {
         payload?: Record<string, unknown>
       ) => Promise<unknown>;
       completeRun: (runId: string, status: "completed" | "failed" | "cancelled", message?: string) => Promise<unknown>;
-    }
+    },
+    private readonly supervisorStore?: SupervisorStore
   ) {
     this.webSearchService = webSearchService;
     this.capabilityPolicy = {
@@ -248,6 +250,33 @@ export class GatewayService {
       await markPhase("dispatch", "Session is currently busy", {
         activeRunId: runStart.activeRunId
       });
+      if (queueMode !== "steer" && inbound.text?.trim()) {
+        const followupJob = await this.store.createJob({
+          type: "chat_turn",
+          payload: {
+            taskType: "chat_turn",
+            text: inbound.text.trim(),
+            sessionId: inbound.sessionId,
+            authSessionId,
+            authPreference,
+            queuedFromRunId: runStart.activeRunId
+          },
+          priority: queueMode === "followup" ? 4 : 6
+        });
+        await markRunNote("Collected follow-up while session busy", {
+          followupJobId: followupJob.id,
+          queueMode
+        });
+        if (runId && this.runLedger) {
+          await this.runLedger.completeRun(runId, "completed", `queued_followup:${followupJob.id}`);
+        }
+        return {
+          accepted: true,
+          mode: "async-job",
+          response: `Session is currently busy with run ${String(runStart.activeRunId ?? "unknown")}. Collected this as follow-up job ${followupJob.id}.`,
+          jobId: followupJob.id
+        };
+      }
       if (runId && this.runLedger) {
         await this.runLedger.completeRun(runId, "cancelled", `session_busy:${String(runStart.activeRunId ?? "unknown")}`);
       }
@@ -842,6 +871,71 @@ export class GatewayService {
           `- webSearch: enabled=${String(this.capabilityPolicy.webSearchEnabled)}, requireApproval=${String(this.capabilityPolicy.webSearchRequireApproval)}, provider=${this.capabilityPolicy.webSearchProvider}`,
           `- fileWrite: enabled=${String(this.capabilityPolicy.fileWriteEnabled)}, requireApproval=${String(this.capabilityPolicy.fileWriteRequireApproval)}, notesOnly=${String(this.capabilityPolicy.fileWriteNotesOnly)}, notesDir=${this.capabilityPolicy.fileWriteNotesDir}`
         ].join("\n");
+      }
+
+      case "supervisor_status": {
+        if (!this.supervisorStore) {
+          return "Supervisor is not configured.";
+        }
+        const supervisor = await this.supervisorStore.get(command.id);
+        if (!supervisor) {
+          return `Supervisor run not found: ${command.id}`;
+        }
+        return this.supervisorStore.summarize(supervisor);
+      }
+
+      case "supervise_web": {
+        if (!this.capabilityPolicy.webSearchEnabled) {
+          return "Web search is disabled by policy.";
+        }
+        if (!this.supervisorStore) {
+          return "Supervisor is not configured.";
+        }
+
+        const initialProviders: Array<"openai" | "brave" | "perplexity"> =
+          command.providers && command.providers.length > 0 ? command.providers : ["openai", "brave", "perplexity"];
+        const providers = [...new Set(initialProviders)].slice(0, 6);
+        if (providers.length === 0) {
+          return "No valid providers were selected for supervision.";
+        }
+
+        const maxRetries = command.maxRetries ?? 1;
+        const timeBudgetMs = command.timeBudgetMs ?? 120_000;
+        const tokenBudget = command.tokenBudget ?? 8_000;
+        const supervisor = await this.supervisorStore.createWebFanout({
+          sessionId,
+          query: command.query,
+          children: providers.map((provider) => ({
+            provider,
+            maxRetries,
+            timeBudgetMs,
+            tokenBudget
+          }))
+        });
+
+        const childJobs: string[] = [];
+        for (const provider of providers) {
+          const job = await this.store.createJob({
+            type: "stub_task",
+            payload: {
+              taskType: "web_search",
+              query: command.query,
+              provider,
+              sessionId,
+              authSessionId,
+              authPreference,
+              supervisorId: supervisor.id,
+              maxRetries,
+              timeBudgetMs,
+              tokenBudget
+            },
+            priority: 5
+          });
+          childJobs.push(job.id);
+          await this.supervisorStore.assignChildJob(supervisor.id, provider, job.id);
+        }
+
+        return `Supervisor ${supervisor.id} queued ${childJobs.length} child jobs (${providers.join(", ")}). Use /supervisor status ${supervisor.id}.`;
       }
 
       case "web_search": {

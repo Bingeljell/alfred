@@ -30,6 +30,9 @@ Web Console Manual Checklist
 26. Send `/policy` and confirm `approvalMode: balanced` (or your configured mode) is reported.
 27. Call `GET /v1/runs?sessionKey=<your-session>&limit=5` and confirm latest run includes phase events (`session`, `directives`, `route`, `persist`, `dispatch`) and run spec metadata.
 28. Call `GET /v1/runs/<runId>` for one run from step 27 and confirm final status/event (`completed` or `failed`) is present.
+29. Send `/supervise web --providers=openai,brave compare stable diffusion options` and confirm response includes supervisor id + child count.
+30. Call `GET /v1/supervisors` and `GET /v1/supervisors/<id>` and verify child job statuses move from queued/running to terminal.
+31. Set `WORKER_CONCURRENCY=2`, restart worker, trigger two long web jobs, and confirm both progress concurrently in stream output.
 
 Heartbeat Manual Checklist
 1. Open `/ui` and use the Heartbeat section.

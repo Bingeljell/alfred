@@ -14,6 +14,15 @@ export type ParsedCommand =
   | { kind: "auth_limits" }
   | { kind: "auth_disconnect" }
   | { kind: "web_search"; query: string; provider?: "openai" | "brave" | "perplexity" }
+  | {
+      kind: "supervise_web";
+      query: string;
+      providers?: Array<"openai" | "brave" | "perplexity">;
+      maxRetries?: number;
+      timeBudgetMs?: number;
+      tokenBudget?: number;
+    }
+  | { kind: "supervisor_status"; id: string }
   | { kind: "file_write"; relativePath: string; text: string }
   | { kind: "policy_status" }
   | { kind: "side_effect_send"; text: string }
@@ -118,6 +127,76 @@ export function parseCommand(text: string): ParsedCommand | null {
     const query = provider ? payload.slice(providerMatch?.[0]?.length ?? 0).trim() : payload;
     if (query) {
       return { kind: "web_search", query, provider };
+    }
+  }
+
+  if (value.toLowerCase().startsWith("/supervise web ")) {
+    const payload = value.slice("/supervise web ".length).trim();
+    const tokens = payload.split(/\s+/);
+    const providers: Array<"openai" | "brave" | "perplexity"> = [];
+    let maxRetries: number | undefined;
+    let timeBudgetMs: number | undefined;
+    let tokenBudget: number | undefined;
+    let index = 0;
+
+    while (index < tokens.length && tokens[index]?.startsWith("--")) {
+      const token = tokens[index] ?? "";
+      index += 1;
+      if (token.startsWith("--providers=")) {
+        const values = token
+          .slice("--providers=".length)
+          .split(",")
+          .map((item) => item.trim().toLowerCase())
+          .filter((item) => item === "openai" || item === "brave" || item === "perplexity") as Array<
+          "openai" | "brave" | "perplexity"
+        >;
+        for (const provider of values) {
+          if (!providers.includes(provider)) {
+            providers.push(provider);
+          }
+        }
+        continue;
+      }
+      if (token.startsWith("--max-retries=")) {
+        const parsed = Number(token.slice("--max-retries=".length));
+        if (Number.isFinite(parsed)) {
+          maxRetries = Math.max(0, Math.min(5, Math.floor(parsed)));
+        }
+        continue;
+      }
+      if (token.startsWith("--time-budget-ms=")) {
+        const parsed = Number(token.slice("--time-budget-ms=".length));
+        if (Number.isFinite(parsed)) {
+          timeBudgetMs = Math.max(5000, Math.min(600000, Math.floor(parsed)));
+        }
+        continue;
+      }
+      if (token.startsWith("--token-budget=")) {
+        const parsed = Number(token.slice("--token-budget=".length));
+        if (Number.isFinite(parsed)) {
+          tokenBudget = Math.max(128, Math.min(50000, Math.floor(parsed)));
+        }
+        continue;
+      }
+    }
+
+    const query = tokens.slice(index).join(" ").trim();
+    if (query) {
+      return {
+        kind: "supervise_web",
+        query,
+        providers: providers.length > 0 ? providers : undefined,
+        maxRetries,
+        timeBudgetMs,
+        tokenBudget
+      };
+    }
+  }
+
+  if (value.toLowerCase().startsWith("/supervisor status ")) {
+    const id = value.slice("/supervisor status ".length).trim();
+    if (id) {
+      return { kind: "supervisor_status", id };
     }
   }
 
