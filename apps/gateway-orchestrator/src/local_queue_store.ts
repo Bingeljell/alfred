@@ -261,6 +261,39 @@ export class FileBackedQueueStore {
     return cancelled;
   }
 
+  async updateJobProgress(
+    jobId: string,
+    progress: {
+      message: string;
+      step?: string;
+      percent?: number;
+    }
+  ): Promise<Job | null> {
+    const latest = await this.getJob(jobId);
+    if (!latest) {
+      return null;
+    }
+
+    const now = new Date().toISOString();
+    const next: Job = {
+      ...latest,
+      updatedAt: now,
+      progress: {
+        at: now,
+        message: progress.message,
+        step: progress.step,
+        percent: typeof progress.percent === "number" ? Math.max(0, Math.min(100, progress.percent)) : undefined
+      }
+    };
+
+    await this.writeJob(next);
+    const detailParts = [progress.step ? `step=${progress.step}` : undefined, progress.message]
+      .filter((item) => !!item)
+      .join(" | ");
+    await this.appendEvent({ jobId, at: now, step: "job.progress", detail: detailParts });
+    return next;
+  }
+
   async statusCounts(): Promise<Record<JobStatus, number>> {
     const jobs = await this.listJobs();
     const counts: Record<JobStatus, number> = {

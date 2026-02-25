@@ -31,6 +31,14 @@ export const JobSchema = z.object({
   requestedSkill: z.string().optional(),
   retryOf: z.string().optional(),
   workerId: z.string().optional(),
+  progress: z
+    .object({
+      at: z.string(),
+      message: z.string(),
+      step: z.string().optional(),
+      percent: z.number().min(0).max(100).optional()
+    })
+    .optional(),
   result: z.record(z.string(), z.unknown()).optional(),
   error: z
     .object({

@@ -204,6 +204,10 @@ export function createGatewayApp(
       }) => Promise<unknown>;
       runNow: (options?: { force?: boolean; trigger?: string; targetDate?: string }) => Promise<unknown>;
     };
+    pagedResponseStore?: {
+      popNext: (sessionId: string) => Promise<{ page: string; remaining: number } | null>;
+      clear: (sessionId: string) => Promise<void>;
+    };
     capabilityPolicy?: {
       workspaceDir?: string;
       approvalDefault?: boolean;
@@ -235,7 +239,8 @@ export function createGatewayApp(
     options?.identityProfileStore,
     options?.memoryService,
     options?.capabilityPolicy,
-    options?.webSearchService
+    options?.webSearchService,
+    options?.pagedResponseStore
   );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;

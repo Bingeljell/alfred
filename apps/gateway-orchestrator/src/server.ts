@@ -16,6 +16,7 @@ import { HeartbeatService } from "./builtins/heartbeat_service";
 import { ConversationStore } from "./builtins/conversation_store";
 import { WebSearchService } from "./builtins/web_search_service";
 import { MemoryCompactionService } from "./builtins/memory_compaction_service";
+import { PagedResponseStore } from "./builtins/paged_response_store";
 import { IdentityProfileStore } from "./auth/identity_profile_store";
 import { OAuthService } from "./auth/oauth_service";
 import { OpenAIResponsesService } from "./llm/openai_responses_service";
@@ -43,6 +44,7 @@ async function main(): Promise<void> {
     retentionDays: config.streamRetentionDays,
     dedupeWindowMs: config.streamDedupeWindowMs
   });
+  const pagedResponseStore = new PagedResponseStore(config.stateDir);
   const identityProfileStore = new IdentityProfileStore(config.stateDir);
   const oauthService = new OAuthService({
     stateDir: config.stateDir,
@@ -197,6 +199,7 @@ async function main(): Promise<void> {
   await taskStore.ensureReady();
   await approvalStore.ensureReady();
   await conversationStore.ensureReady();
+  await pagedResponseStore.ensureReady();
   await heartbeatService.ensureReady();
   await memoryCompactionService.ensureReady();
   await identityProfileStore.ensureReady();
@@ -301,6 +304,7 @@ async function main(): Promise<void> {
     identityProfileStore,
     heartbeatService,
     memoryCompactionService,
+    pagedResponseStore,
     whatsAppLiveManager: whatsAppLiveRuntime,
     capabilityPolicy: {
       workspaceDir: config.alfredWorkspaceDir,

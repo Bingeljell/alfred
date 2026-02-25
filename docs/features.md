@@ -195,6 +195,22 @@ Testing:
 - Automated: unit coverage for compaction success, low-signal skip behavior, invalid manual target handling, config parsing defaults/overrides, and route registration.
 - Manual: run compaction status/manual run APIs, verify memory note append for prior day, and verify duplicate re-run is skipped once cursor is current.
 
+## 12) Long-task Worker Routing + Progress UX
+
+Description:
+- Route long research-style requests to worker jobs with immediate acknowledgement, incremental progress updates, and paged follow-up delivery.
+
+Acceptance criteria:
+- `/web ...` command queues a worker job instead of blocking the chat turn.
+- Research-like long requests are heuristically routed to worker with immediate “queued” acknowledgement.
+- Worker emits progress events (`progress`, `running`, `succeeded`, `failed`) and gateway surfaces those updates in stream/chat channels.
+- User can ask `status?`/`progress` and receive latest active job state + last progress message.
+- Long results can be delivered in pages using `#next`/`next` via session-scoped paged response state.
+
+Testing:
+- Automated: unit coverage for routed web-search command behavior, progress query handling, `#next` paging, paged store persistence, and worker progress event/reporting.
+- Manual: trigger long research request, confirm immediate queue acknowledgement + progress updates, then use `status?` and `#next` until pages are exhausted.
+
 ## Security Baseline (v1)
 
 - Side-effect actions require explicit confirmation.

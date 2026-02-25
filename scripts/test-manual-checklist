@@ -22,6 +22,9 @@ Web Console Manual Checklist
 18. Run `/web --provider=openai latest OpenAI updates` and confirm Codex/OpenAI path still works.
 19. Send `/write notes/manual.md hello` and confirm default response says file-write is disabled.
 20. Set `ALFRED_FILE_WRITE_ENABLED=true`, restart gateway, retry `/write notes/manual.md hello`, approve token, then confirm file is appended under `workspace/alfred/notes/manual.md`.
+21. Send a long research-style prompt (for example: `research best stable diffusion models and compare options`) and confirm immediate async-job acknowledgment is returned (not a long blocking turn).
+22. Wait for worker updates and confirm progress notifications appear (running/progress/succeeded) and `status?` returns latest active job state.
+23. If response is paged, send `#next` repeatedly and confirm each page is returned until completion.
 
 Heartbeat Manual Checklist
 1. Open `/ui` and use the Heartbeat section.

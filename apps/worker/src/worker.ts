@@ -7,13 +7,21 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-export type WorkerProcessor = (job: Job) => Promise<Record<string, unknown>>;
+export type WorkerProcessor = (
+  job: Job,
+  context: {
+    reportProgress: (progress: { message: string; step?: string; percent?: number }) => Promise<void>;
+  }
+) => Promise<Record<string, unknown>>;
 
 export type WorkerStatusEvent = {
   jobId: string;
   sessionId?: string;
-  status: "running" | "succeeded" | "failed" | "cancelled";
+  status: "running" | "progress" | "succeeded" | "failed" | "cancelled";
   summary?: string;
+  step?: string;
+  percent?: number;
+  responseText?: string;
 };
 
 export type WorkerHandle = {
@@ -38,7 +46,11 @@ export function startWorker(options: {
   const store = options.store;
   const workerId = options.workerId ?? "worker-1";
   const pollIntervalMs = options.pollIntervalMs ?? 250;
-  const processor = options.processor ?? defaultProcessor;
+  const processor =
+    options.processor ??
+    (async (job: Job) => {
+      return defaultProcessor(job);
+    });
   const onStatusChange = options.onStatusChange;
 
   const sessionFromJob = (job: Job): string | undefined =>
@@ -55,13 +67,25 @@ export function startWorker(options: {
       }
 
       try {
+        const reportProgress = async (progress: { message: string; step?: string; percent?: number }): Promise<void> => {
+          await store.updateJobProgress(claimed.job.id, progress);
+          await onStatusChange?.({
+            jobId: claimed.job.id,
+            sessionId: sessionFromJob(claimed.job),
+            status: "progress",
+            summary: progress.message,
+            step: progress.step,
+            percent: progress.percent
+          });
+        };
+
         await onStatusChange?.({
           jobId: claimed.job.id,
           sessionId: sessionFromJob(claimed.job),
           status: "running"
         });
 
-        const result = await processor(claimed.job);
+        const result = await processor(claimed.job, { reportProgress });
         const latest = await store.getJob(claimed.job.id);
 
         if (latest?.status === "cancelling") {
@@ -78,7 +102,8 @@ export function startWorker(options: {
             jobId: claimed.job.id,
             sessionId: sessionFromJob(claimed.job),
             status: "succeeded",
-            summary: typeof completed?.result?.summary === "string" ? completed.result.summary : undefined
+            summary: typeof completed?.result?.summary === "string" ? completed.result.summary : undefined,
+            responseText: typeof completed?.result?.responseText === "string" ? completed.result.responseText : undefined
           });
         }
       } catch (error) {

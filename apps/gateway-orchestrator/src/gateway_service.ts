@@ -20,6 +20,12 @@ import type { WebSearchProvider } from "./builtins/web_search_service";
 type LlmAuthPreference = "auto" | "oauth" | "api_key";
 type ImplicitApprovalDecision = "approve_latest" | "reject_latest";
 type ExternalCapability = "web_search" | "file_write";
+type RoutedLongTask = {
+  taskType: "web_search";
+  query: string;
+  provider?: WebSearchProvider;
+  reason: string;
+};
 
 type CapabilityPolicy = {
   workspaceDir: string;
@@ -89,6 +95,10 @@ export class GatewayService {
           authPreference?: LlmAuthPreference;
         }
       ) => Promise<{ provider: "openai" | "brave" | "perplexity"; text: string } | null>;
+    },
+    private readonly pagedResponseStore?: {
+      popNext: (sessionId: string) => Promise<{ page: string; remaining: number } | null>;
+      clear: (sessionId: string) => Promise<void>;
     }
   ) {
     this.webSearchService = webSearchService;
@@ -164,6 +174,21 @@ export class GatewayService {
     }
 
     if (inbound.text) {
+      const paging = await this.handlePagingRequest(inbound.sessionId, inbound.text);
+      if (paging) {
+        await this.recordConversation(inbound.sessionId, "outbound", paging, {
+          source: "gateway",
+          channel: "internal",
+          kind: "command",
+          metadata: { authSessionId }
+        });
+        return {
+          accepted: true,
+          mode: "chat",
+          response: paging
+        };
+      }
+
       const command = parseCommand(inbound.text);
       if (command) {
         const response = await this.executeCommand(inbound.sessionId, command, authSessionId, authPreference);
@@ -202,9 +227,48 @@ export class GatewayService {
           return {
             accepted: true,
             mode: "chat",
-            response: decisionResult.response
+          response: decisionResult.response
           };
         }
+      }
+
+      const progressStatus = await this.answerProgressQuery(inbound.sessionId, inbound.text);
+      if (progressStatus) {
+        await this.recordConversation(inbound.sessionId, "outbound", progressStatus, {
+          source: "gateway",
+          channel: "internal",
+          kind: "job",
+          metadata: {
+            authSessionId,
+            progressQuery: true
+          }
+        });
+        return {
+          accepted: true,
+          mode: "chat",
+          response: progressStatus
+        };
+      }
+
+      const routed = await this.routeLongTaskIfNeeded(inbound.sessionId, inbound.text, authSessionId, authPreference);
+      if (routed) {
+        await this.recordConversation(inbound.sessionId, "outbound", routed.response, {
+          source: "gateway",
+          channel: "internal",
+          kind: "job",
+          metadata: {
+            authSessionId,
+            routedTaskType: routed.taskType,
+            reason: routed.reason,
+            jobId: routed.jobId
+          }
+        });
+        return {
+          accepted: true,
+          mode: "async-job",
+          response: routed.response,
+          jobId: routed.jobId
+        };
       }
 
       const response = await this.executeChatTurn(authSessionId, inbound.text, authPreference);
@@ -511,17 +575,16 @@ export class GatewayService {
           });
           return `Approval required for web search. Reply: approve ${approval.token}`;
         }
-
-        await this.queueInFlightStatus(
-          sessionId,
-          `Working on web search (${command.provider ?? this.capabilityPolicy.webSearchProvider})...`
-        );
-        return this.executeWebSearch(
+        const provider = command.provider ?? this.capabilityPolicy.webSearchProvider;
+        const job = await this.enqueueLongTaskJob(sessionId, {
+          taskType: "web_search",
+          query: command.query,
+          provider,
           authSessionId,
-          command.query,
           authPreference,
-          command.provider ?? this.capabilityPolicy.webSearchProvider
-        );
+          reason: "explicit_web_command"
+        });
+        return `Queued web search as job ${job.id}. I will post progress updates here.`;
       }
 
       case "file_write": {
@@ -628,6 +691,162 @@ export class GatewayService {
     return { handled: true, response };
   }
 
+  private async handlePagingRequest(sessionId: string, rawText: string): Promise<string | null> {
+    if (!this.pagedResponseStore) {
+      return null;
+    }
+    const value = rawText.trim().toLowerCase();
+    if (value !== "#next" && value !== "next") {
+      return null;
+    }
+
+    const next = await this.pagedResponseStore.popNext(sessionId);
+    if (!next) {
+      return "No queued paged response is available. Ask a new question or run another long task.";
+    }
+    const suffix = next.remaining > 0 ? `\n\nReply #next for more (${next.remaining} remaining).` : "";
+    return `${next.page}${suffix}`;
+  }
+
+  private async answerProgressQuery(sessionId: string, rawText: string): Promise<string | null> {
+    if (!this.looksLikeProgressQuery(rawText)) {
+      return null;
+    }
+
+    const active = await this.findLatestActiveJob(sessionId);
+    if (!active) {
+      return "No active long-running job for this session.";
+    }
+
+    const progress = active.progress?.message ? ` | progress: ${String(active.progress.message)}` : "";
+    return `Latest job ${active.id} is ${active.status}${progress}`;
+  }
+
+  private async routeLongTaskIfNeeded(
+    sessionId: string,
+    rawText: string,
+    authSessionId: string,
+    authPreference: LlmAuthPreference
+  ): Promise<{ jobId: string; response: string; reason: string; taskType: string } | null> {
+    if (!this.capabilityPolicy.webSearchEnabled) {
+      return null;
+    }
+    const routed = this.detectLongTaskRoute(rawText);
+    if (!routed) {
+      return null;
+    }
+
+    const job = await this.enqueueLongTaskJob(sessionId, {
+      taskType: routed.taskType,
+      query: routed.query,
+      provider: routed.provider,
+      authSessionId,
+      authPreference,
+      reason: routed.reason
+    });
+
+    return {
+      jobId: job.id,
+      taskType: routed.taskType,
+      reason: routed.reason,
+      response: `This looks like a longer task, so I queued it as job ${job.id}. I’ll post progress updates here.`
+    };
+  }
+
+  private detectLongTaskRoute(rawText: string): RoutedLongTask | null {
+    const text = rawText.trim();
+    if (!text) {
+      return null;
+    }
+    if (text.startsWith("/")) {
+      return null;
+    }
+
+    const lower = text.toLowerCase();
+    const explicitResearch =
+      lower.includes("web search") ||
+      lower.includes("research") ||
+      lower.includes("compare") ||
+      lower.includes("best ") ||
+      lower.includes("top ") ||
+      lower.includes("give me options") ||
+      lower.includes("one at a time");
+
+    if (!explicitResearch) {
+      return null;
+    }
+
+    if (text.length < 18) {
+      return null;
+    }
+
+    return {
+      taskType: "web_search",
+      query: text,
+      provider: this.capabilityPolicy.webSearchProvider,
+      reason: "heuristic_research_route"
+    };
+  }
+
+  private looksLikeProgressQuery(rawText: string): boolean {
+    const normalized = rawText.trim().toLowerCase();
+    const compact = normalized.replace(/[!?.,]+$/g, "");
+    if (!normalized) {
+      return false;
+    }
+    if (compact === "status" || compact === "progress" || compact === "update") {
+      return true;
+    }
+    return /(?:what(?:'s| is)?\s+the\s+status|how(?:'s| is)\s+it\s+going|any\s+update|job\s+status)/i.test(normalized);
+  }
+
+  private async findLatestActiveJob(sessionId: string): Promise<Awaited<ReturnType<FileBackedQueueStore["listJobs"]>>[number] | null> {
+    const jobs = await this.store.listJobs();
+    const relevant = jobs.filter((job) => {
+      const owner = typeof job.payload.sessionId === "string" ? job.payload.sessionId : "";
+      return owner === sessionId && (job.status === "queued" || job.status === "running" || job.status === "cancelling");
+    });
+    if (relevant.length === 0) {
+      return null;
+    }
+    relevant.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+    return relevant[0] ?? null;
+  }
+
+  private async enqueueLongTaskJob(
+    sessionId: string,
+    input: {
+      taskType: "web_search";
+      query: string;
+      provider?: WebSearchProvider;
+      authSessionId: string;
+      authPreference: LlmAuthPreference;
+      reason: string;
+    }
+  ) {
+    if (this.pagedResponseStore) {
+      await this.pagedResponseStore.clear(sessionId);
+    }
+
+    const job = await this.store.createJob({
+      type: "stub_task",
+      payload: {
+        sessionId,
+        taskType: input.taskType,
+        query: input.query,
+        provider: input.provider ?? this.capabilityPolicy.webSearchProvider,
+        authSessionId: input.authSessionId,
+        authPreference: input.authPreference,
+        routeReason: input.reason
+      },
+      priority: 5
+    });
+
+    await this.queueJobNotification(sessionId, job.id, "queued", `Job ${job.id} queued: ${input.taskType}`);
+    await this.queueInFlightStatus(sessionId, `Started ${input.taskType} job ${job.id}...`);
+    return job;
+  }
+
   private async executeApprovedAction(
     approval: { action: string; payload: Record<string, unknown> },
     channelSessionId: string,
@@ -649,9 +868,15 @@ export class GatewayService {
       if (!query) {
         return "Approved action failed: missing web search query.";
       }
-      await this.queueInFlightStatus(channelSessionId, `Working on web search (${provider ?? this.capabilityPolicy.webSearchProvider})...`);
-      const output = await this.executeWebSearch(targetAuthSessionId, query, requestedAuthPreference, provider);
-      return `Approved action executed: web_search\n${output}`;
+      const job = await this.enqueueLongTaskJob(channelSessionId, {
+        taskType: "web_search",
+        query,
+        provider: provider ?? this.capabilityPolicy.webSearchProvider,
+        authSessionId: targetAuthSessionId,
+        authPreference: requestedAuthPreference,
+        reason: "approved_web_search"
+      });
+      return `Approved action executed: web_search (queued job ${job.id}).`;
     }
     if (approval.action === "file_write") {
       if (!this.capabilityPolicy.fileWriteEnabled) {

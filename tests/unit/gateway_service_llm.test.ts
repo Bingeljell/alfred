@@ -87,28 +87,25 @@ describe("GatewayService llm path", () => {
       text: `approve ${token}`,
       requestJob: false
     });
-    expect(approved.response).toContain("Approved action executed: web_search");
-    expect(approved.response).toContain("https://platform.openai.com/");
+    expect(approved.response).toContain("Approved action executed: web_search (queued job");
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(1);
+    const queued = jobs[0];
+    expect(queued?.status).toBe("queued");
+    expect(queued?.payload?.taskType).toBe("web_search");
+    expect(queued?.payload?.query).toBe("latest OpenAI OAuth docs");
 
     const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
-    expect(calls.length).toBe(1);
-    expect(String(calls[0]?.[1] ?? "")).toContain("Query: latest OpenAI OAuth docs");
+    expect(calls.length).toBe(0);
   });
 
-  it("enqueues in-flight status for direct web search execution", async () => {
+  it("queues web search command for worker with immediate status updates", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-web-progress-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);
     await queueStore.ensureReady();
 
     const notifications = {
       enqueue: vi.fn().mockResolvedValue({ id: "n1" })
-    };
-
-    const webSearch = {
-      search: vi.fn().mockResolvedValue({
-        provider: "brave",
-        text: "Brave web results:\n1. Result - https://example.com"
-      })
     };
 
     const service = new GatewayService(
@@ -130,8 +127,7 @@ describe("GatewayService llm path", () => {
         approvalDefault: true,
         webSearchEnabled: true,
         webSearchRequireApproval: false
-      },
-      webSearch as never
+      }
     );
 
     const result = await service.handleInbound({
@@ -140,13 +136,119 @@ describe("GatewayService llm path", () => {
       requestJob: false
     });
 
-    expect(result.response).toContain("Web search provider: brave");
-    expect(notifications.enqueue).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "owner@s.whatsapp.net",
-        status: "running"
-      })
+    expect(result.response).toContain("Queued web search as job");
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(1);
+    const queued = jobs[0];
+    expect(queued?.status).toBe("queued");
+    expect(queued?.payload?.provider).toBe("brave");
+    expect(notifications.enqueue).toHaveBeenCalled();
+    const payloads = (notifications.enqueue as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(
+      (entry) => entry[0] as { status?: string; text?: string }
     );
+    expect(payloads.some((entry) => entry.status === "queued")).toBe(true);
+    expect(payloads.some((entry) => entry.status === "running")).toBe(true);
+  });
+
+  it("routes research-style long requests to worker and answers progress queries", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-long-task-route-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const notifications = {
+      enqueue: vi.fn().mockResolvedValue({ id: "n1" })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      notifications as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        approvalDefault: true,
+        webSearchEnabled: true,
+        webSearchRequireApproval: false
+      }
+    );
+
+    const routed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Can you research the best stable diffusion models and compare top options one at a time?",
+      requestJob: false
+    });
+
+    expect(routed.mode).toBe("async-job");
+    expect(routed.response).toContain("queued it as job");
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(1);
+    const job = jobs[0];
+    expect(job?.payload?.taskType).toBe("web_search");
+
+    const status = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "status?",
+      requestJob: false
+    });
+    expect(status.response).toContain(`Latest job ${job?.id} is queued`);
+  });
+
+  it("serves #next pages from paged response store", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-next-page-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const pagedStore = {
+      popNext: vi
+        .fn()
+        .mockResolvedValueOnce({ page: "Page 2 content", remaining: 1 })
+        .mockResolvedValueOnce({ page: "Page 3 content", remaining: 0 }),
+      clear: vi.fn().mockResolvedValue(undefined)
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      pagedStore
+    );
+
+    const first = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "#next",
+      requestJob: false
+    });
+    expect(first.response).toContain("Page 2 content");
+    expect(first.response).toContain("Reply #next for more (1 remaining)");
+
+    const second = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "next",
+      requestJob: false
+    });
+    expect(second.response).toContain("Page 3 content");
+    expect(second.response).not.toContain("remaining");
   });
 
   it("enforces file-write policy with notes-only workspace scope", async () => {
