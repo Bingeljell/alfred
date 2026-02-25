@@ -7,8 +7,145 @@ import { FileBackedQueueStore } from "../../apps/gateway-orchestrator/src/local_
 import { OpenAIResponsesService } from "../../apps/gateway-orchestrator/src/llm/openai_responses_service";
 import { IdentityProfileStore } from "../../apps/gateway-orchestrator/src/auth/identity_profile_store";
 import { ConversationStore } from "../../apps/gateway-orchestrator/src/builtins/conversation_store";
+import { ApprovalStore } from "../../apps/gateway-orchestrator/src/builtins/approval_store";
 
 describe("GatewayService llm path", () => {
+  it("supports approval-gated web search command", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-web-search-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "Top result: https://platform.openai.com/",
+        model: "openai-codex/default",
+        authMode: "oauth"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        approvalDefault: true,
+        webSearchEnabled: true,
+        webSearchRequireApproval: true
+      }
+    );
+
+    const gated = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "/web latest OpenAI OAuth docs",
+      requestJob: false
+    });
+    expect(gated.response).toContain("Approval required for web search");
+
+    const token = String(gated.response?.split("approve ")[1] ?? "").trim();
+    const approved = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `approve ${token}`,
+      requestJob: false
+    });
+    expect(approved.response).toContain("Approved action executed: web_search");
+    expect(approved.response).toContain("https://platform.openai.com/");
+
+    const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(calls.length).toBe(1);
+    expect(String(calls[0]?.[1] ?? "")).toContain("Query: latest OpenAI OAuth docs");
+  });
+
+  it("enforces file-write policy with notes-only workspace scope", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-write-policy-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const disabledService = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore
+    );
+
+    const disabled = await disabledService.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "/write notes/day.md hello",
+      requestJob: false
+    });
+    expect(disabled.response).toContain("File write is disabled by policy");
+
+    const enabledService = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalDefault: true,
+        fileWriteEnabled: true,
+        fileWriteRequireApproval: true,
+        fileWriteNotesOnly: true,
+        fileWriteNotesDir: "notes"
+      }
+    );
+
+    const blocked = await enabledService.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "/write todo.md this should fail",
+      requestJob: false
+    });
+    expect(blocked.response).toContain("restricted to 'notes/'");
+
+    const gated = await enabledService.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "/write notes/day.md write this line",
+      requestJob: false
+    });
+    expect(gated.response).toContain("Approval required for file write");
+
+    const token = String(gated.response?.split("approve ")[1] ?? "").trim();
+    const approved = await enabledService.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `approve ${token}`,
+      requestJob: false
+    });
+    expect(approved.response).toContain("Approved action executed: file_write");
+    expect(approved.response).toContain("workspace/notes/day.md");
+
+    const written = await fs.readFile(path.join(workspaceDir, "notes", "day.md"), "utf8");
+    expect(written).toContain("write this line");
+  });
+
   it("uses llm response for regular chat and preserves command routing", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-llm-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);

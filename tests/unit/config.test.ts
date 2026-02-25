@@ -24,6 +24,14 @@ describe("loadConfig", () => {
     expect(config.streamRetentionDays).toBe(14);
     expect(config.streamDedupeWindowMs).toBe(2500);
     expect(config.publicBaseUrl).toBe("http://localhost:3000");
+    expect(config.alfredWorkspaceDir.endsWith("workspace/alfred")).toBe(true);
+    expect(config.alfredApprovalDefault).toBe(true);
+    expect(config.alfredWebSearchEnabled).toBe(true);
+    expect(config.alfredWebSearchRequireApproval).toBe(true);
+    expect(config.alfredFileWriteEnabled).toBe(false);
+    expect(config.alfredFileWriteRequireApproval).toBe(true);
+    expect(config.alfredFileWriteNotesOnly).toBe(true);
+    expect(config.alfredFileWriteNotesDir).toBe("notes");
     expect(config.oauthOpenAiMode).toBe("mock");
     expect(config.openAiResponsesEnabled).toBe(true);
     expect(config.openAiResponsesUrl).toBe("https://api.openai.com/v1/responses");
@@ -63,6 +71,14 @@ describe("loadConfig", () => {
       STREAM_RETENTION_DAYS: "30",
       STREAM_DEDUPE_WINDOW_MS: "1200",
       PUBLIC_BASE_URL: "http://localhost:4010/",
+      ALFRED_WORKSPACE_DIR: "./tmp/alfred-workspace",
+      ALFRED_APPROVAL_DEFAULT: "false",
+      ALFRED_WEB_SEARCH_ENABLED: "false",
+      ALFRED_WEB_SEARCH_REQUIRE_APPROVAL: "false",
+      ALFRED_FILE_WRITE_ENABLED: "true",
+      ALFRED_FILE_WRITE_REQUIRE_APPROVAL: "false",
+      ALFRED_FILE_WRITE_NOTES_ONLY: "false",
+      ALFRED_FILE_WRITE_NOTES_DIR: "scratch",
       OAUTH_OPENAI_MODE: "live",
       OAUTH_OPENAI_CLIENT_ID: "client",
       OAUTH_OPENAI_TOKEN_URL: "https://example.test/token",
@@ -106,6 +122,14 @@ describe("loadConfig", () => {
     expect(config.streamRetentionDays).toBe(30);
     expect(config.streamDedupeWindowMs).toBe(1200);
     expect(config.publicBaseUrl).toBe("http://localhost:4010");
+    expect(config.alfredWorkspaceDir.endsWith("tmp/alfred-workspace")).toBe(true);
+    expect(config.alfredApprovalDefault).toBe(false);
+    expect(config.alfredWebSearchEnabled).toBe(false);
+    expect(config.alfredWebSearchRequireApproval).toBe(false);
+    expect(config.alfredFileWriteEnabled).toBe(true);
+    expect(config.alfredFileWriteRequireApproval).toBe(false);
+    expect(config.alfredFileWriteNotesOnly).toBe(false);
+    expect(config.alfredFileWriteNotesDir).toBe("scratch");
     expect(config.oauthOpenAiMode).toBe("live");
     expect(config.oauthOpenAiClientId).toBe("client");
     expect(config.openAiResponsesEnabled).toBe(false);

@@ -10,6 +10,10 @@ Web Console Manual Checklist
 6. Switch `LLM Auth Mode` to `API key only` (without API key configured) and confirm explicit backend guidance is returned (not silent `ack:`).
 7. Send as async job and confirm jobId appears and can be checked with Job Controls.
 8. Run Memory Search/Sync/Status actions and confirm responses are shown in the log panel.
+9. Send `/policy` and confirm workspace + approval policy values match your `.env`.
+10. Send `/web latest OpenAI docs` and confirm approval token is requested (default policy), then send `approve <token>` and confirm web-result text is returned.
+11. Send `/write notes/manual.md hello` and confirm default response says file-write is disabled.
+12. Set `ALFRED_FILE_WRITE_ENABLED=true`, restart gateway, retry `/write notes/manual.md hello`, approve token, then confirm file is appended under `workspace/alfred/notes/manual.md`.
 
 Heartbeat Manual Checklist
 1. Open `/ui` and use the Heartbeat section.

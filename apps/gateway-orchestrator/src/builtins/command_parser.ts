@@ -13,6 +13,9 @@ export type ParsedCommand =
   | { kind: "auth_status" }
   | { kind: "auth_limits" }
   | { kind: "auth_disconnect" }
+  | { kind: "web_search"; query: string }
+  | { kind: "file_write"; relativePath: string; text: string }
+  | { kind: "policy_status" }
   | { kind: "side_effect_send"; text: string }
   | { kind: "approve"; token: string };
 
@@ -101,6 +104,29 @@ export function parseCommand(text: string): ParsedCommand | null {
 
   if (value.toLowerCase() === "/auth disconnect") {
     return { kind: "auth_disconnect" };
+  }
+
+  if (value.toLowerCase() === "/policy") {
+    return { kind: "policy_status" };
+  }
+
+  if (value.toLowerCase().startsWith("/web ")) {
+    const query = value.slice("/web ".length).trim();
+    if (query) {
+      return { kind: "web_search", query };
+    }
+  }
+
+  if (value.toLowerCase().startsWith("/write ")) {
+    const payload = value.slice("/write ".length).trim();
+    const firstSpace = payload.indexOf(" ");
+    if (firstSpace > 0) {
+      const relativePath = payload.slice(0, firstSpace).trim();
+      const text = payload.slice(firstSpace + 1).trim();
+      if (relativePath && text) {
+        return { kind: "file_write", relativePath, text };
+      }
+    }
   }
 
   if (value.toLowerCase().startsWith("send ")) {

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { loadConfig, loadDotEnvFile } from "./config";
 import { createGatewayApp } from "./app";
 import { FileBackedQueueStore } from "./local_queue_store";
@@ -184,6 +185,7 @@ async function main(): Promise<void> {
   await heartbeatService.ensureReady();
   await identityProfileStore.ensureReady();
   await oauthService.ensureReady();
+  await fs.mkdir(config.alfredWorkspaceDir, { recursive: true });
   if (codexAuthService) {
     try {
       await codexAuthService.ensureReady();
@@ -266,6 +268,16 @@ async function main(): Promise<void> {
     identityProfileStore,
     heartbeatService,
     whatsAppLiveManager: whatsAppLiveRuntime,
+    capabilityPolicy: {
+      workspaceDir: config.alfredWorkspaceDir,
+      approvalDefault: config.alfredApprovalDefault,
+      webSearchEnabled: config.alfredWebSearchEnabled,
+      webSearchRequireApproval: config.alfredWebSearchRequireApproval,
+      fileWriteEnabled: config.alfredFileWriteEnabled,
+      fileWriteRequireApproval: config.alfredFileWriteRequireApproval,
+      fileWriteNotesOnly: config.alfredFileWriteNotesOnly,
+      fileWriteNotesDir: config.alfredFileWriteNotesDir
+    },
     baileysInboundToken: config.whatsAppBaileysInboundToken
   });
   const dispatcher = startNotificationDispatcher({

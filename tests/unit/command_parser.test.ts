@@ -30,6 +30,19 @@ describe("parseCommand", () => {
     expect(parseCommand("/auth disconnect")).toEqual({ kind: "auth_disconnect" });
   });
 
+  it("parses capability and policy commands", () => {
+    expect(parseCommand("/policy")).toEqual({ kind: "policy_status" });
+    expect(parseCommand("/web latest openai oauth docs")).toEqual({
+      kind: "web_search",
+      query: "latest openai oauth docs"
+    });
+    expect(parseCommand("/write notes/today.md Remember to call mom")).toEqual({
+      kind: "file_write",
+      relativePath: "notes/today.md",
+      text: "Remember to call mom"
+    });
+  });
+
   it("returns null for unsupported input", () => {
     expect(parseCommand("hello world")).toBeNull();
   });

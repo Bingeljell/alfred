@@ -99,6 +99,32 @@ const EnvSchema = z.object({
     .transform((v) => (v ? Number(v) : 2500))
     .pipe(z.number().int().min(0).max(60000)),
   PUBLIC_BASE_URL: z.string().optional().default("http://localhost:3000"),
+  ALFRED_WORKSPACE_DIR: z.string().optional().default("./workspace/alfred"),
+  ALFRED_APPROVAL_DEFAULT: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  ALFRED_WEB_SEARCH_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  ALFRED_WEB_SEARCH_REQUIRE_APPROVAL: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  ALFRED_FILE_WRITE_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : false)),
+  ALFRED_FILE_WRITE_REQUIRE_APPROVAL: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  ALFRED_FILE_WRITE_NOTES_ONLY: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  ALFRED_FILE_WRITE_NOTES_DIR: z.string().optional().default("notes"),
   OAUTH_STATE_TTL_SEC: z
     .string()
     .optional()
@@ -195,6 +221,14 @@ export type AppConfig = {
   streamRetentionDays: number;
   streamDedupeWindowMs: number;
   publicBaseUrl: string;
+  alfredWorkspaceDir: string;
+  alfredApprovalDefault: boolean;
+  alfredWebSearchEnabled: boolean;
+  alfredWebSearchRequireApproval: boolean;
+  alfredFileWriteEnabled: boolean;
+  alfredFileWriteRequireApproval: boolean;
+  alfredFileWriteNotesOnly: boolean;
+  alfredFileWriteNotesDir: string;
   oauthStateTtlMs: number;
   oauthTokenEncryptionKey?: string;
   oauthOpenAiMode: "mock" | "live";
@@ -266,6 +300,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     streamRetentionDays: parsed.STREAM_RETENTION_DAYS,
     streamDedupeWindowMs: parsed.STREAM_DEDUPE_WINDOW_MS,
     publicBaseUrl: parsed.PUBLIC_BASE_URL.replace(/\/+$/, ""),
+    alfredWorkspaceDir: path.resolve(parsed.ALFRED_WORKSPACE_DIR),
+    alfredApprovalDefault: parsed.ALFRED_APPROVAL_DEFAULT,
+    alfredWebSearchEnabled: parsed.ALFRED_WEB_SEARCH_ENABLED,
+    alfredWebSearchRequireApproval: parsed.ALFRED_WEB_SEARCH_REQUIRE_APPROVAL,
+    alfredFileWriteEnabled: parsed.ALFRED_FILE_WRITE_ENABLED,
+    alfredFileWriteRequireApproval: parsed.ALFRED_FILE_WRITE_REQUIRE_APPROVAL,
+    alfredFileWriteNotesOnly: parsed.ALFRED_FILE_WRITE_NOTES_ONLY,
+    alfredFileWriteNotesDir: parsed.ALFRED_FILE_WRITE_NOTES_DIR.trim() || "notes",
     oauthStateTtlMs: parsed.OAUTH_STATE_TTL_SEC * 1000,
     oauthTokenEncryptionKey: parsed.OAUTH_TOKEN_ENCRYPTION_KEY,
     oauthOpenAiMode: parsed.OAUTH_OPENAI_MODE,

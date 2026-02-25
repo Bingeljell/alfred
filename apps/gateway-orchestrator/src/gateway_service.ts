@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { InboundMessageSchema, JobCreateSchema } from "../../../packages/contracts/src";
 import { parseCommand, type ParsedCommand } from "./builtins/command_parser";
 import { ApprovalStore } from "./builtins/approval_store";
@@ -15,8 +17,33 @@ import { IdentityProfileStore } from "./auth/identity_profile_store";
 import type { MemoryResult, MemoryService } from "../../../packages/memory/src";
 
 type LlmAuthPreference = "auto" | "oauth" | "api_key";
+type ExternalCapability = "web_search" | "file_write";
+
+type CapabilityPolicy = {
+  workspaceDir: string;
+  approvalDefault: boolean;
+  webSearchEnabled: boolean;
+  webSearchRequireApproval: boolean;
+  fileWriteEnabled: boolean;
+  fileWriteRequireApproval: boolean;
+  fileWriteNotesOnly: boolean;
+  fileWriteNotesDir: string;
+};
+
+const DEFAULT_CAPABILITY_POLICY: CapabilityPolicy = {
+  workspaceDir: path.resolve(process.cwd(), "workspace", "alfred"),
+  approvalDefault: true,
+  webSearchEnabled: true,
+  webSearchRequireApproval: true,
+  fileWriteEnabled: false,
+  fileWriteRequireApproval: true,
+  fileWriteNotesOnly: true,
+  fileWriteNotesDir: "notes"
+};
 
 export class GatewayService {
+  private readonly capabilityPolicy: CapabilityPolicy;
+
   constructor(
     private readonly store: FileBackedQueueStore,
     private readonly notificationStore?: OutboundNotificationStore,
@@ -37,8 +64,16 @@ export class GatewayService {
     private readonly codexApiKey?: string,
     private readonly conversationStore?: ConversationStore,
     private readonly identityProfileStore?: IdentityProfileStore,
-    private readonly memoryService?: Pick<MemoryService, "searchMemory">
-  ) {}
+    private readonly memoryService?: Pick<MemoryService, "searchMemory">,
+    capabilityPolicy?: Partial<CapabilityPolicy>
+  ) {
+    this.capabilityPolicy = {
+      ...DEFAULT_CAPABILITY_POLICY,
+      ...(capabilityPolicy ?? {}),
+      workspaceDir: path.resolve(capabilityPolicy?.workspaceDir ?? DEFAULT_CAPABILITY_POLICY.workspaceDir),
+      fileWriteNotesDir: (capabilityPolicy?.fileWriteNotesDir ?? DEFAULT_CAPABILITY_POLICY.fileWriteNotesDir).trim() || "notes"
+    };
+  }
 
   async health(): Promise<{
     service: "gateway-orchestrator";
@@ -105,7 +140,7 @@ export class GatewayService {
     if (inbound.text) {
       const command = parseCommand(inbound.text);
       if (command) {
-        const response = await this.executeCommand(inbound.sessionId, command, authSessionId);
+        const response = await this.executeCommand(inbound.sessionId, command, authSessionId, authPreference);
         await this.recordConversation(inbound.sessionId, "outbound", response, {
           source: "gateway",
           channel: "internal",
@@ -202,7 +237,12 @@ export class GatewayService {
     };
   }
 
-  private async executeCommand(sessionId: string, command: ParsedCommand, authSessionId = sessionId): Promise<string> {
+  private async executeCommand(
+    sessionId: string,
+    command: ParsedCommand,
+    authSessionId = sessionId,
+    authPreference: LlmAuthPreference = "auto"
+  ): Promise<string> {
     switch (command.kind) {
       case "remind_add": {
         if (!this.reminderStore) {
@@ -393,6 +433,61 @@ export class GatewayService {
         return removed ? "OpenAI OAuth token removed for this session." : "No OpenAI OAuth token found for this session.";
       }
 
+      case "policy_status": {
+        return [
+          "Capability policy:",
+          `- workspaceDir: ${this.capabilityPolicy.workspaceDir}`,
+          `- approvalDefault: ${String(this.capabilityPolicy.approvalDefault)}`,
+          `- webSearch: enabled=${String(this.capabilityPolicy.webSearchEnabled)}, requireApproval=${String(this.capabilityPolicy.webSearchRequireApproval)}`,
+          `- fileWrite: enabled=${String(this.capabilityPolicy.fileWriteEnabled)}, requireApproval=${String(this.capabilityPolicy.fileWriteRequireApproval)}, notesOnly=${String(this.capabilityPolicy.fileWriteNotesOnly)}, notesDir=${this.capabilityPolicy.fileWriteNotesDir}`
+        ].join("\n");
+      }
+
+      case "web_search": {
+        if (!this.capabilityPolicy.webSearchEnabled) {
+          return "Web search is disabled by policy.";
+        }
+
+        if (this.requiresApproval("web_search")) {
+          if (!this.approvalStore) {
+            return "Approvals are not configured.";
+          }
+          const approval = await this.approvalStore.create(sessionId, "web_search", {
+            query: command.query,
+            authSessionId,
+            authPreference
+          });
+          return `Approval required for web search. Reply: approve ${approval.token}`;
+        }
+
+        return this.executeWebSearch(authSessionId, command.query, authPreference);
+      }
+
+      case "file_write": {
+        if (!this.capabilityPolicy.fileWriteEnabled) {
+          return "File write is disabled by policy. Use /note add for durable notes.";
+        }
+
+        const resolved = this.resolveWorkspacePath(command.relativePath);
+        if (!resolved.ok) {
+          return resolved.error;
+        }
+
+        if (this.requiresApproval("file_write")) {
+          if (!this.approvalStore) {
+            return "Approvals are not configured.";
+          }
+
+          const approval = await this.approvalStore.create(sessionId, "file_write", {
+            relativePath: command.relativePath,
+            text: command.text
+          });
+          return `Approval required for file write. Reply: approve ${approval.token}`;
+        }
+
+        return this.executeFileWrite(resolved.absolutePath, command.text);
+      }
+
       case "side_effect_send": {
         if (!this.approvalStore) {
           return "Approvals are not configured.";
@@ -415,6 +510,32 @@ export class GatewayService {
         if (approval.action === "send_text") {
           const text = String(approval.payload.text ?? "");
           return `Approved action executed: send '${text}'`;
+        }
+        if (approval.action === "web_search") {
+          if (!this.capabilityPolicy.webSearchEnabled) {
+            return "Approved action failed: web search is disabled by policy.";
+          }
+          const query = String(approval.payload.query ?? "").trim();
+          const targetAuthSessionId = String(approval.payload.authSessionId ?? authSessionId).trim() || authSessionId;
+          const requestedAuthPreference = this.normalizeAuthPreference(approval.payload.authPreference);
+          if (!query) {
+            return "Approved action failed: missing web search query.";
+          }
+          const output = await this.executeWebSearch(targetAuthSessionId, query, requestedAuthPreference);
+          return `Approved action executed: web_search\n${output}`;
+        }
+        if (approval.action === "file_write") {
+          if (!this.capabilityPolicy.fileWriteEnabled) {
+            return "Approved action failed: file write is disabled by policy.";
+          }
+          const relativePath = String(approval.payload.relativePath ?? "").trim();
+          const text = String(approval.payload.text ?? "");
+          const resolved = this.resolveWorkspacePath(relativePath);
+          if (!resolved.ok) {
+            return `Approved action failed: ${resolved.error}`;
+          }
+          const output = await this.executeFileWrite(resolved.absolutePath, text);
+          return `Approved action executed: file_write\n${output}`;
         }
 
         return `Approved action executed: ${approval.action}`;
@@ -650,6 +771,88 @@ export class GatewayService {
     }
 
     return selected.reverse();
+  }
+
+  private requiresApproval(capability: ExternalCapability): boolean {
+    if (!this.capabilityPolicy.approvalDefault) {
+      return false;
+    }
+    if (capability === "web_search") {
+      return this.capabilityPolicy.webSearchRequireApproval;
+    }
+    if (capability === "file_write") {
+      return this.capabilityPolicy.fileWriteRequireApproval;
+    }
+    return true;
+  }
+
+  private resolveWorkspacePath(relativePath: string): { ok: true; absolutePath: string } | { ok: false; error: string } {
+    const trimmed = relativePath.trim();
+    if (!trimmed) {
+      return { ok: false, error: "Missing file path. Usage: /write notes/file.md your text" };
+    }
+    if (path.isAbsolute(trimmed)) {
+      return { ok: false, error: "Absolute paths are not allowed for /write." };
+    }
+    if (trimmed.split(/[\\/]/).includes("..")) {
+      return { ok: false, error: "Path traversal is not allowed for /write." };
+    }
+
+    const absolutePath = path.resolve(this.capabilityPolicy.workspaceDir, trimmed);
+    const workspace = this.capabilityPolicy.workspaceDir;
+    if (!(absolutePath === workspace || absolutePath.startsWith(`${workspace}${path.sep}`))) {
+      return { ok: false, error: "Path escapes workspace policy boundary." };
+    }
+
+    if (this.capabilityPolicy.fileWriteNotesOnly) {
+      const normalizedRelative = path.relative(workspace, absolutePath).replace(/\\/g, "/");
+      const notesRoot = this.capabilityPolicy.fileWriteNotesDir.replace(/\\/g, "/").replace(/\/+$/, "");
+      if (!(normalizedRelative === notesRoot || normalizedRelative.startsWith(`${notesRoot}/`))) {
+        return {
+          ok: false,
+          error: `File write is restricted to '${notesRoot}/' by policy.`
+        };
+      }
+    }
+
+    return { ok: true, absolutePath };
+  }
+
+  private async executeFileWrite(absolutePath: string, text: string): Promise<string> {
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+    const content = text.endsWith("\n") ? text : `${text}\n`;
+    await fs.appendFile(absolutePath, content, "utf8");
+
+    const relativePath = path.relative(this.capabilityPolicy.workspaceDir, absolutePath).replace(/\\/g, "/");
+    return `Appended ${content.length} chars to workspace/${relativePath}`;
+  }
+
+  private async executeWebSearch(
+    authSessionId: string,
+    query: string,
+    authPreference: LlmAuthPreference = "auto"
+  ): Promise<string> {
+    if (!this.llmService) {
+      return "No model backend is configured. Connect ChatGPT OAuth or set OPENAI_API_KEY.";
+    }
+
+    const prompt = [
+      "You are a web research assistant.",
+      "Use available web-search/browsing tools if available.",
+      "Return concise findings with source links and publication dates when possible.",
+      `Query: ${query.trim()}`
+    ].join("\n");
+
+    try {
+      const result = await this.llmService.generateText(authSessionId, prompt, { authPreference });
+      const text = result?.text?.trim();
+      if (!text) {
+        return "No web search result is available for this query.";
+      }
+      return text;
+    } catch (error) {
+      return this.humanizeLlmError(error);
+    }
   }
 
   private async shouldUseProviderManagedContext(authPreference: LlmAuthPreference): Promise<boolean> {

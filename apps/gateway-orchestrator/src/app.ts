@@ -176,6 +176,16 @@ export function createGatewayApp(
       }) => Promise<unknown>;
       runNow: (options?: { force?: boolean; trigger?: string }) => Promise<unknown>;
     };
+    capabilityPolicy?: {
+      workspaceDir?: string;
+      approvalDefault?: boolean;
+      webSearchEnabled?: boolean;
+      webSearchRequireApproval?: boolean;
+      fileWriteEnabled?: boolean;
+      fileWriteRequireApproval?: boolean;
+      fileWriteNotesOnly?: boolean;
+      fileWriteNotesDir?: string;
+    };
     baileysInboundToken?: string;
   }
 ) {
@@ -194,7 +204,8 @@ export function createGatewayApp(
     options?.codexApiKey,
     options?.conversationStore,
     options?.identityProfileStore,
-    options?.memoryService
+    options?.memoryService,
+    options?.capabilityPolicy
   );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;

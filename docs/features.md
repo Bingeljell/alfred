@@ -157,6 +157,23 @@ Testing:
 - Automated: unit coverage for heartbeat alerting, queue-busy gating, dedupe behavior, and config parsing.
 - Manual: configure heartbeat in `/ui`, run now, and validate status transitions plus alert suppression/dedupe.
 
+## 10) Capability Policy + Workspace Guardrails
+
+Description:
+- Add policy-first controls for external capabilities so development/testing stays bounded and auditable.
+
+Acceptance criteria:
+- Policy defaults are env-driven and loaded from `.env` (`ALFRED_*`).
+- Approval is enabled by default for external capabilities.
+- Dedicated workspace root (`ALFRED_WORKSPACE_DIR`, default `./workspace/alfred`) is auto-created on startup and gitignored.
+- `/web <query>` command is available for web research and can be approval-gated.
+- `/write <relative-path> <text>` writes only inside workspace, is disabled by default, and can be restricted to notes-only paths.
+- `/policy` command reports active capability policy state for manual verification.
+
+Testing:
+- Automated: command parser, config parsing, and gateway-service unit tests for web-search approvals and file-write policy enforcement.
+- Manual: run `/policy`, `/web ...`, and `/write ...` with different `ALFRED_*` env combinations and verify approval/workspace behavior.
+
 ## Security Baseline (v1)
 
 - Side-effect actions require explicit confirmation.
