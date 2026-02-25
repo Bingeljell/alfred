@@ -222,10 +222,11 @@ Acceptance criteria:
 - System prompt is assembled from dedicated docs files (`docs/alfred_identity.md`, `docs/alfred_capabilities.md`, `docs/alfred_policies.md`).
 - Approval mode is configurable via `ALFRED_APPROVAL_MODE` (`strict`, `balanced`, `relaxed`) and enforced in gateway policy checks.
 - `balanced` mode allows low-risk research autonomy while preserving guarded write behavior.
+- Planner emits a trace event (intent, confidence, reason, chosen action) into the interaction stream for operator visibility in `/ui`.
 
 Testing:
 - Automated: unit coverage for planner JSON parsing/heuristic fallback, config parsing for planner + approval mode, and gateway routing behavior under planner decisions.
-- Manual: send ambiguous prompt to verify clarification, send research prompt to verify planner-based worker delegation, and verify `/policy` reports current approval mode.
+- Manual: send ambiguous prompt to verify clarification, send research prompt to verify planner-based worker delegation, confirm `STREAM_PLANNER_TRACE` appears in `/ui`, and verify `/policy` reports current approval mode.
 
 ## Security Baseline (v1)
 

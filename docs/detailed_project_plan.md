@@ -193,6 +193,7 @@ Deliverables:
 - Planner-first routing: run an LLM intent planner for non-command chat turns with structured intent output, confidence-based clarification fallback, and deterministic policy enforcement.
 - System-prompt stack: load Alfred identity/capability/policy markdown files and inject them into planner context so behavior remains auditable and easy to tune without code changes.
 - Approval-mode policy: support `strict`/`balanced`/`relaxed` capability approval modes with `balanced` as default for early autonomy with bounded risk.
+- Planner trace observability: emit a planner decision trace event (intent/confidence/reason/chosen action) to the unified stream so `/ui` operators can diagnose routing decisions quickly.
 - Retention workers (artifacts/logs).
 - Backup reminder using `last_backup_at` memory signal.
 - Minimal CI and release checklist.

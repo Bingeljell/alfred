@@ -50,6 +50,9 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("WA_LIVE_AUTO_POLL_MS");
     expect(html).toContain("SOURCE_AUTO_POLL_MS");
     expect(html).toContain("STREAM_AUTO_POLL_MS");
+    expect(html).toContain("STREAM_PLANNER_TRACE");
+    expect(html).toContain("plannerChosenAction");
+    expect(html).toContain("plannerTrace");
     expect(html).toContain("startWaLiveAutoPoll");
     expect(html).toContain("startSourceAutoPoll");
     expect(html).toContain("startInteractionStreamPoll");

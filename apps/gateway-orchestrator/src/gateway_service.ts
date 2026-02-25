@@ -212,8 +212,36 @@ export class GatewayService {
         authPreference,
         hasActiveJob: activeJob !== null
       });
+      let plannerTraceLogged = false;
+      const recordPlannerTrace = async (chosenAction: string, extra?: Record<string, unknown>): Promise<void> => {
+        if (!plan || plannerTraceLogged) {
+          return;
+        }
+        plannerTraceLogged = true;
+        const confidence = Number.isFinite(plan.confidence) ? plan.confidence : 0;
+        const message = `Planner selected ${plan.intent} (${Math.round(confidence * 100)}%) -> ${chosenAction}`;
+        await this.recordConversation(inbound.sessionId, "system", message, {
+          source: "gateway",
+          channel: "internal",
+          kind: "command",
+          metadata: {
+            authSessionId,
+            plannerTrace: true,
+            plannerIntent: plan.intent,
+            plannerConfidence: confidence,
+            plannerReason: plan.reason,
+            plannerNeedsWorker: plan.needsWorker,
+            plannerProvider: plan.provider,
+            plannerQuery: plan.query,
+            plannerQuestion: plan.question,
+            plannerChosenAction: chosenAction,
+            ...(extra ?? {})
+          }
+        });
+      };
 
       if (plan?.intent === "clarify") {
+        await recordPlannerTrace("ask_clarification");
         const question = plan.question?.trim() || "Can you clarify what output you want first?";
         await this.recordConversation(inbound.sessionId, "outbound", question, {
           source: "gateway",
@@ -236,6 +264,7 @@ export class GatewayService {
       if (plan?.intent === "status_query") {
         const progressStatus = await this.answerProgressQuery(inbound.sessionId, inbound.text);
         if (progressStatus) {
+          await recordPlannerTrace("reply_progress_status");
           await this.recordConversation(inbound.sessionId, "outbound", progressStatus, {
             source: "gateway",
             channel: "internal",
@@ -265,6 +294,7 @@ export class GatewayService {
           authPreference,
           reason: `planner_${plan.reason}`
         });
+        await recordPlannerTrace("enqueue_worker_web_search", { jobId: job.id, taskType: "web_search" });
         const response = `Queued research as job ${job.id}. I will share concise progress and final results here.`;
         await this.recordConversation(inbound.sessionId, "outbound", response, {
           source: "gateway",
@@ -288,6 +318,7 @@ export class GatewayService {
 
       const command = parseCommand(inbound.text);
       if (command) {
+        await recordPlannerTrace("execute_command", { command: command.kind });
         const response = await this.executeCommand(inbound.sessionId, command, authSessionId, authPreference);
         await this.recordConversation(inbound.sessionId, "outbound", response, {
           source: "gateway",
@@ -313,6 +344,7 @@ export class GatewayService {
           authPreference
         );
         if (decisionResult.handled) {
+          await recordPlannerTrace("resolve_approval_decision", { decision: implicitApproval });
           await this.recordConversation(inbound.sessionId, "outbound", decisionResult.response, {
             source: "gateway",
             channel: "internal",
@@ -331,6 +363,7 @@ export class GatewayService {
 
       const progressStatus = await this.answerProgressQuery(inbound.sessionId, inbound.text);
       if (progressStatus) {
+        await recordPlannerTrace("reply_progress_status_fallback");
         await this.recordConversation(inbound.sessionId, "outbound", progressStatus, {
           source: "gateway",
           channel: "internal",
@@ -349,6 +382,7 @@ export class GatewayService {
 
       const routed = await this.routeLongTaskIfNeeded(inbound.sessionId, inbound.text, authSessionId, authPreference);
       if (routed) {
+        await recordPlannerTrace("enqueue_heuristic_long_task", { jobId: routed.jobId, taskType: routed.taskType });
         await this.recordConversation(inbound.sessionId, "outbound", routed.response, {
           source: "gateway",
           channel: "internal",
@@ -368,6 +402,7 @@ export class GatewayService {
         };
       }
 
+      await recordPlannerTrace("run_chat_turn");
       const response = await this.executeChatTurn(authSessionId, inbound.text, authPreference);
       await this.recordConversation(inbound.sessionId, "outbound", response, {
         source: "gateway",

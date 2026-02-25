@@ -198,6 +198,71 @@ describe("GatewayService llm path", () => {
     expect(status.response).toContain(`Latest job ${job?.id} is queued`);
   });
 
+  it("emits a planner trace event with chosen action metadata", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-trace-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const conversationStore = new ConversationStore(stateDir);
+    await conversationStore.ensureReady();
+    const planner = {
+      plan: vi.fn().mockResolvedValue({
+        intent: "web_research",
+        confidence: 0.87,
+        needsWorker: true,
+        query: "research best stable diffusion models",
+        provider: "brave",
+        reason: "unit_test_planner"
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      conversationStore,
+      undefined,
+      undefined,
+      {
+        approvalDefault: true,
+        webSearchEnabled: true,
+        webSearchRequireApproval: false
+      },
+      undefined,
+      undefined,
+      planner as never
+    );
+
+    const result = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Research best stable diffusion models",
+      requestJob: false
+    });
+    expect(result.mode).toBe("async-job");
+
+    const events = await conversationStore.query({
+      sessionId: "owner@s.whatsapp.net",
+      kinds: ["command"],
+      directions: ["system"],
+      limit: 40
+    });
+    const traces = events.filter((event) => event.metadata?.plannerTrace === true);
+    expect(traces.length).toBe(1);
+    const trace = traces[0];
+    expect(trace?.text).toContain("Planner selected web_research");
+    expect(trace?.metadata?.plannerIntent).toBe("web_research");
+    expect(trace?.metadata?.plannerChosenAction).toBe("enqueue_worker_web_search");
+    expect(trace?.metadata?.plannerReason).toBe("unit_test_planner");
+    expect(trace?.metadata?.plannerNeedsWorker).toBe(true);
+  });
+
   it("serves #next pages from paged response store", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-next-page-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);

@@ -748,6 +748,12 @@ export function renderWebConsoleHtml(): string {
         const source = event?.source ? String(event.source).toUpperCase() : "SYSTEM";
         const direction = event?.direction ? String(event.direction).toUpperCase() : "SYSTEM";
         const kind = event?.kind ? String(event.kind).toUpperCase() : "STATUS";
+        const metadata = event?.metadata && typeof event.metadata === "object" ? event.metadata : {};
+        const plannerIntent = typeof metadata.plannerIntent === "string" ? metadata.plannerIntent : null;
+        const plannerConfidence = typeof metadata.plannerConfidence === "number" ? metadata.plannerConfidence : null;
+        const plannerAction = typeof metadata.plannerChosenAction === "string" ? metadata.plannerChosenAction : null;
+        const plannerReason = typeof metadata.plannerReason === "string" ? metadata.plannerReason : null;
+        const plannerTrace = metadata.plannerTrace === true;
         const payload = {
           id: event?.id ?? "unknown",
           at: event?.createdAt ?? stamp(),
@@ -757,8 +763,22 @@ export function renderWebConsoleHtml(): string {
           kind: event?.kind ?? "status",
           sessionId: event?.sessionId ?? "system",
           text: event?.text ?? "",
-          metadata: event?.metadata ?? {}
+          metadata,
+          planner:
+            plannerIntent || plannerAction || plannerReason || plannerTrace
+              ? {
+                  intent: plannerIntent,
+                  confidence: plannerConfidence,
+                  chosenAction: plannerAction,
+                  reason: plannerReason,
+                  trace: plannerTrace
+                }
+              : null
         };
+        if (plannerTrace) {
+          pushLog("STREAM_PLANNER_TRACE", payload);
+          return;
+        }
         pushLog("STREAM_" + source + "_" + direction + "_" + kind, payload);
       }
 
@@ -1485,11 +1505,13 @@ export function renderWebConsoleHtml(): string {
           const at = event?.createdAt ? String(event.createdAt).slice(11, 19) : "--:--:--";
           const direction = event?.direction === "outbound" ? "assistant" : event?.direction === "inbound" ? "user" : "system";
           const text = event?.text ? String(event.text).replace(/\\s+/g, " ").trim() : "";
+          const plannerTrace = event?.metadata && typeof event.metadata === "object" && event.metadata.plannerTrace === true;
           const transcriptSessionId = event?.sessionId ? String(event.sessionId) : "system";
+          const roleLabel = plannerTrace ? direction + " [planner]" : direction;
           if (allSessions) {
-            return "[" + at + "] [" + transcriptSessionId + "] " + direction + ": " + text;
+            return "[" + at + "] [" + transcriptSessionId + "] " + roleLabel + ": " + text;
           }
-          return "[" + at + "] " + direction + ": " + text;
+          return "[" + at + "] " + roleLabel + ": " + text;
         });
         sessionTranscript.textContent = lines.join("\\n");
         sessionTranscript.scrollTop = sessionTranscript.scrollHeight;
