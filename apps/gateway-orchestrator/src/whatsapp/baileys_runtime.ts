@@ -26,6 +26,10 @@ type BaileysRuntimeStatus = {
   ignoredPreLiveCount: number;
   ignoredStaleCount: number;
   ignoredDuplicateCount: number;
+  ignoredUnsupportedJidCount: number;
+  ignoredFromMeCount: number;
+  ignoredSenderNotAllowedCount: number;
+  ignoredMissingPrefixCount: number;
   updatedAt: string;
 };
 
@@ -79,7 +83,18 @@ function extractMessageText(message: Record<string, unknown> | null | undefined)
 }
 
 function isAllowedRemoteJid(remoteJid: string): boolean {
-  return remoteJid.endsWith("@s.whatsapp.net");
+  return remoteJid.endsWith("@s.whatsapp.net") || remoteJid.endsWith("@lid");
+}
+
+function canonicalSenderKey(remoteJid: string): string {
+  const base = remoteJid.trim().toLowerCase();
+  if (!base) {
+    return "";
+  }
+  const at = base.indexOf("@");
+  const left = at >= 0 ? base.slice(0, at) : base;
+  const user = left.split(":")[0]?.trim() ?? "";
+  return user;
 }
 
 function safeDisconnectCode(payload: unknown): number | null {
@@ -188,6 +203,10 @@ export class BaileysRuntime implements BaileysTransport {
     ignoredPreLiveCount: 0,
     ignoredStaleCount: 0,
     ignoredDuplicateCount: 0,
+    ignoredUnsupportedJidCount: 0,
+    ignoredFromMeCount: 0,
+    ignoredSenderNotAllowedCount: 0,
+    ignoredMissingPrefixCount: 0,
     updatedAt: nowIso()
   };
 
@@ -211,7 +230,11 @@ export class BaileysRuntime implements BaileysTransport {
     this.allowSelfFromMe = options.allowSelfFromMe ?? false;
     this.requirePrefix = options.requirePrefix?.trim() || undefined;
     this.historyGraceWindowSec = Math.max(0, options.historyGraceWindowSec ?? 90);
-    this.allowedSenders = new Set((options.allowedSenders ?? []).map((item) => item.trim()).filter((item) => item.length > 0));
+    this.allowedSenders = new Set(
+      (options.allowedSenders ?? [])
+        .map((item) => canonicalSenderKey(item))
+        .filter((item) => item.length > 0)
+    );
     this.loadModule = options.moduleLoader ?? defaultModuleLoader;
     this.updateStatus({
       qrGenerationLimit: this.maxQrGenerations
@@ -484,6 +507,10 @@ export class BaileysRuntime implements BaileysTransport {
     let acceptedCount = 0;
     let ignoredStaleCount = 0;
     let ignoredDuplicateCount = 0;
+    let ignoredUnsupportedJidCount = 0;
+    let ignoredFromMeCount = 0;
+    let ignoredSenderNotAllowedCount = 0;
+    let ignoredMissingPrefixCount = 0;
 
     for (const message of messages) {
       const key =
@@ -494,6 +521,7 @@ export class BaileysRuntime implements BaileysTransport {
       const remoteJid = typeof key?.remoteJid === "string" ? key.remoteJid : "";
       const id = typeof key?.id === "string" ? key.id : "";
       if (!remoteJid || !id || !isAllowedRemoteJid(remoteJid)) {
+        ignoredUnsupportedJidCount += 1;
         continue;
       }
 
@@ -511,9 +539,12 @@ export class BaileysRuntime implements BaileysTransport {
       }
 
       if (fromMe && !this.allowSelfFromMe) {
+        ignoredFromMeCount += 1;
         continue;
       }
-      if (!fromMe && this.allowedSenders.size > 0 && !this.allowedSenders.has(remoteJid)) {
+      const senderKey = canonicalSenderKey(remoteJid);
+      if (!fromMe && this.allowedSenders.size > 0 && !this.allowedSenders.has(senderKey)) {
+        ignoredSenderNotAllowedCount += 1;
         continue;
       }
 
@@ -529,6 +560,7 @@ export class BaileysRuntime implements BaileysTransport {
 
       const inboundText = this.applyRequiredPrefix(normalizedText);
       if (!inboundText) {
+        ignoredMissingPrefixCount += 1;
         continue;
       }
 
@@ -557,11 +589,23 @@ export class BaileysRuntime implements BaileysTransport {
       }
     }
 
-    if (acceptedCount > 0 || ignoredStaleCount > 0 || ignoredDuplicateCount > 0) {
+    if (
+      acceptedCount > 0 ||
+      ignoredStaleCount > 0 ||
+      ignoredDuplicateCount > 0 ||
+      ignoredUnsupportedJidCount > 0 ||
+      ignoredFromMeCount > 0 ||
+      ignoredSenderNotAllowedCount > 0 ||
+      ignoredMissingPrefixCount > 0
+    ) {
       this.updateStatus({
         acceptedMessageCount: this.statusValue.acceptedMessageCount + acceptedCount,
         ignoredStaleCount: this.statusValue.ignoredStaleCount + ignoredStaleCount,
-        ignoredDuplicateCount: this.statusValue.ignoredDuplicateCount + ignoredDuplicateCount
+        ignoredDuplicateCount: this.statusValue.ignoredDuplicateCount + ignoredDuplicateCount,
+        ignoredUnsupportedJidCount: this.statusValue.ignoredUnsupportedJidCount + ignoredUnsupportedJidCount,
+        ignoredFromMeCount: this.statusValue.ignoredFromMeCount + ignoredFromMeCount,
+        ignoredSenderNotAllowedCount: this.statusValue.ignoredSenderNotAllowedCount + ignoredSenderNotAllowedCount,
+        ignoredMissingPrefixCount: this.statusValue.ignoredMissingPrefixCount + ignoredMissingPrefixCount
       });
     }
   }

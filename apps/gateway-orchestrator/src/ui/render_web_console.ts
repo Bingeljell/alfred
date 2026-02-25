@@ -1164,7 +1164,22 @@ export function renderWebConsoleHtml(): string {
         const ignoredPreLiveCount = typeof status.ignoredPreLiveCount === "number" ? status.ignoredPreLiveCount : 0;
         const ignoredStaleCount = typeof status.ignoredStaleCount === "number" ? status.ignoredStaleCount : 0;
         const ignoredDuplicateCount = typeof status.ignoredDuplicateCount === "number" ? status.ignoredDuplicateCount : 0;
-        const ignoredCount = ignoredNonNotifyCount + ignoredPreLiveCount + ignoredStaleCount + ignoredDuplicateCount;
+        const ignoredUnsupportedJidCount =
+          typeof status.ignoredUnsupportedJidCount === "number" ? status.ignoredUnsupportedJidCount : 0;
+        const ignoredFromMeCount = typeof status.ignoredFromMeCount === "number" ? status.ignoredFromMeCount : 0;
+        const ignoredSenderNotAllowedCount =
+          typeof status.ignoredSenderNotAllowedCount === "number" ? status.ignoredSenderNotAllowedCount : 0;
+        const ignoredMissingPrefixCount =
+          typeof status.ignoredMissingPrefixCount === "number" ? status.ignoredMissingPrefixCount : 0;
+        const ignoredCount =
+          ignoredNonNotifyCount +
+          ignoredPreLiveCount +
+          ignoredStaleCount +
+          ignoredDuplicateCount +
+          ignoredUnsupportedJidCount +
+          ignoredFromMeCount +
+          ignoredSenderNotAllowedCount +
+          ignoredMissingPrefixCount;
         waLiveSummary.textContent =
           "WhatsApp " + (connected ? "connected" : "not connected") + " | state: " + state + " | me: " + me + " | " + qr + " | qrAttempts: " + qrCount + "/" + qrLimit + " | sync: " + syncState + " | accepted: " + acceptedCount + " | ignored: " + ignoredCount + " | lastError: " + lastError;
         waLiveSummary.dataset.state = connected ? "connected" : "disconnected";
@@ -1205,7 +1220,15 @@ export function renderWebConsoleHtml(): string {
             lastError,
             syncState,
             acceptedCount,
-            ignoredCount
+            ignoredCount,
+            ignoredNonNotifyCount,
+            ignoredPreLiveCount,
+            ignoredStaleCount,
+            ignoredDuplicateCount,
+            ignoredUnsupportedJidCount,
+            ignoredFromMeCount,
+            ignoredSenderNotAllowedCount,
+            ignoredMissingPrefixCount
           }
         );
       }

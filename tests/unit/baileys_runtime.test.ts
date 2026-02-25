@@ -158,6 +158,13 @@ describe("BaileysRuntime", () => {
     expect(received).toHaveLength(2);
     expect(received[0]?.text).toBe("run report");
     expect(received[1]?.text).toBe("self check");
+
+    const status = runtime.status() as {
+      ignoredSenderNotAllowedCount: number;
+      ignoredMissingPrefixCount: number;
+    };
+    expect(status.ignoredSenderNotAllowedCount).toBe(1);
+    expect(status.ignoredMissingPrefixCount).toBe(1);
   });
 
   it("filters non-notify upserts and stale messages to reduce history-sync noise", async () => {
@@ -321,5 +328,37 @@ describe("BaileysRuntime", () => {
 
     expect(fake.counters.logoutCalls).toBe(0);
     expect(fake.counters.endCalls).toBeGreaterThan(0);
+  });
+
+  it("accepts @lid inbound sender ids", async () => {
+    const fake = createFakeSocket();
+    const received: string[] = [];
+    const runtime = new BaileysRuntime({
+      authDir: "/tmp/baileys-auth",
+      requirePrefix: "/alfred",
+      onInbound: async (message) => {
+        received.push(message.message?.conversation ?? "");
+      },
+      moduleLoader: async () => ({
+        default: () => fake.socket,
+        fetchLatestBaileysVersion: async () => ({ version: [1, 0, 0] as [number, number, number] }),
+        useMultiFileAuthState: async () => ({ state: {}, saveCreds: async () => undefined })
+      })
+    });
+
+    await runtime.connect();
+    fake.emit("connection.update", { connection: "open" });
+    fake.emit("messages.upsert", {
+      type: "notify",
+      messages: [
+        {
+          key: { id: "lid-1", remoteJid: "1234567890@lid", fromMe: false },
+          message: { conversation: "/alfred hello from lid" }
+        }
+      ]
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(received).toEqual(["hello from lid"]);
   });
 });
