@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-26: Added hybrid planning contract schemas (`PlanProposal`, `PlanDecision`, `RunSpecLock`) to lock gateway-authoritative run-spec handoff semantics between orchestrator and worker, with dedicated unit tests.
 - 2026-02-26: Removed automatic partial `creds.json` reset on Baileys connect after observing a post-scan regression loop where valid transitional auth could be erased and trigger repeated re-registration; runtime now relies on explicit `515` restart recovery without destructive auth-dir mutation.
 - 2026-02-26: Added explicit Baileys `stream:error` restart handling for code `515` so gateway now force-recycles socket and reconnects even when Baileys does not emit `connection:"close"`; also expanded disconnect-code parsing (`error.data.attrs.code`) and locked behavior with unit coverage.
 - 2026-02-26: Added Baileys interrupted-pairing recovery in runtime startup: when auth creds are partially persisted (`registered=false` but `me/account` present), gateway now backs up stale `creds.json` and forces a clean relink path so WhatsApp does not remain stuck in `connecting` with repeated 428/1006 loop errors and no QR refresh.
