@@ -42,6 +42,9 @@ Web Console Manual Checklist
 35. Send `/supervise web --providers=searxng,openai compare stable diffusion options` and confirm response includes supervisor id + child count.
 36. Call `GET /v1/supervisors` and `GET /v1/supervisors/<id>` and verify child job statuses move from queued/running to terminal.
 37. Set `WORKER_CONCURRENCY=2`, restart worker, trigger two long web jobs, and confirm both progress concurrently in stream output.
+38. Send `/calendar add <future-iso> dentist appointment`, then `/calendar list`, and confirm the event appears with a stable id.
+39. Send `/calendar cancel <id>` and confirm the event is marked cancelled and no longer listed in `/calendar list`.
+40. Enable file-write policy (`ALFRED_FILE_WRITE_ENABLED=true`), write a workspace file (`/file write notes/share.md hello`), then run `/file send notes/share.md test attachment`; approve if prompted and confirm a file notification is queued/delivered.
 
 Heartbeat Manual Checklist
 1. Open `/ui` and use the Heartbeat section.

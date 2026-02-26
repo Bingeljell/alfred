@@ -122,6 +122,29 @@ describe("phase 5 integration", () => {
 
     expect(reminder.response).toContain("Reminder created");
 
+    const calendarAdd = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `/calendar add ${new Date(Date.now() + 60_000).toISOString()} team standup`,
+      requestJob: false
+    });
+    expect(calendarAdd.response).toContain("Calendar event created");
+    const calendarEventId = String(calendarAdd.response?.match(/\(([^)]+)\)/)?.[1] ?? "");
+
+    const calendarList = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "/calendar list",
+      requestJob: false
+    });
+    expect(calendarList.response).toContain("Upcoming calendar events:");
+    expect(calendarList.response).toContain("team standup");
+
+    const calendarCancel = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `/calendar cancel ${calendarEventId}`,
+      requestJob: false
+    });
+    expect(calendarCancel.response).toContain("Calendar event cancelled");
+
     await waitFor(async () => {
       const message = adapter.sent.find((entry) => entry.text.includes("Reminder: stretch"));
       return message ?? null;

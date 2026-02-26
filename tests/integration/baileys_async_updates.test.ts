@@ -99,4 +99,39 @@ describe("baileys async integration", () => {
     await worker.stop();
     await dispatcher.stop();
   });
+
+  it("delivers queued file notifications through adapter file channel", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-baileys-file-int-"));
+    const notificationStore = new OutboundNotificationStore(stateDir);
+    const adapter = new InMemoryWhatsAppAdapter();
+    await notificationStore.ensureReady();
+
+    const dispatcher = startNotificationDispatcher({
+      store: notificationStore,
+      adapter,
+      pollIntervalMs: 10
+    });
+
+    const filePath = path.join(stateDir, "summary.md");
+    await fs.writeFile(filePath, "# Summary\n", "utf8");
+    await notificationStore.enqueue({
+      kind: "file",
+      sessionId: "owner@s.whatsapp.net",
+      filePath,
+      fileName: "summary.md",
+      mimeType: "text/markdown",
+      caption: "daily note"
+    });
+
+    await waitFor(async () => adapter.sentFiles[0] ?? null);
+
+    expect(adapter.sentFiles).toHaveLength(1);
+    expect(adapter.sentFiles[0]?.fileName).toBe("summary.md");
+    expect(adapter.sentFiles[0]?.caption).toBe("daily note");
+
+    const pending = await notificationStore.listPending();
+    expect(pending).toHaveLength(0);
+
+    await dispatcher.stop();
+  });
 });

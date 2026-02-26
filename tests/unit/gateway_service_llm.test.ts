@@ -10,6 +10,7 @@ import { ConversationStore } from "../../apps/gateway-orchestrator/src/builtins/
 import { ApprovalStore } from "../../apps/gateway-orchestrator/src/builtins/approval_store";
 import { RunLedgerStore } from "../../apps/gateway-orchestrator/src/builtins/run_ledger_store";
 import { SupervisorStore } from "../../apps/gateway-orchestrator/src/builtins/supervisor_store";
+import { OutboundNotificationStore } from "../../apps/gateway-orchestrator/src/notification_store";
 
 describe("GatewayService llm path", () => {
   it("treats yes/no as normal chat when no pending approval exists", async () => {
@@ -481,6 +482,66 @@ describe("GatewayService llm path", () => {
 
     const written = await fs.readFile(path.join(workspaceDir, "notes", "day.md"), "utf8");
     expect(written).toContain("write this line");
+  });
+
+  it("queues approved file attachment sends for whatsapp delivery", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-file-send-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const notificationStore = new OutboundNotificationStore(stateDir);
+    await notificationStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    await fs.mkdir(path.join(workspaceDir, "notes"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "notes", "summary.md"), "# Summary\n", "utf8");
+
+    const service = new GatewayService(
+      queueStore,
+      notificationStore,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalDefault: true,
+        fileWriteEnabled: true,
+        fileWriteRequireApproval: true,
+        fileWriteNotesOnly: true,
+        fileWriteNotesDir: "notes"
+      }
+    );
+
+    const gated = await service.handleInbound({
+      sessionId: "919819874144@s.whatsapp.net",
+      text: "/file send notes/summary.md daily update",
+      requestJob: false
+    });
+    expect(gated.response).toContain("Approval required for file send");
+
+    const token = String(gated.response?.split("approve ")[1] ?? "").trim();
+    const approved = await service.handleInbound({
+      sessionId: "919819874144@s.whatsapp.net",
+      text: `approve ${token}`,
+      requestJob: false
+    });
+    expect(approved.response).toContain("Approved action executed: file_send");
+
+    const pending = await notificationStore.listPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.kind).toBe("file");
+    expect(pending[0]?.fileName).toBe("summary.md");
+    expect(pending[0]?.caption).toBe("daily update");
   });
 
   it("uses llm response for regular chat and preserves command routing", async () => {

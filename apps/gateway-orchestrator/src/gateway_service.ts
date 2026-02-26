@@ -736,6 +736,63 @@ export class GatewayService {
         return `Pending reminders:\n${lines.join("\n")}`;
       }
 
+      case "calendar_add": {
+        if (!this.reminderStore) {
+          return "Calendar is not configured.";
+        }
+
+        const parsedDate = new Date(command.startsAt);
+        if (Number.isNaN(parsedDate.getTime())) {
+          return "Invalid calendar time. Use ISO format, e.g. /calendar add 2026-02-23T09:00:00Z team sync";
+        }
+
+        const event = await this.reminderStore.add(sessionId, command.title, parsedDate.toISOString());
+        await this.recordMemoryCheckpoint(sessionId, {
+          class: "todo",
+          source: "calendar_add",
+          summary: `Calendar event scheduled: ${command.title}`,
+          details: `${event.id} @ ${event.remindAt}`,
+          dedupeKey: `calendar_add:${sessionId}:${event.id}`
+        });
+        return `Calendar event created (${event.id}) for ${event.remindAt}: ${event.text}`;
+      }
+
+      case "calendar_list": {
+        if (!this.reminderStore) {
+          return "Calendar is not configured.";
+        }
+
+        const events = await this.reminderStore.listBySession(sessionId);
+        if (events.length === 0) {
+          return "No upcoming calendar events.";
+        }
+        const lines = events.slice(0, 10).map((item) => `- ${item.id}: ${item.text} @ ${item.remindAt}`);
+        return `Upcoming calendar events:\n${lines.join("\n")}`;
+      }
+
+      case "calendar_cancel": {
+        if (!this.reminderStore) {
+          return "Calendar is not configured.";
+        }
+
+        const cancelled = await this.reminderStore.cancel(sessionId, command.id);
+        if (!cancelled) {
+          return `Calendar event not found: ${command.id}`;
+        }
+        if (cancelled.status !== "cancelled") {
+          return `Calendar event ${cancelled.id} is already ${cancelled.status}.`;
+        }
+
+        await this.recordMemoryCheckpoint(sessionId, {
+          class: "decision",
+          source: "calendar_cancel",
+          summary: `Calendar event cancelled: ${cancelled.text}`,
+          details: `${cancelled.id} @ ${cancelled.remindAt}`,
+          dedupeKey: `calendar_cancel:${sessionId}:${cancelled.id}`
+        });
+        return `Calendar event cancelled: ${cancelled.id}`;
+      }
+
       case "task_add": {
         if (!this.taskStore) {
           return "Tasks are not configured.";
@@ -1060,6 +1117,31 @@ export class GatewayService {
         return this.executeFileWrite(resolved.absolutePath, command.text);
       }
 
+      case "file_send": {
+        const resolved = this.resolveWorkspacePath(command.relativePath);
+        if (!resolved.ok) {
+          return resolved.error;
+        }
+        const attachmentPolicy = this.validateAttachmentPath(resolved.absolutePath);
+        if (!attachmentPolicy.ok) {
+          return attachmentPolicy.error;
+        }
+
+        if (this.requiresApproval("file_write")) {
+          if (!this.approvalStore) {
+            return "Approvals are not configured.";
+          }
+
+          const approval = await this.approvalStore.create(sessionId, "file_send", {
+            relativePath: command.relativePath,
+            caption: command.caption
+          });
+          return `Approval required for file send. Reply yes/no, or approve ${approval.token}`;
+        }
+
+        return this.executeFileSend(sessionId, resolved.absolutePath, command.caption);
+      }
+
       case "side_effect_send": {
         if (!this.approvalStore) {
           return "Approvals are not configured.";
@@ -1369,6 +1451,27 @@ export class GatewayService {
       });
       return `Approved action executed: file_write\n${output}`;
     }
+    if (approval.action === "file_send") {
+      const relativePath = String(approval.payload.relativePath ?? "").trim();
+      const caption = typeof approval.payload.caption === "string" ? approval.payload.caption : undefined;
+      const resolved = this.resolveWorkspacePath(relativePath);
+      if (!resolved.ok) {
+        return `Approved action failed: ${resolved.error}`;
+      }
+      const attachmentPolicy = this.validateAttachmentPath(resolved.absolutePath);
+      if (!attachmentPolicy.ok) {
+        return `Approved action failed: ${attachmentPolicy.error}`;
+      }
+      const output = await this.executeFileSend(channelSessionId, resolved.absolutePath, caption);
+      await this.recordMemoryCheckpoint(channelSessionId, {
+        class: "decision",
+        source: "approval_execute",
+        summary: "Approved file_send action",
+        details: relativePath,
+        dedupeKey: `approval_execute:${channelSessionId}:file_send:${relativePath}`
+      });
+      return `Approved action executed: file_send\n${output}`;
+    }
 
     await this.recordMemoryCheckpoint(channelSessionId, {
       class: "decision",
@@ -1537,11 +1640,13 @@ export class GatewayService {
       "intent_planner",
       "web_search",
       "memory_search",
+      "calendar",
       "reminders",
       "notes",
       "tasks",
       "approval_gate",
-      "file_write_policy"
+      "file_write_policy",
+      "file_send_attachment"
     ];
     const hash = content.join("|");
     return { hash, content };
@@ -1844,6 +1949,29 @@ export class GatewayService {
     return { ok: true, absolutePath };
   }
 
+  private validateAttachmentPath(absolutePath: string): { ok: true } | { ok: false; error: string } {
+    const ext = path.extname(absolutePath).toLowerCase();
+    const allowed = new Set([".md", ".txt", ".doc"]);
+    if (!allowed.has(ext)) {
+      return { ok: false, error: "Only .md, .txt, and .doc files can be sent as attachments." };
+    }
+    return { ok: true };
+  }
+
+  private resolveAttachmentMimeType(absolutePath: string): string {
+    const ext = path.extname(absolutePath).toLowerCase();
+    if (ext === ".md") {
+      return "text/markdown";
+    }
+    if (ext === ".txt") {
+      return "text/plain";
+    }
+    if (ext === ".doc") {
+      return "application/msword";
+    }
+    return "application/octet-stream";
+  }
+
   private async executeFileWrite(absolutePath: string, text: string): Promise<string> {
     await fs.mkdir(path.dirname(absolutePath), { recursive: true });
     const content = text.endsWith("\n") ? text : `${text}\n`;
@@ -1851,6 +1979,35 @@ export class GatewayService {
 
     const relativePath = path.relative(this.capabilityPolicy.workspaceDir, absolutePath).replace(/\\/g, "/");
     return `Appended ${content.length} chars to workspace/${relativePath}`;
+  }
+
+  private async executeFileSend(sessionId: string, absolutePath: string, caption?: string): Promise<string> {
+    if (!this.notificationStore) {
+      return "File send is unavailable: notification channel is not configured.";
+    }
+
+    const stats = await fs.stat(absolutePath).catch(() => null);
+    if (!stats || !stats.isFile()) {
+      return `File not found in workspace: ${path.relative(this.capabilityPolicy.workspaceDir, absolutePath).replace(/\\/g, "/")}`;
+    }
+
+    const maxBytes = 5 * 1024 * 1024;
+    if (stats.size > maxBytes) {
+      return `File is too large (${stats.size} bytes). Max supported attachment size is ${maxBytes} bytes.`;
+    }
+
+    const fileName = path.basename(absolutePath);
+    await this.notificationStore.enqueue({
+      kind: "file",
+      sessionId,
+      filePath: absolutePath,
+      fileName,
+      mimeType: this.resolveAttachmentMimeType(absolutePath),
+      caption
+    });
+
+    const relativePath = path.relative(this.capabilityPolicy.workspaceDir, absolutePath).replace(/\\/g, "/");
+    return `Queued attachment send: workspace/${relativePath}`;
   }
 
   private async executeWebSearch(

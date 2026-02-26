@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { BaileysInboundMessage } from "../../../../packages/contracts/src";
 import type { BaileysTransport } from "../../../../packages/provider-adapters/src";
 
@@ -37,7 +38,7 @@ type BaileysSocket = {
   ev: {
     on: (event: string, listener: (payload: unknown) => void) => void;
   };
-  sendMessage: (jid: string, payload: { text: string }) => Promise<void>;
+  sendMessage: (jid: string, payload: Record<string, unknown>) => Promise<void>;
   end?: (error?: unknown) => void;
   logout?: () => Promise<void>;
   user?: {
@@ -319,6 +320,35 @@ export class BaileysRuntime implements BaileysTransport {
     }
 
     await this.socket.sendMessage(jid, { text: normalizedText });
+  }
+
+  async sendFile(
+    jid: string,
+    filePath: string,
+    options?: { fileName?: string; mimeType?: string; caption?: string }
+  ): Promise<void> {
+    if (!isAllowedRemoteJid(jid)) {
+      throw new Error("baileys_invalid_jid");
+    }
+    const trimmedPath = filePath.trim();
+    if (!trimmedPath) {
+      throw new Error("baileys_invalid_file_path");
+    }
+    if (!this.socket) {
+      throw new Error("baileys_not_connected");
+    }
+
+    const buffer = await fs.readFile(trimmedPath);
+    const fileName = (options?.fileName ?? trimmedPath.split(/[\\/]/).pop() ?? "attachment").trim() || "attachment";
+    const mimeType = options?.mimeType?.trim() || "application/octet-stream";
+    const caption = options?.caption?.trim();
+
+    await this.socket.sendMessage(jid, {
+      document: buffer,
+      fileName,
+      mimetype: mimeType,
+      caption
+    });
   }
 
   private async connectInternal(): Promise<void> {

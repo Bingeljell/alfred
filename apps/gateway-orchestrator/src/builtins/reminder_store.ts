@@ -51,6 +51,22 @@ export class ReminderStore {
     return state.reminders.filter((item) => item.sessionId === sessionId && item.status === "pending");
   }
 
+  async cancel(sessionId: string, id: string): Promise<ReminderRecord | null> {
+    const state = await this.read();
+    const target = state.reminders.find((item) => item.id === id && item.sessionId === sessionId);
+    if (!target) {
+      return null;
+    }
+    if (target.status !== "pending") {
+      return target;
+    }
+
+    target.status = "cancelled";
+    target.triggeredAt = new Date().toISOString();
+    await this.write(state);
+    return target;
+  }
+
   async listDue(now = new Date()): Promise<ReminderRecord[]> {
     const state = await this.read();
     return state.reminders.filter((item) => item.status === "pending" && new Date(item.remindAt) <= now);

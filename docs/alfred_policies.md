@@ -11,4 +11,5 @@
   - Report concise progress; avoid spamming repetitive updates.
 - Boundaries:
   - Respect workspace restrictions and configured allow/deny rules.
+  - Only send attachments from workspace-approved paths and allowed text-doc extensions.
   - Never bypass deterministic policy checks.

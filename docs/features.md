@@ -97,10 +97,11 @@ Testing:
 ## 6) Built-in Daily Utility
 
 Description:
-- Core includes reminders and simple notes/tasks without heavy external tools.
+- Core includes reminders, calendar entries, and simple notes/tasks without heavy external tools.
 
 Acceptance criteria:
 - Reminder creation, listing, and trigger notifications work.
+- Calendar command path supports add/list/cancel with deterministic IDs and session scoping.
 - User timezone is respected.
 - Daily backup reminder appears when overdue.
 
@@ -190,14 +191,15 @@ Acceptance criteria:
 - SearXNG and BrightData providers support dedicated config (`SEARXNG_SEARCH_*`, `BRIGHTDATA_*`), with BrightData using API key + zone; Brave and Perplexity remain optional API providers (`BRAVE_SEARCH_*`, `PERPLEXITY_*`) while OpenAI provider reuses current Codex/OpenAI chat path.
 - Long-running `/web` execution emits an in-flight `running` notification message so operators see progress before final output is returned.
 - `/write <relative-path> <text>` writes only inside workspace, is disabled by default, and can be restricted to notes-only paths.
+- `/file send <relative-path> [caption]` queues WhatsApp attachment delivery for workspace files and supports `.md`, `.txt`, and `.doc` payloads.
 - `/policy` command reports active capability policy state for manual verification.
 - Pending approvals can be resolved with natural yes/no replies (`yes` approves latest pending action, `no` rejects latest pending action) in both web chat and WhatsApp, while token-based `approve <token>` remains supported.
 - `/approval` / `/approval pending` reports pending approval state (action/token/expiry) for session-level operator visibility.
 - Approval state is queryable and resolvable via API (`GET /v1/approvals/pending`, `POST /v1/approvals/resolve`) for cross-channel control surfaces.
 
 Testing:
-- Automated: approval-store, command parser, app-route, and gateway-service unit tests for pending approval visibility, token/yes-no resolution, web-search approvals, and file-write policy enforcement.
-- Manual: run `/policy`, `/approval pending`, `/web ...`, `/write ...`, and approval API endpoints with different `ALFRED_*` env combinations and verify cross-channel approval/workspace behavior.
+- Automated: approval-store, command parser, app-route, and gateway-service unit tests for pending approval visibility, token/yes-no resolution, web-search approvals, file-write policy enforcement, and file-send queueing.
+- Manual: run `/policy`, `/approval pending`, `/web ...`, `/write ...`, `/calendar ...`, `/file send ...`, and approval API endpoints with different `ALFRED_*` env combinations and verify cross-channel approval/workspace behavior.
 
 ## 11) Daily Memory Compaction
 

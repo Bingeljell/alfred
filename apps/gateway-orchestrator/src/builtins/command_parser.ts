@@ -1,6 +1,9 @@
 export type ParsedCommand =
   | { kind: "remind_add"; remindAt: string; text: string }
   | { kind: "remind_list" }
+  | { kind: "calendar_add"; startsAt: string; title: string }
+  | { kind: "calendar_list" }
+  | { kind: "calendar_cancel"; id: string }
   | { kind: "note_add"; text: string }
   | { kind: "note_list" }
   | { kind: "task_add"; text: string }
@@ -24,6 +27,7 @@ export type ParsedCommand =
     }
   | { kind: "supervisor_status"; id: string }
   | { kind: "file_write"; relativePath: string; text: string }
+  | { kind: "file_send"; relativePath: string; caption?: string }
   | { kind: "policy_status" }
   | { kind: "approval_pending" }
   | { kind: "side_effect_send"; text: string }
@@ -48,6 +52,28 @@ export function parseCommand(text: string): ParsedCommand | null {
       if (note) {
         return { kind: "remind_add", remindAt, text: note };
       }
+    }
+  }
+
+  if (value.toLowerCase() === "/calendar list") {
+    return { kind: "calendar_list" };
+  }
+
+  if (value.toLowerCase().startsWith("/calendar add ")) {
+    const parts = value.split(" ");
+    if (parts.length >= 4) {
+      const startsAt = parts[2];
+      const title = parts.slice(3).join(" ").trim();
+      if (title) {
+        return { kind: "calendar_add", startsAt, title };
+      }
+    }
+  }
+
+  if (value.toLowerCase().startsWith("/calendar cancel ")) {
+    const id = value.slice("/calendar cancel ".length).trim();
+    if (id) {
+      return { kind: "calendar_cancel", id };
     }
   }
 
@@ -220,6 +246,32 @@ export function parseCommand(text: string): ParsedCommand | null {
       if (relativePath && text) {
         return { kind: "file_write", relativePath, text };
       }
+    }
+  }
+
+  if (value.toLowerCase().startsWith("/file write ")) {
+    const payload = value.slice("/file write ".length).trim();
+    const firstSpace = payload.indexOf(" ");
+    if (firstSpace > 0) {
+      const relativePath = payload.slice(0, firstSpace).trim();
+      const text = payload.slice(firstSpace + 1).trim();
+      if (relativePath && text) {
+        return { kind: "file_write", relativePath, text };
+      }
+    }
+  }
+
+  if (value.toLowerCase().startsWith("/file send ")) {
+    const payload = value.slice("/file send ".length).trim();
+    const firstSpace = payload.indexOf(" ");
+    if (firstSpace > 0) {
+      const relativePath = payload.slice(0, firstSpace).trim();
+      const caption = payload.slice(firstSpace + 1).trim();
+      if (relativePath) {
+        return { kind: "file_send", relativePath, caption: caption || undefined };
+      }
+    } else if (payload) {
+      return { kind: "file_send", relativePath: payload };
     }
   }
 

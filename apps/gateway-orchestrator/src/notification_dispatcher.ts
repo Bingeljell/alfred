@@ -46,23 +46,51 @@ export function startNotificationDispatcher(options: {
 
       for (const message of pending) {
         try {
-          await adapter.sendText({
-            sessionId: message.sessionId,
-            text: message.text,
-            jobId: message.jobId,
-            status: message.status
-          });
+          if (message.kind === "file") {
+            if (adapter.sendFile) {
+              await adapter.sendFile({
+                sessionId: message.sessionId,
+                filePath: String(message.filePath ?? ""),
+                fileName: message.fileName,
+                mimeType: message.mimeType,
+                caption: message.caption
+              });
+            } else {
+              const fallbackText =
+                message.text ??
+                message.caption ??
+                `File delivery is not supported by adapter '${adapter.name}' for ${message.fileName ?? "attachment"}.`;
+              await adapter.sendText({
+                sessionId: message.sessionId,
+                text: fallbackText,
+                jobId: message.jobId,
+                status: message.status
+              });
+            }
+          } else {
+            await adapter.sendText({
+              sessionId: message.sessionId,
+              text: String(message.text ?? ""),
+              jobId: message.jobId,
+              status: message.status
+            });
+          }
           await store.markDelivered(message.id);
           if (conversationStore) {
             try {
-              await conversationStore.add(message.sessionId, "outbound", message.text, {
+              const transcriptText =
+                message.kind === "file"
+                  ? `[attachment] ${message.fileName ?? "file"}${message.caption ? `\n${message.caption}` : ""}`
+                  : String(message.text ?? "");
+              await conversationStore.add(message.sessionId, "outbound", transcriptText, {
                 source: "worker",
                 channel: adapter.name === "baileys" ? "baileys" : "internal",
                 kind: message.status ? "job" : "chat",
                 metadata: {
                   notificationId: message.id,
                   jobId: message.jobId,
-                  status: message.status ?? "unknown"
+                  status: message.status ?? "unknown",
+                  type: message.kind ?? "text"
                 }
               });
             } catch {
@@ -78,7 +106,7 @@ export function startNotificationDispatcher(options: {
                   class: status === "succeeded" ? "fact" : "todo",
                   source: "worker_notification",
                   summary: `Job ${message.jobId ?? "unknown"} ${status}`,
-                  details: message.text,
+                  details: String(message.text ?? message.caption ?? ""),
                   dedupeKey: `worker_notification:${message.jobId ?? message.id}:${status}`
                 });
               } catch {
