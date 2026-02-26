@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-26: Added explicit Baileys `stream:error` restart handling for code `515` so gateway now force-recycles socket and reconnects even when Baileys does not emit `connection:"close"`; also expanded disconnect-code parsing (`error.data.attrs.code`) and locked behavior with unit coverage.
 - 2026-02-26: Added Baileys interrupted-pairing recovery in runtime startup: when auth creds are partially persisted (`registered=false` but `me/account` present), gateway now backs up stale `creds.json` and forces a clean relink path so WhatsApp does not remain stuck in `connecting` with repeated 428/1006 loop errors and no QR refresh.
 - 2026-02-26: Split web UI into dedicated surfaces: `/ui` dashboard for connection/binding controls, `/ui/transcripts` for cross-source transcript viewing, and `/ui/console` for operational stream/testing; console log rendering now caps in-browser history to the latest 500 entries to avoid unbounded growth.
 - 2026-02-26: Hardened approval + long-run UX after WhatsApp transcript review: `yes/no` approvals now resolve before planner routing (no accidental clarify loop), balanced mode now requires a single file-write approval for `web_to_file` (send step auto-continues), `web_to_file` uses `auto` provider routing, and RunSpec failures now mark worker jobs as failed instead of succeeded.

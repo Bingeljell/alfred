@@ -119,12 +119,39 @@ function safeDisconnectCode(payload: unknown): number | null {
   }
 
   const output = "output" in error ? error.output : null;
-  if (!output || typeof output !== "object") {
-    return null;
+  if (output && typeof output === "object") {
+    const statusCode = "statusCode" in output ? output.statusCode : null;
+    if (typeof statusCode === "number") {
+      return statusCode;
+    }
+
+    const outputPayload = "payload" in output ? output.payload : null;
+    if (outputPayload && typeof outputPayload === "object") {
+      const payloadStatusCode = "statusCode" in outputPayload ? outputPayload.statusCode : null;
+      if (typeof payloadStatusCode === "number") {
+        return payloadStatusCode;
+      }
+    }
   }
 
-  const statusCode = "statusCode" in output ? output.statusCode : null;
-  return typeof statusCode === "number" ? statusCode : null;
+  const data = "data" in error ? error.data : null;
+  if (data && typeof data === "object") {
+    const attrs = "attrs" in data ? data.attrs : null;
+    if (attrs && typeof attrs === "object") {
+      const code = "code" in attrs ? attrs.code : null;
+      if (typeof code === "number" && Number.isFinite(code)) {
+        return Math.trunc(code);
+      }
+      if (typeof code === "string") {
+        const parsed = Number(code);
+        if (Number.isFinite(parsed)) {
+          return Math.trunc(parsed);
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 function safeDisconnectReason(payload: unknown): string | null {
@@ -456,6 +483,9 @@ export class BaileysRuntime implements BaileysTransport {
     const update = payload as Record<string, unknown>;
     const connection = typeof update.connection === "string" ? update.connection : null;
     const qr = typeof update.qr === "string" ? update.qr : null;
+    const code = safeDisconnectCode(update);
+    const reason = safeDisconnectReason(update);
+    const restartRequired = code === 515 || (typeof reason === "string" && reason.toLowerCase().includes("restart required"));
 
     if (qr) {
       const nextQrGenerationCount = this.statusValue.qrGenerationCount + 1;
@@ -505,12 +535,50 @@ export class BaileysRuntime implements BaileysTransport {
       return;
     }
 
+    if (restartRequired) {
+      this.updateStatus({
+        state: this.allowReconnect ? "connecting" : "disconnected",
+        connected: false,
+        qr: null,
+        qrUpdatedAt: null,
+        qrLocked: false,
+        meId: null,
+        lastDisconnectCode: code,
+        lastDisconnectReason: reason,
+        inboundSyncState: "bootstrapping",
+        inboundLiveAt: null
+      });
+      this.liveSinceUnixSec = null;
+      this.seenMessageKeys.clear();
+
+      const socket = this.socket;
+      this.socket = null;
+      if (socket?.end) {
+        socket.end();
+      }
+
+      if (!this.allowReconnect) {
+        this.updateStatus({ state: "disconnected" });
+        return;
+      }
+
+      this.clearReconnectTimer();
+      this.reconnectTimer = setTimeout(() => {
+        void this.connect().catch((error) => {
+          this.updateStatus({
+            state: "error",
+            connected: false,
+            lastError: error instanceof Error ? error.message : String(error)
+          });
+        });
+      }, Math.min(this.reconnectDelayMs, 1000));
+      return;
+    }
+
     if (connection !== "close") {
       return;
     }
 
-    const code = safeDisconnectCode(update);
-    const reason = safeDisconnectReason(update);
     this.updateStatus({
       state: this.allowReconnect ? "connecting" : "disconnected",
       connected: false,

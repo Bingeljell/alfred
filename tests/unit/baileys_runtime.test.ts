@@ -393,6 +393,41 @@ describe("BaileysRuntime", () => {
     expect(fake.counters.endCalls).toBeGreaterThan(0);
   });
 
+  it("restarts connection when stream restart is required (code 515) even without close event", async () => {
+    const fake = createFakeSocket();
+    let loadCount = 0;
+    const runtime = new BaileysRuntime({
+      authDir: "/tmp/baileys-auth",
+      reconnectDelayMs: 5,
+      onInbound: async () => undefined,
+      moduleLoader: async () => {
+        loadCount += 1;
+        return {
+          default: () => fake.socket,
+          fetchLatestBaileysVersion: async () => ({ version: [1, 0, 0] as [number, number, number] }),
+          useMultiFileAuthState: async () => ({ state: {}, saveCreds: async () => undefined })
+        };
+      }
+    });
+
+    await runtime.connect();
+    fake.emit("connection.update", {
+      lastDisconnect: {
+        error: {
+          message: "Stream Errored (restart required)",
+          data: { attrs: { code: "515" } }
+        }
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const status = runtime.status() as { state: string; lastDisconnectCode: number | null };
+    expect(fake.counters.endCalls).toBeGreaterThan(0);
+    expect(loadCount).toBeGreaterThanOrEqual(2);
+    expect(status.state).toBe("connecting");
+    expect(status.lastDisconnectCode).toBe(515);
+  });
+
   it("accepts @lid inbound sender ids", async () => {
     const fake = createFakeSocket();
     const received: string[] = [];
