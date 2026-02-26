@@ -41,6 +41,13 @@ type MemoryReference = {
   class: MemoryCheckpointClass;
 };
 
+type InboundHandleResult = {
+  accepted: boolean;
+  mode: "chat" | "async-job";
+  response?: string;
+  jobId?: string;
+};
+
 type CapabilityPolicy = {
   workspaceDir: string;
   approvalMode: "strict" | "balanced" | "relaxed";
@@ -204,12 +211,7 @@ export class GatewayService {
     };
   }
 
-  async handleInbound(payload: unknown): Promise<{
-    accepted: boolean;
-    mode: "chat" | "async-job";
-    response?: string;
-    jobId?: string;
-  }> {
+  async handleInbound(payload: unknown): Promise<InboundHandleResult> {
     const normalized = runNormalizePhase(payload);
     const { inbound, provider, source, channel } = normalized;
     const session = await runSessionPhase({
@@ -247,45 +249,18 @@ export class GatewayService {
       authPreference
     });
 
-    if (runStart && !runStart.acquired) {
-      await markPhase("dispatch", "Session is currently busy", {
-        activeRunId: runStart.activeRunId
-      });
-      if (queueMode !== "steer" && inbound.text?.trim()) {
-        const followupJob = await this.store.createJob({
-          type: "chat_turn",
-          payload: {
-            taskType: "chat_turn",
-            text: inbound.text.trim(),
-            sessionId: inbound.sessionId,
-            authSessionId,
-            authPreference,
-            queuedFromRunId: runStart.activeRunId
-          },
-          priority: queueMode === "followup" ? 4 : 6
-        });
-        await markRunNote("Collected follow-up while session busy", {
-          followupJobId: followupJob.id,
-          queueMode
-        });
-        if (runId && this.runLedger) {
-          await this.runLedger.completeRun(runId, "completed", `queued_followup:${followupJob.id}`);
-        }
-        return {
-          accepted: true,
-          mode: "async-job",
-          response: `Session is currently busy with run ${String(runStart.activeRunId ?? "unknown")}. Collected this as follow-up job ${followupJob.id}.`,
-          jobId: followupJob.id
-        };
-      }
-      if (runId && this.runLedger) {
-        await this.runLedger.completeRun(runId, "cancelled", `session_busy:${String(runStart.activeRunId ?? "unknown")}`);
-      }
-      return {
-        accepted: true,
-        mode: "chat",
-        response: `Session is busy with run ${String(runStart.activeRunId ?? "unknown")}. Please retry shortly.`
-      };
+    const busySessionResponse = await this.handleBusySession({
+      runStart,
+      queueMode,
+      inbound,
+      authSessionId,
+      authPreference,
+      runId,
+      markPhase,
+      markRunNote
+    });
+    if (busySessionResponse) {
+      return busySessionResponse;
     }
 
     await this.recordConversation(inbound.sessionId, "inbound", inbound.text ?? "", {
@@ -305,32 +280,12 @@ export class GatewayService {
       await markPhase("directives", "Resolving directives and command surface");
 
       if (inbound.requestJob) {
-        await markPhase("route", "Inbound requested async job");
-        const job = await this.store.createJob({
-          type: "stub_task",
-          payload: {
-            text: inbound.text,
-            sessionId: inbound.sessionId,
-            ...inbound.metadata
-          },
-          priority: 5
+        return this.handleExplicitJobRequest({
+          inbound,
+          runId,
+          markPhase,
+          markRunNote
         });
-
-        await this.queueJobNotification(inbound.sessionId, job.id, "queued", `Job ${job.id} is queued`);
-        await markRunNote("Async job queued from inbound request", { jobId: job.id });
-        await markPhase("persist", "Persisting async job acknowledgement", { jobId: job.id });
-        await this.recordConversation(inbound.sessionId, "outbound", `Job ${job.id} queued`, {
-          source: "gateway",
-          channel: "internal",
-          kind: "job",
-          metadata: { jobId: job.id, status: "queued", runId }
-        });
-
-        return {
-          accepted: true,
-          mode: "async-job",
-          jobId: job.id
-        };
       }
 
       if (inbound.text) {
@@ -777,6 +732,105 @@ export class GatewayService {
     }
 
     return { jobId: job.id, status: job.status };
+  }
+
+  private async handleBusySession(input: {
+    runStart?: { acquired: boolean; activeRunId?: string };
+    queueMode: RunQueueMode;
+    inbound: { sessionId: string; text?: string };
+    authSessionId: string;
+    authPreference: LlmAuthPreference;
+    runId?: string;
+    markPhase: (
+      phase: "normalize" | "session" | "directives" | "plan" | "policy" | "route" | "persist" | "dispatch",
+      message?: string,
+      details?: Record<string, unknown>
+    ) => Promise<void>;
+    markRunNote: (message: string, details?: Record<string, unknown>) => Promise<void>;
+  }): Promise<InboundHandleResult | null> {
+    const { runStart } = input;
+    if (!runStart || runStart.acquired) {
+      return null;
+    }
+
+    await input.markPhase("dispatch", "Session is currently busy", {
+      activeRunId: runStart.activeRunId
+    });
+
+    if (input.queueMode !== "steer" && input.inbound.text?.trim()) {
+      const followupJob = await this.store.createJob({
+        type: "chat_turn",
+        payload: {
+          taskType: "chat_turn",
+          text: input.inbound.text.trim(),
+          sessionId: input.inbound.sessionId,
+          authSessionId: input.authSessionId,
+          authPreference: input.authPreference,
+          queuedFromRunId: runStart.activeRunId
+        },
+        priority: input.queueMode === "followup" ? 4 : 6
+      });
+      await input.markRunNote("Collected follow-up while session busy", {
+        followupJobId: followupJob.id,
+        queueMode: input.queueMode
+      });
+      if (input.runId && this.runLedger) {
+        await this.runLedger.completeRun(input.runId, "completed", `queued_followup:${followupJob.id}`);
+      }
+      return {
+        accepted: true,
+        mode: "async-job",
+        response: `Session is currently busy with run ${String(runStart.activeRunId ?? "unknown")}. Collected this as follow-up job ${followupJob.id}.`,
+        jobId: followupJob.id
+      };
+    }
+
+    if (input.runId && this.runLedger) {
+      await this.runLedger.completeRun(input.runId, "cancelled", `session_busy:${String(runStart.activeRunId ?? "unknown")}`);
+    }
+    return {
+      accepted: true,
+      mode: "chat",
+      response: `Session is busy with run ${String(runStart.activeRunId ?? "unknown")}. Please retry shortly.`
+    };
+  }
+
+  private async handleExplicitJobRequest(input: {
+    inbound: { sessionId: string; text?: string; metadata?: Record<string, unknown> };
+    runId?: string;
+    markPhase: (
+      phase: "normalize" | "session" | "directives" | "plan" | "policy" | "route" | "persist" | "dispatch",
+      message?: string,
+      details?: Record<string, unknown>
+    ) => Promise<void>;
+    markRunNote: (message: string, details?: Record<string, unknown>) => Promise<void>;
+  }): Promise<InboundHandleResult> {
+    await input.markPhase("route", "Inbound requested async job");
+    const job = await this.store.createJob({
+      type: "stub_task",
+      payload: {
+        text: input.inbound.text,
+        sessionId: input.inbound.sessionId,
+        ...input.inbound.metadata
+      },
+      priority: 5
+    });
+
+    await this.queueJobNotification(input.inbound.sessionId, job.id, "queued", `Job ${job.id} is queued`);
+    await input.markRunNote("Async job queued from inbound request", { jobId: job.id });
+    await input.markPhase("persist", "Persisting async job acknowledgement", { jobId: job.id });
+    await this.recordConversation(input.inbound.sessionId, "outbound", `Job ${job.id} queued`, {
+      source: "gateway",
+      channel: "internal",
+      kind: "job",
+      metadata: { jobId: job.id, status: "queued", runId: input.runId }
+    });
+
+    return {
+      accepted: true,
+      mode: "async-job",
+      jobId: job.id
+    };
   }
 
   async getJob(jobId: string) {
