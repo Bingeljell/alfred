@@ -41,6 +41,22 @@ export function renderWebConsoleHtml(): string {
         color: var(--muted);
         font-size: 13px;
       }
+      .nav {
+        margin-top: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .nav a {
+        text-decoration: none;
+        border: 1px solid var(--line);
+        background: #fff;
+        color: #1f2937;
+        border-radius: 8px;
+        padding: 6px 10px;
+        font-size: 12px;
+        font-weight: 600;
+      }
       .layout {
         display: grid;
         grid-template-columns: 1.2fr 0.8fr;
@@ -334,6 +350,11 @@ export function renderWebConsoleHtml(): string {
     <header>
       <h1>Alfred Test Console</h1>
       <div class="subtitle">Two test paths: web console now, WhatsApp/Baileys simulation now, real WhatsApp later.</div>
+      <nav class="nav">
+        <a href="/ui">Status</a>
+        <a href="/ui/transcripts">Transcripts</a>
+        <a href="/ui/console">Console</a>
+      </nav>
     </header>
 
     <main class="layout">
@@ -664,6 +685,8 @@ export function renderWebConsoleHtml(): string {
       const logSourceEvents = $("logSourceEvents");
       const logInteractionStream = $("logInteractionStream");
       const includeNoisyStream = $("includeNoisyStream");
+      const MAX_LOG_ENTRIES = 500;
+      const logEntries = [];
       const sourceGatewayCard = $("sourceGatewayCard");
       const sourceGatewayValue = $("sourceGatewayValue");
       const sourceGatewayMeta = $("sourceGatewayMeta");
@@ -721,12 +744,20 @@ export function renderWebConsoleHtml(): string {
       }
 
       function pushLog(label, payload) {
-        const line = "[" + stamp() + "] " + label + "\\n" + (typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)) + "\\n";
+        const line = "[" + stamp() + "] " + label + "\\n" + (typeof payload === "string" ? payload : JSON.stringify(payload, null, 2));
+        logEntries.push(line);
+        if (logEntries.length > MAX_LOG_ENTRIES) {
+          logEntries.splice(0, logEntries.length - MAX_LOG_ENTRIES);
+        }
+        renderLog();
+      }
+
+      function renderLog() {
+        const ordered = logNewestFirst.checked ? [...logEntries].reverse() : [...logEntries];
+        log.textContent = ordered.join("\\n\\n");
         if (logNewestFirst.checked) {
-          log.textContent = line + "\\n" + log.textContent;
           log.scrollTop = 0;
         } else {
-          log.textContent += line + "\\n";
           log.scrollTop = log.scrollHeight;
         }
       }
@@ -2115,7 +2146,8 @@ export function renderWebConsoleHtml(): string {
 
       $("logClear").addEventListener("click", async () => {
         await runButtonAction($("logClear"), "CLEAR_LOG", async () => {
-          log.textContent = "";
+          logEntries.length = 0;
+          renderLog();
           return { ok: true, status: 200, data: { cleared: true } };
         });
         setStatus("Console cleared.", "success");

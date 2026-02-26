@@ -10,6 +10,8 @@ import { NoteStore } from "./builtins/note_store";
 import { TaskStore } from "./builtins/task_store";
 import { ApprovalStore } from "./builtins/approval_store";
 import { renderWebConsoleHtml } from "./ui/render_web_console";
+import { renderUiHomeHtml } from "./ui/render_ui_home";
+import { renderUiTranscriptsHtml } from "./ui/render_ui_transcripts";
 import { OAuthService } from "./auth/oauth_service";
 import { CodexAuthService, type CodexLoginStartMode } from "./codex/auth_service";
 import { ConversationStore } from "./builtins/conversation_store";
@@ -315,6 +317,14 @@ export function createGatewayApp(
   });
 
   app.get("/ui", (_req, res) => {
+    res.status(200).type("html").send(renderUiHomeHtml());
+  });
+
+  app.get("/ui/transcripts", (_req, res) => {
+    res.status(200).type("html").send(renderUiTranscriptsHtml());
+  });
+
+  app.get("/ui/console", (_req, res) => {
     res.status(200).type("html").send(renderWebConsoleHtml());
   });
 

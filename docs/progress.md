@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-26: Split web UI into dedicated surfaces: `/ui` dashboard for connection/binding controls, `/ui/transcripts` for cross-source transcript viewing, and `/ui/console` for operational stream/testing; console log rendering now caps in-browser history to the latest 500 entries to avoid unbounded growth.
 - 2026-02-26: Hardened approval + long-run UX after WhatsApp transcript review: `yes/no` approvals now resolve before planner routing (no accidental clarify loop), balanced mode now requires a single file-write approval for `web_to_file` (send step auto-continues), `web_to_file` uses `auto` provider routing, and RunSpec failures now mark worker jobs as failed instead of succeeded.
 - 2026-02-26: Completed RunSpec v1 baseline for long-task orchestration: added schema/contracts, durable run-spec store, generic worker step executor, migrated `web_to_file` to RunSpec steps, added per-step approval checkpoint sequencing, exposed RunSpec details on `/v1/runs/:runId`, and added `/ui` run timeline controls.
 - 2026-02-26: Added calendar command flow (`/calendar add|list|cancel`) backed by reminder state, plus workspace-scoped file attachment delivery (`/file send`) over WhatsApp with approval support and `.md/.txt/.doc` guardrails.
