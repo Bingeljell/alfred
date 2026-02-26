@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-26: Updated architecture docs to explicitly lock conditional hybrid planning (worker can propose, gateway decides/locks execution) and documented WASM sandbox as a deferred post-refactor implementation track.
 - 2026-02-26: Refactored worker runtime into execution modules (`createWorkerProcessor`, `createWorkerStatusHandler`) and decoupled RunSpec executor to service interfaces, preserving existing job semantics while clarifying worker lifecycle boundaries.
 - 2026-02-26: Refactored gateway inbound entry into explicit normalize/session orchestration phases (`runNormalizePhase`, `runSessionPhase`) so run-ledger start/marker logic is modular and reusable while downstream command/planner routing behavior remains unchanged.
 - 2026-02-26: Added hybrid planning contract schemas (`PlanProposal`, `PlanDecision`, `RunSpecLock`) to lock gateway-authoritative run-spec handoff semantics between orchestrator and worker, with dedicated unit tests.

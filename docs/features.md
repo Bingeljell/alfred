@@ -278,6 +278,7 @@ Testing:
 - Skill execution network is deny-by-default with allowlist exceptions.
 - Cancellation and retries are auditable.
 - OAuth-first auth with API key fallback if entitlement is unavailable.
+- WASM sandbox execution is intentionally deferred until post-refactor; current phase only locks interface/policy direction.
 
 ## Deferred to v2/v3
 

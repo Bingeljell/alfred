@@ -12,6 +12,7 @@ Build a WhatsApp-first personal agent that runs on a single self-hosted machine 
 - Orchestration model:
   - gateway is the control plane for every turn (session resolution, planning, policy, routing, persistence, delivery)
   - worker is the execution plane for long/background tasks
+  - hybrid planning handshake: worker may propose plans, but gateway remains authoritative and locks execution via run specs
   - do not collapse these roles in v1; evolve toward multi-worker/subagent fan-out under gateway supervision
 - Execution lanes:
   - chat lane: per-user serialized turns
@@ -37,6 +38,9 @@ Build a WhatsApp-first personal agent that runs on a single self-hosted machine 
 - LLM auth:
   - OAuth-first
   - fallback prompt for API key if entitlement is unavailable
+- Sandbox roadmap:
+  - WASM executor is deferred for now
+  - define contract/policy first, then implement after gateway/worker refactor stabilizes
 - Artifacts/logs:
   - local disk artifacts (7-day retention)
   - logs (14-day retention)
