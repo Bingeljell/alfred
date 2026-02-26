@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-26: Refactored UI shell by extracting shared header/navigation rendering into a reusable helper used by `/ui`, `/ui/transcripts`, and `/ui/console`, reducing cross-page duplication while preserving behavior.
 - 2026-02-26: Extracted planner-primary routing (`clarify`, `status_query`, `web_research`) into a dedicated helper in gateway service, improving phase separation between planning decisions and downstream route/persist behavior.
 - 2026-02-26: Extracted pre-planner directive surface from gateway inbound flow into a dedicated helper covering paging, command execution, implicit approvals, and progress-query responses, keeping planner routing logic cleaner without behavior changes.
 - 2026-02-26: Reduced gateway orchestration entrypoint complexity by extracting session-busy and explicit async-job request branches from `handleInbound` into dedicated helpers while preserving queueing and acknowledgement behavior.

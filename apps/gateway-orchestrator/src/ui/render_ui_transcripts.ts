@@ -1,3 +1,5 @@
+import { renderUiHeader } from "./shared_shell";
+
 export function renderUiTranscriptsHtml(): string {
   return `<!doctype html>
 <html lang="en">
@@ -98,15 +100,11 @@ export function renderUiTranscriptsHtml(): string {
     </style>
   </head>
   <body>
-    <header>
-      <h1>Alfred Transcripts</h1>
-      <div class="subtitle">Cross-source chat/command/job transcript viewer.</div>
-      <nav class="nav">
-        <a href="/ui">Status</a>
-        <a href="/ui/transcripts">Transcripts</a>
-        <a href="/ui/console">Console</a>
-      </nav>
-    </header>
+    ${renderUiHeader({
+      title: "Alfred Transcripts",
+      subtitle: "Cross-source chat/command/job transcript viewer.",
+      current: "transcripts"
+    })}
 
     <section class="panel">
       <div class="row">
@@ -232,4 +230,3 @@ export function renderUiTranscriptsHtml(): string {
   </body>
 </html>`;
 }
-

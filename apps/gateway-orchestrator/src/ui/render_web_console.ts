@@ -1,3 +1,5 @@
+import { renderUiHeader } from "./shared_shell";
+
 export function renderWebConsoleHtml(): string {
   return `<!doctype html>
 <html lang="en">
@@ -347,15 +349,11 @@ export function renderWebConsoleHtml(): string {
     </style>
   </head>
   <body>
-    <header>
-      <h1>Alfred Test Console</h1>
-      <div class="subtitle">Two test paths: web console now, WhatsApp/Baileys simulation now, real WhatsApp later.</div>
-      <nav class="nav">
-        <a href="/ui">Status</a>
-        <a href="/ui/transcripts">Transcripts</a>
-        <a href="/ui/console">Console</a>
-      </nav>
-    </header>
+    ${renderUiHeader({
+      title: "Alfred Test Console",
+      subtitle: "Two test paths: web console now, WhatsApp/Baileys simulation now, real WhatsApp later.",
+      current: "console"
+    })}
 
     <main class="layout">
       <section class="panel">

@@ -1,3 +1,5 @@
+import { renderUiHeader } from "./shared_shell";
+
 export function renderUiHomeHtml(): string {
   return `<!doctype html>
 <html lang="en">
@@ -123,15 +125,11 @@ export function renderUiHomeHtml(): string {
     </style>
   </head>
   <body>
-    <header>
-      <h1>Alfred Dashboard</h1>
-      <div class="subtitle">Connection status and identity bindings.</div>
-      <nav class="nav">
-        <a href="/ui">Status</a>
-        <a href="/ui/transcripts">Transcripts</a>
-        <a href="/ui/console">Console</a>
-      </nav>
-    </header>
+    ${renderUiHeader({
+      title: "Alfred Dashboard",
+      subtitle: "Connection status and identity bindings.",
+      current: "status"
+    })}
 
     <main class="layout">
       <section class="panel">
@@ -359,4 +357,3 @@ export function renderUiHomeHtml(): string {
   </body>
 </html>`;
 }
-
