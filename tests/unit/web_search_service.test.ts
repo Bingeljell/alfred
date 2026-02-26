@@ -222,4 +222,30 @@ describe("WebSearchService", () => {
     expect(llm.generateText).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("prioritizes openai for auto provider routing even when default is searxng", async () => {
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "OpenAI-first auto result"
+      })
+    };
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const service = new WebSearchService({
+      defaultProvider: "searxng",
+      llmService: llm
+    });
+
+    const result = await service.search("agent orchestration", {
+      provider: "auto",
+      authSessionId: "owner@s.whatsapp.net",
+      authPreference: "auto"
+    });
+
+    expect(result?.provider).toBe("openai");
+    expect(result?.text).toContain("OpenAI-first auto result");
+    expect(llm.generateText).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(0);
+  });
 });

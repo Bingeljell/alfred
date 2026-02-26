@@ -162,6 +162,15 @@ export class WebSearchService {
     if (requested && requested !== "auto") {
       return [requested];
     }
+    if (requested === "auto") {
+      const ordered: Array<"searxng" | "openai" | "brave" | "perplexity" | "brightdata"> = ["openai"];
+      for (const provider of all) {
+        if (!ordered.includes(provider)) {
+          ordered.push(provider);
+        }
+      }
+      return ordered;
+    }
 
     if (this.defaultProvider && this.defaultProvider !== "auto") {
       return [this.defaultProvider, ...all.filter((provider) => provider !== this.defaultProvider)];

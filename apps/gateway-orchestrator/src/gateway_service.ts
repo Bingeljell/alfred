@@ -377,6 +377,76 @@ export class GatewayService {
           };
         }
 
+        const directiveCommand = parseCommand(inbound.text);
+        if (directiveCommand) {
+          await markPhase("route", "Routing directive command execution", { command: directiveCommand.kind });
+          const response = await this.executeCommand(inbound.sessionId, directiveCommand, authSessionId, authPreference);
+          await markPhase("persist", "Persisting directive command response", { command: directiveCommand.kind });
+          await this.recordConversation(inbound.sessionId, "outbound", response, {
+            source: "gateway",
+            channel: "internal",
+            kind: "command",
+            metadata: {
+              authSessionId,
+              runId
+            }
+          });
+          return {
+            accepted: true,
+            mode: "chat",
+            response
+          };
+        }
+
+        const implicitApprovalDecision = this.parseImplicitApprovalDecision(inbound.text);
+        if (implicitApprovalDecision) {
+          const decisionResult = await this.executeImplicitApprovalDecision(
+            inbound.sessionId,
+            implicitApprovalDecision,
+            authSessionId,
+            authPreference
+          );
+          if (decisionResult.handled) {
+            await markPhase("route", "Routing implicit approval decision", { decision: implicitApprovalDecision });
+            await markPhase("persist", "Persisting implicit approval response");
+            await this.recordConversation(inbound.sessionId, "outbound", decisionResult.response, {
+              source: "gateway",
+              channel: "internal",
+              kind: "command",
+              metadata: {
+                authSessionId,
+                runId
+              }
+            });
+            return {
+              accepted: true,
+              mode: "chat",
+              response: decisionResult.response
+            };
+          }
+        }
+
+        const directProgressStatus = await this.answerProgressQuery(inbound.sessionId, inbound.text);
+        if (directProgressStatus) {
+          await markPhase("route", "Routing progress-query directive");
+          await markPhase("persist", "Persisting progress-query response");
+          await this.recordConversation(inbound.sessionId, "outbound", directProgressStatus, {
+            source: "gateway",
+            channel: "internal",
+            kind: "job",
+            metadata: {
+              authSessionId,
+              runId,
+              progressQuery: true
+            }
+          });
+          return {
+            accepted: true,
+            mode: "chat",
+            response: directProgressStatus
+          };
+        }
+
         await markPhase("plan", "Planning intent");
         const activeJob = await this.findLatestActiveJob(inbound.sessionId);
         const plan = await this.intentPlanner?.plan(authSessionId, inbound.text, {
@@ -471,7 +541,7 @@ export class GatewayService {
             const runSpec = this.buildWebToFileRunSpec({
               runSpecRunId,
               query: plan.query.trim(),
-              provider: plan.provider ?? this.capabilityPolicy.webSearchProvider,
+              provider: plan.provider ?? "auto",
               fileFormat: plan.fileFormat ?? "md",
               fileName: plan.fileName
             });
@@ -1384,7 +1454,7 @@ export class GatewayService {
       const runSpec = this.buildWebToFileRunSpec({
         runSpecRunId,
         query: routed.query,
-        provider: routed.provider ?? this.capabilityPolicy.webSearchProvider,
+        provider: routed.provider ?? "auto",
         fileFormat: routed.fileFormat ?? "md"
       });
       const approvalResponse = await this.requestNextRunSpecApprovalIfNeeded({
@@ -1537,7 +1607,7 @@ export class GatewayService {
       const runSpec = this.buildWebToFileRunSpec({
         runSpecRunId,
         query: input.query,
-        provider: input.provider ?? this.capabilityPolicy.webSearchProvider,
+        provider: input.provider ?? "auto",
         fileFormat: input.fileFormat ?? "md",
         fileName: input.fileName
       });
@@ -1619,7 +1689,8 @@ export class GatewayService {
       this.normalizeAttachmentFileName(input.query.toLowerCase().replace(/[^a-z0-9]+/g, "_")) ??
       `research_${new Date().toISOString().slice(0, 10)}`;
     const fileName = this.ensureAttachmentExtension(safeBaseName, input.fileFormat);
-    const requireSideEffectApproval = this.requiresApproval("file_write");
+    const requireWriteApproval = this.requiresApproval("file_write");
+    const requireSendApproval = requireWriteApproval && this.capabilityPolicy.approvalMode === "strict";
     return {
       version: 1,
       id: input.runSpecRunId,
@@ -1656,7 +1727,7 @@ export class GatewayService {
             fileName
           },
           approval: {
-            required: requireSideEffectApproval,
+            required: requireWriteApproval,
             capability: "file_write"
           }
         },
@@ -1668,7 +1739,7 @@ export class GatewayService {
             caption: `Research doc: ${input.query.slice(0, 80)}`
           },
           approval: {
-            required: requireSideEffectApproval,
+            required: requireSendApproval,
             capability: "file_write"
           }
         }
@@ -1809,7 +1880,7 @@ export class GatewayService {
       const job = await this.enqueueLongTaskJob(channelSessionId, {
         taskType: "web_to_file",
         query,
-        provider: provider ?? this.capabilityPolicy.webSearchProvider,
+        provider: provider ?? "auto",
         authSessionId: targetAuthSessionId,
         authPreference: requestedAuthPreference,
         reason: "approved_web_to_file_send",

@@ -132,10 +132,7 @@ async function main(): Promise<void> {
     if (taskType === "run_spec") {
       const runSpec = parseRunSpec(job.payload.runSpec);
       if (!runSpec) {
-        return {
-          summary: "run_spec_invalid_payload",
-          responseText: "RunSpec payload is missing or invalid."
-        };
+        throw new Error("RunSpec payload is missing or invalid.");
       }
       const runId = typeof job.payload.runSpecRunId === "string" ? job.payload.runSpecRunId.trim() : "";
       const approvedStepIds = Array.isArray(job.payload.approvedStepIds)
@@ -154,7 +151,7 @@ async function main(): Promise<void> {
         approvedStepIds
       });
 
-      return executeRunSpec({
+      const runResult = await executeRunSpec({
         runId: effectiveRunId,
         sessionId: sessionId || authSessionId,
         authSessionId: authSessionId || sessionId,
@@ -168,6 +165,10 @@ async function main(): Promise<void> {
         runSpecStore,
         reportProgress: context.reportProgress
       });
+      if (runResult.summary === "run_spec_failed" || runResult.summary === "run_spec_approval_missing") {
+        throw new Error(runResult.responseText || runResult.summary);
+      }
+      return runResult;
     }
 
     if (taskType === "web_to_file") {
@@ -189,7 +190,7 @@ async function main(): Promise<void> {
         approvedStepIds: legacySpec.steps.filter((step) => step.approval?.required !== true).map((step) => step.id)
       });
 
-      return executeRunSpec({
+      const runResult = await executeRunSpec({
         runId: job.id,
         sessionId: sessionId || authSessionId,
         authSessionId: authSessionId || sessionId,
@@ -203,6 +204,10 @@ async function main(): Promise<void> {
         runSpecStore,
         reportProgress: context.reportProgress
       });
+      if (runResult.summary === "run_spec_failed" || runResult.summary === "run_spec_approval_missing") {
+        throw new Error(runResult.responseText || runResult.summary);
+      }
+      return runResult;
     }
 
     if (taskType === "chat_turn") {

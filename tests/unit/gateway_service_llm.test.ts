@@ -475,16 +475,7 @@ describe("GatewayService llm path", () => {
       text: `approve ${firstToken}`,
       requestJob: false
     });
-    expect(firstApproval.response).toContain("Step 'write' approved.");
-    expect(firstApproval.response).toContain("Approval required for step 'Send Attachment'");
-
-    const secondToken = String(firstApproval.response?.split("approve ")[1] ?? "").trim();
-    const secondApproval = await service.handleInbound({
-      sessionId: "owner@s.whatsapp.net",
-      text: `approve ${secondToken}`,
-      requestJob: false
-    });
-    expect(secondApproval.response).toContain("Step 'send' approved. Run queued as job");
+    expect(firstApproval.response).toContain("Step 'write' approved. Run queued as job");
 
     const jobs = await queueStore.listJobs();
     expect(jobs.length).toBe(1);
@@ -493,6 +484,54 @@ describe("GatewayService llm path", () => {
       | { steps?: Array<{ input?: { fileFormat?: string } }> }
       | undefined;
     expect(approvedRunSpec?.steps?.[2]?.input?.fileFormat).toBe("md");
+  });
+
+  it("resolves yes/no approvals before planner clarification", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-implicit-approval-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+    await approvalStore.create("owner@s.whatsapp.net", "send_text", { text: "hello world" });
+
+    const planner = {
+      plan: vi.fn().mockResolvedValue({
+        intent: "clarify",
+        confidence: 0.2,
+        needsWorker: false,
+        question: "Could you confirm what you want me to do next?",
+        reason: "forced_clarify_for_test"
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      planner as never
+    );
+
+    const response = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "yes",
+      requestJob: false
+    });
+    expect(response.response).toContain("Approved action executed: send 'hello world'");
+    expect(planner.plan).not.toHaveBeenCalled();
   });
 
   it("queues planner attachment request directly when approval is not required", async () => {
