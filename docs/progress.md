@@ -21,6 +21,7 @@
 ## Recent Task Updates
 
 - 2026-02-26: Added calendar command flow (`/calendar add|list|cancel`) backed by reminder state, plus workspace-scoped file attachment delivery (`/file send`) over WhatsApp with approval support and `.md/.txt/.doc` guardrails.
+- 2026-02-26: Added planner-driven research-to-file orchestration (`web_to_file`) so a natural-language request can trigger search + document synthesis + workspace write + WhatsApp attachment delivery in one worker run, with approval gating for side effects.
 
 ## Completion Checklist Template
 

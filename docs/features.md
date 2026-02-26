@@ -225,13 +225,15 @@ Description:
 Acceptance criteria:
 - `/web ...` command queues a worker job instead of blocking the chat turn.
 - Research-like long requests are heuristically routed to worker with immediate “queued” acknowledgement.
+- Natural-language “research + send file/doc” requests can be routed as one worker run that writes a document and sends it as a WhatsApp attachment.
 - Worker emits progress events (`progress`, `running`, `succeeded`, `failed`) and gateway surfaces those updates in stream/chat channels.
 - User can ask `status?`/`progress` and receive latest active job state + last progress message.
 - Long results can be delivered in pages using `#next`/`next` via session-scoped paged response state.
+- Attachment routing honors approval policy (file side effects require approval when configured).
 
 Testing:
-- Automated: unit coverage for routed web-search command behavior, progress query handling, `#next` paging, paged store persistence, and worker progress event/reporting.
-- Manual: trigger long research request, confirm immediate queue acknowledgement + progress updates, then use `status?` and `#next` until pages are exhausted.
+- Automated: unit coverage for routed web-search command behavior, planner attachment-routing decisions, progress query handling, `#next` paging, and paged store persistence.
+- Manual: trigger long research request, confirm immediate queue acknowledgement + progress updates, then use `status?` and `#next` until pages are exhausted; validate one-message research-to-file flow sends an attachment on WhatsApp.
 
 ## 13) Planner-first Orchestration + System Prompt Stack
 

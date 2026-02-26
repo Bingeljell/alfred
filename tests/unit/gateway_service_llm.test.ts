@@ -292,6 +292,51 @@ describe("GatewayService llm path", () => {
     expect(status.response).toContain(`Latest job ${job?.id} is queued`);
   });
 
+  it("requests approval for heuristic research-to-file routing when side effects are required", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-heuristic-web-to-file-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        approvalDefault: true,
+        webSearchEnabled: true,
+        fileWriteEnabled: true,
+        fileWriteRequireApproval: true
+      },
+      undefined,
+      undefined,
+      undefined
+    );
+
+    const routed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "research best stable diffusion models and send me a markdown document",
+      requestJob: false
+    });
+
+    expect(routed.mode).toBe("chat");
+    expect(routed.response).toContain("Approval required for research-to-file send");
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(0);
+  });
+
   it("emits a planner trace event with chosen action metadata", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-trace-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);
@@ -356,6 +401,145 @@ describe("GatewayService llm path", () => {
     expect(trace?.metadata?.plannerChosenAction).toBe("enqueue_worker_web_search");
     expect(trace?.metadata?.plannerReason).toBe("unit_test_planner");
     expect(trace?.metadata?.plannerNeedsWorker).toBe(true);
+  });
+
+  it("routes planner attachment requests through approval then queues web_to_file job", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-attachment-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const notificationStore = new OutboundNotificationStore(stateDir);
+    await notificationStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const planner = {
+      plan: vi.fn().mockImplementation(async (_sessionId: string, message: string) => {
+        if (message.toLowerCase().startsWith("approve ") || message.toLowerCase().startsWith("/approve ")) {
+          return {
+            intent: "command",
+            confidence: 1,
+            needsWorker: false,
+            reason: "explicit_command"
+          };
+        }
+        return {
+          intent: "web_research",
+          confidence: 0.91,
+          needsWorker: true,
+          query: "best stable diffusion models",
+          provider: "searxng",
+          sendAttachment: true,
+          fileFormat: "md",
+          fileName: "sd_models_report",
+          reason: "attachment_requested"
+        };
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      notificationStore,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        approvalDefault: true,
+        webSearchEnabled: true,
+        fileWriteEnabled: true,
+        fileWriteRequireApproval: true
+      },
+      undefined,
+      undefined,
+      planner as never
+    );
+
+    const gated = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Please research best stable diffusion models and send me a markdown file",
+      requestJob: false
+    });
+    expect(gated.response).toContain("Approval required for research-to-file send");
+
+    const token = String(gated.response?.split("approve ")[1] ?? "").trim();
+    const approved = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `approve ${token}`,
+      requestJob: false
+    });
+    expect(approved.response).toContain("Approved action executed: web_to_file_send");
+
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(1);
+    expect(jobs[0]?.payload?.taskType).toBe("web_to_file");
+    expect(jobs[0]?.payload?.fileFormat).toBe("md");
+  });
+
+  it("queues planner attachment request directly when approval is not required", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-attachment-direct-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const planner = {
+      plan: vi.fn().mockResolvedValue({
+        intent: "web_research",
+        confidence: 0.88,
+        needsWorker: true,
+        query: "compare note taking apps",
+        provider: "searxng",
+        sendAttachment: true,
+        fileFormat: "txt",
+        reason: "attachment_direct"
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        approvalMode: "relaxed",
+        approvalDefault: false,
+        webSearchEnabled: true,
+        fileWriteEnabled: true,
+        fileWriteRequireApproval: false
+      },
+      undefined,
+      undefined,
+      planner as never
+    );
+
+    const routed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Research note taking apps and send me a txt file",
+      requestJob: false
+    });
+    expect(routed.mode).toBe("async-job");
+    expect(routed.response).toContain("research + document delivery");
+
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(1);
+    expect(jobs[0]?.payload?.taskType).toBe("web_to_file");
+    expect(jobs[0]?.payload?.fileFormat).toBe("txt");
   });
 
   it("serves #next pages from paged response store", async () => {

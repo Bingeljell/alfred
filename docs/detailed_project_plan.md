@@ -196,6 +196,7 @@ Deliverables:
 - Operator feedback hardening: emit in-flight progress notifications for slower command paths (starting with `/web`) so chat channels are not silent during long operations.
 - Long-task routing hardening: route `/web` and research-style long prompts into worker jobs with immediate acknowledgements, worker-side progress events, `status?` responses, and paged `#next` result delivery for large responses.
 - Planner-first routing: run an LLM intent planner for non-command chat turns with structured intent output, confidence-based clarification fallback, and deterministic policy enforcement.
+- Goal-runner path: planner can route a natural-language research-to-deliverable request into a single worker task (`web_to_file`) that executes search, synthesis, workspace write, and WhatsApp attachment delivery.
 - System-prompt stack: load Alfred identity/capability/policy markdown files and inject them into planner context so behavior remains auditable and easy to tune without code changes.
 - Approval-mode policy: support `strict`/`balanced`/`relaxed` capability approval modes with `balanced` as default for early autonomy with bounded risk.
 - Planner trace observability: emit a planner decision trace event (intent/confidence/reason/chosen action) to the unified stream so `/ui` operators can diagnose routing decisions quickly.

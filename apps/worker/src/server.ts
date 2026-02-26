@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { loadConfig, loadDotEnvFile } from "../../gateway-orchestrator/src/config";
 import { FileBackedQueueStore } from "../../gateway-orchestrator/src/local_queue_store";
 import { OutboundNotificationStore } from "../../gateway-orchestrator/src/notification_store";
@@ -150,7 +152,7 @@ async function main(): Promise<void> {
       };
     }
 
-    if (taskType !== "web_search") {
+    if (taskType !== "web_search" && taskType !== "web_to_file") {
       const action = String(job.payload.action ?? job.payload.text ?? job.type);
       return {
         summary: `processed:${action}`,
@@ -219,6 +221,61 @@ async function main(): Promise<void> {
       return {
         summary: "web_search_no_results",
         responseText: `No web search result is available for this query. Reason: ${reason}`
+      };
+    }
+
+    if (taskType === "web_to_file") {
+      const fileFormat = normalizeAttachmentFormat(job.payload.fileFormat) ?? "md";
+      const safeFileName = buildAttachmentFileName(job.payload.fileName, query, fileFormat);
+      const targetDir = path.resolve(config.alfredWorkspaceDir, "notes", "generated");
+      const targetPath = path.resolve(targetDir, safeFileName);
+      if (!(targetPath === targetDir || targetPath.startsWith(`${targetDir}${path.sep}`))) {
+        return {
+          summary: "web_to_file_invalid_path",
+          responseText: "Could not create output file due to invalid path policy."
+        };
+      }
+
+      await context.reportProgress({
+        step: "drafting",
+        message: `Drafting ${fileFormat.toUpperCase()} document...`
+      });
+      const attachmentText = await composeAttachmentText({
+        llmService,
+        authSessionId: authSessionId || sessionId,
+        authPreference,
+        query,
+        provider: resultProvider,
+        sourceText: resultText,
+        fileFormat
+      });
+      await fs.mkdir(targetDir, { recursive: true });
+      await fs.writeFile(targetPath, attachmentText.endsWith("\n") ? attachmentText : `${attachmentText}\n`, "utf8");
+
+      if (sessionId) {
+        await context.reportProgress({
+          step: "dispatch",
+          message: "Sending document attachment..."
+        });
+        await notificationStore.enqueue({
+          kind: "file",
+          sessionId,
+          filePath: targetPath,
+          fileName: safeFileName,
+          mimeType: attachmentMimeType(fileFormat),
+          caption: `Research doc: ${query.slice(0, 80)}`
+        });
+      }
+
+      const relativePath = path.relative(config.alfredWorkspaceDir, targetPath).replace(/\\/g, "/");
+      return {
+        summary: `web_to_file_${resultProvider}`,
+        responseText: `Research complete via ${resultProvider}. Wrote workspace/${relativePath} and sent it as an attachment.`,
+        provider: resultProvider,
+        retriesUsed: Math.max(0, attempt - 1),
+        tokenBudget,
+        filePath: relativePath,
+        fileFormat
       };
     }
 
@@ -373,6 +430,103 @@ function normalizeWebSearchProvider(
     return value;
   }
   return null;
+}
+
+function normalizeAttachmentFormat(raw: unknown): "md" | "txt" | "doc" | null {
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const value = raw.trim().toLowerCase();
+  if (value === "md" || value === "txt" || value === "doc") {
+    return value;
+  }
+  return null;
+}
+
+function buildAttachmentFileName(raw: unknown, query: string, fileFormat: "md" | "txt" | "doc"): string {
+  if (typeof raw === "string" && raw.trim()) {
+    const sanitized = raw
+      .trim()
+      .replace(/[^a-zA-Z0-9._-]+/g, "_")
+      .replace(/_+/g, "_")
+      .replace(/^_+|_+$/g, "")
+      .slice(0, 80);
+    if (sanitized) {
+      return ensureExtension(sanitized, fileFormat);
+    }
+  }
+
+  const slug = query
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+  const day = new Date().toISOString().slice(0, 10);
+  const base = slug || "research";
+  return `${base}_${day}.${fileFormat}`;
+}
+
+function ensureExtension(fileName: string, ext: "md" | "txt" | "doc"): string {
+  const lower = fileName.toLowerCase();
+  if (lower.endsWith(`.${ext}`)) {
+    return fileName;
+  }
+  return `${fileName}.${ext}`;
+}
+
+function attachmentMimeType(format: "md" | "txt" | "doc"): string {
+  if (format === "md") {
+    return "text/markdown";
+  }
+  if (format === "txt") {
+    return "text/plain";
+  }
+  return "application/msword";
+}
+
+async function composeAttachmentText(input: {
+  llmService: HybridLlmService;
+  authSessionId: string;
+  authPreference: "auto" | "oauth" | "api_key";
+  query: string;
+  provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata";
+  sourceText: string;
+  fileFormat: "md" | "txt" | "doc";
+}): Promise<string> {
+  const formatLabel = input.fileFormat === "md" ? "markdown" : input.fileFormat === "txt" ? "plain text" : "word-friendly plain text";
+  const prompt = [
+    "You are formatting research notes for delivery as a file attachment.",
+    `Output format: ${formatLabel}.`,
+    "Keep it concise and practical.",
+    "Include sections: Summary, Top options, Comparison, Sources.",
+    "Do not invent sources; only use what is provided.",
+    "",
+    `Query: ${input.query}`,
+    `Provider: ${input.provider}`,
+    "",
+    "Search results:",
+    input.sourceText
+  ].join("\n");
+
+  try {
+    const generated = await input.llmService.generateText(input.authSessionId, prompt, {
+      authPreference: input.authPreference
+    });
+    const text = generated?.text?.trim();
+    if (text) {
+      return text;
+    }
+  } catch {
+    // fall back to deterministic formatting
+  }
+
+  return [
+    `Research notes for: ${input.query}`,
+    `Source provider: ${input.provider}`,
+    "",
+    "Summary:",
+    input.sourceText.slice(0, 2400)
+  ].join("\n");
 }
 
 function paginateResponse(text: string, maxCharsPerPage: number, maxPages: number): string[] {

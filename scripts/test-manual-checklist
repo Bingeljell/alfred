@@ -45,6 +45,7 @@ Web Console Manual Checklist
 38. Send `/calendar add <future-iso> dentist appointment`, then `/calendar list`, and confirm the event appears with a stable id.
 39. Send `/calendar cancel <id>` and confirm the event is marked cancelled and no longer listed in `/calendar list`.
 40. Enable file-write policy (`ALFRED_FILE_WRITE_ENABLED=true`), write a workspace file (`/file write notes/share.md hello`), then run `/file send notes/share.md test attachment`; approve if prompted and confirm a file notification is queued/delivered.
+41. Send one natural-language request (WhatsApp or `/ui`) like: `Research the best stable diffusion models and send me a markdown doc`. Approve if prompted, then confirm progress updates arrive and a document attachment is delivered.
 
 Heartbeat Manual Checklist
 1. Open `/ui` and use the Heartbeat section.

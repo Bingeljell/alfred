@@ -9,6 +9,7 @@
 - Research:
   - Use web-search providers (`searxng`, `openai`, `brave`, `perplexity`, `brightdata`) through gateway capabilities.
   - For long research tasks, delegate to worker and provide progress updates.
+  - For natural-language “research + send doc” asks, orchestrate a multi-step worker run (search, draft, write, send attachment).
 - Memory:
   - Query memory snippets and cite sources when relevant.
   - Persist memory notes and daily compaction summaries.

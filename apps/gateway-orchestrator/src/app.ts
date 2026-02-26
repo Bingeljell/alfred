@@ -184,6 +184,9 @@ export function createGatewayApp(
         query?: string;
         question?: string;
         provider?: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto";
+        sendAttachment?: boolean;
+        fileFormat?: "md" | "txt" | "doc";
+        fileName?: string;
         reason: string;
       }>;
     };

@@ -24,9 +24,10 @@ type LlmAuthPreference = "auto" | "oauth" | "api_key";
 type ImplicitApprovalDecision = "approve_latest" | "reject_latest";
 type ExternalCapability = "web_search" | "file_write";
 type RoutedLongTask = {
-  taskType: "web_search";
+  taskType: "web_search" | "web_to_file";
   query: string;
   provider?: WebSearchProvider;
+  fileFormat?: "md" | "txt" | "doc";
   reason: string;
 };
 
@@ -122,6 +123,9 @@ export class GatewayService {
         query?: string;
         question?: string;
         provider?: WebSearchProvider;
+        sendAttachment?: boolean;
+        fileFormat?: "md" | "txt" | "doc";
+        fileName?: string;
         reason: string;
       }>;
     },
@@ -393,6 +397,9 @@ export class GatewayService {
               plannerReason: plan.reason,
               plannerNeedsWorker: plan.needsWorker,
               plannerProvider: plan.provider,
+              plannerSendAttachment: plan.sendAttachment,
+              plannerFileFormat: plan.fileFormat,
+              plannerFileName: plan.fileName,
               plannerQuery: plan.query,
               plannerQuestion: plan.question,
               plannerChosenAction: chosenAction,
@@ -452,6 +459,84 @@ export class GatewayService {
         }
 
         if (plan?.intent === "web_research" && plan.needsWorker && plan.query?.trim()) {
+          if (plan.sendAttachment) {
+            if (this.requiresApproval("file_write")) {
+              if (!this.approvalStore) {
+                return {
+                  accepted: true,
+                  mode: "chat",
+                  response: "Approvals are not configured."
+                };
+              }
+
+              const approval = await this.approvalStore.create(inbound.sessionId, "web_to_file_send", {
+                query: plan.query.trim(),
+                provider: plan.provider ?? this.capabilityPolicy.webSearchProvider,
+                authSessionId,
+                authPreference,
+                fileFormat: plan.fileFormat ?? "md",
+                fileName: plan.fileName
+              });
+              await recordPlannerTrace("request_approval_web_to_file_send", {
+                token: approval.token
+              });
+              const response = `Approval required for research-to-file send. Reply yes/no, or approve ${approval.token}`;
+              await markPhase("persist", "Persisting planner approval request");
+              await this.recordConversation(inbound.sessionId, "outbound", response, {
+                source: "gateway",
+                channel: "internal",
+                kind: "command",
+                metadata: {
+                  authSessionId,
+                  runId,
+                  plannerIntent: plan.intent,
+                  plannerConfidence: plan.confidence,
+                  plannerReason: plan.reason
+                }
+              });
+              return {
+                accepted: true,
+                mode: "chat",
+                response
+              };
+            }
+
+            await markPhase("route", "Routing planner research-to-file task to worker queue");
+            const job = await this.enqueueLongTaskJob(inbound.sessionId, {
+              taskType: "web_to_file",
+              query: plan.query.trim(),
+              provider: plan.provider ?? this.capabilityPolicy.webSearchProvider,
+              authSessionId,
+              authPreference,
+              reason: `planner_${plan.reason}`,
+              fileFormat: plan.fileFormat ?? "md",
+              fileName: plan.fileName
+            });
+            await recordPlannerTrace("enqueue_worker_web_to_file", { jobId: job.id, taskType: "web_to_file" });
+            await markRunNote("Planner delegated research-to-file to worker", { jobId: job.id, reason: plan.reason });
+            const response = `Queued research + document delivery as job ${job.id}. I will share progress and send the file when ready.`;
+            await markPhase("persist", "Persisting worker delegation response");
+            await this.recordConversation(inbound.sessionId, "outbound", response, {
+              source: "gateway",
+              channel: "internal",
+              kind: "job",
+              metadata: {
+                authSessionId,
+                runId,
+                plannerIntent: plan.intent,
+                plannerConfidence: plan.confidence,
+                plannerReason: plan.reason,
+                jobId: job.id
+              }
+            });
+            return {
+              accepted: true,
+              mode: "async-job",
+              response,
+              jobId: job.id
+            };
+          }
+
           await markPhase("route", "Routing planner research to worker queue");
           const job = await this.enqueueLongTaskJob(inbound.sessionId, {
             taskType: "web_search",
@@ -561,30 +646,37 @@ export class GatewayService {
 
         const routed = await this.routeLongTaskIfNeeded(inbound.sessionId, inbound.text, authSessionId, authPreference);
         if (routed) {
-          await markPhase("route", "Routing heuristic long task to worker", {
+          const routedToWorker = Boolean(routed.jobId);
+          await markPhase("route", routedToWorker ? "Routing heuristic long task to worker" : "Routing heuristic approval request", {
             taskType: routed.taskType,
             reason: routed.reason
           });
-          await recordPlannerTrace("enqueue_heuristic_long_task", { jobId: routed.jobId, taskType: routed.taskType });
-          await markRunNote("Heuristic delegation to worker", { jobId: routed.jobId, reason: routed.reason });
+          await recordPlannerTrace(routedToWorker ? "enqueue_heuristic_long_task" : "request_approval_heuristic_long_task", {
+            jobId: routed.jobId || undefined,
+            taskType: routed.taskType
+          });
+          await markRunNote(routedToWorker ? "Heuristic delegation to worker" : "Heuristic approval requested", {
+            jobId: routed.jobId || undefined,
+            reason: routed.reason
+          });
           await markPhase("persist", "Persisting heuristic worker delegation response");
           await this.recordConversation(inbound.sessionId, "outbound", routed.response, {
             source: "gateway",
             channel: "internal",
-            kind: "job",
+            kind: routedToWorker ? "job" : "command",
             metadata: {
               authSessionId,
               runId,
               routedTaskType: routed.taskType,
               reason: routed.reason,
-              jobId: routed.jobId
+              jobId: routed.jobId || undefined
             }
           });
           return {
             accepted: true,
-            mode: "async-job",
+            mode: routedToWorker ? "async-job" : "chat",
             response: routed.response,
-            jobId: routed.jobId
+            jobId: routed.jobId || undefined
           };
         }
 
@@ -1278,20 +1370,48 @@ export class GatewayService {
       return null;
     }
 
+    if (routed.taskType === "web_to_file" && this.requiresApproval("file_write")) {
+      if (!this.approvalStore) {
+        return {
+          jobId: "",
+          taskType: routed.taskType,
+          reason: routed.reason,
+          response: "Approvals are not configured."
+        };
+      }
+      const approval = await this.approvalStore.create(sessionId, "web_to_file_send", {
+        query: routed.query,
+        provider: routed.provider ?? this.capabilityPolicy.webSearchProvider,
+        authSessionId,
+        authPreference,
+        fileFormat: routed.fileFormat ?? "md"
+      });
+      return {
+        jobId: "",
+        taskType: routed.taskType,
+        reason: routed.reason,
+        response: `Approval required for research-to-file send. Reply yes/no, or approve ${approval.token}`
+      };
+    }
+
     const job = await this.enqueueLongTaskJob(sessionId, {
       taskType: routed.taskType,
       query: routed.query,
       provider: routed.provider,
       authSessionId,
       authPreference,
-      reason: routed.reason
+      reason: routed.reason,
+      fileFormat: routed.fileFormat
     });
 
     return {
       jobId: job.id,
       taskType: routed.taskType,
       reason: routed.reason,
-      response: `This looks like a longer task, so I queued it as job ${job.id}. I’ll post progress updates here.`
+      response:
+        routed.taskType === "web_to_file"
+          ? `This looks like a longer research + file delivery task, so I queued it as job ${job.id}. I’ll post progress and send the file when ready.`
+          : `This looks like a longer task, so I queued it as job ${job.id}. I’ll post progress updates here.`
     };
   }
 
@@ -1322,10 +1442,14 @@ export class GatewayService {
       return null;
     }
 
+    const sendAttachment = this.messageWantsAttachment(text);
+    const fileFormat = this.detectRequestedAttachmentFormat(text);
+
     return {
-      taskType: "web_search",
+      taskType: sendAttachment ? "web_to_file" : "web_search",
       query: text,
       provider: this.capabilityPolicy.webSearchProvider,
+      fileFormat: sendAttachment ? fileFormat : undefined,
       reason: "heuristic_research_route"
     };
   }
@@ -1340,6 +1464,27 @@ export class GatewayService {
       return true;
     }
     return /(?:what(?:'s| is)?\s+the\s+status|how(?:'s| is)\s+it\s+going|any\s+update|job\s+status)/i.test(normalized);
+  }
+
+  private messageWantsAttachment(rawText: string): boolean {
+    const lower = rawText.toLowerCase();
+    const asksSend = /\b(send|share|deliver|attach)\b/.test(lower);
+    const asksFile = /\b(file|doc|document|attachment|markdown|txt)\b/.test(lower);
+    return asksSend && asksFile;
+  }
+
+  private detectRequestedAttachmentFormat(rawText: string): "md" | "txt" | "doc" {
+    const lower = rawText.toLowerCase();
+    if (/\bmarkdown|\.md\b/.test(lower)) {
+      return "md";
+    }
+    if (/\btxt|text file\b/.test(lower)) {
+      return "txt";
+    }
+    if (/\bdoc|word\b/.test(lower)) {
+      return "doc";
+    }
+    return "md";
   }
 
   private async findLatestActiveJob(sessionId: string): Promise<Awaited<ReturnType<FileBackedQueueStore["listJobs"]>>[number] | null> {
@@ -1358,12 +1503,14 @@ export class GatewayService {
   private async enqueueLongTaskJob(
     sessionId: string,
     input: {
-      taskType: "web_search";
+      taskType: "web_search" | "web_to_file";
       query: string;
       provider?: WebSearchProvider;
       authSessionId: string;
       authPreference: LlmAuthPreference;
       reason: string;
+      fileFormat?: "md" | "txt" | "doc";
+      fileName?: string;
     }
   ) {
     if (this.pagedResponseStore) {
@@ -1379,7 +1526,9 @@ export class GatewayService {
         provider: input.provider ?? this.capabilityPolicy.webSearchProvider,
         authSessionId: input.authSessionId,
         authPreference: input.authPreference,
-        routeReason: input.reason
+        routeReason: input.reason,
+        fileFormat: input.fileFormat,
+        fileName: input.fileName
       },
       priority: 5
     });
@@ -1430,6 +1579,41 @@ export class GatewayService {
         dedupeKey: `approval_execute:${channelSessionId}:web_search:${query.slice(0, 40)}`
       });
       return `Approved action executed: web_search (queued job ${job.id}).`;
+    }
+    if (approval.action === "web_to_file_send") {
+      if (!this.capabilityPolicy.webSearchEnabled) {
+        return "Approved action failed: web search is disabled by policy.";
+      }
+      if (!this.notificationStore) {
+        return "Approved action failed: notification channel is not configured.";
+      }
+      const query = String(approval.payload.query ?? "").trim();
+      const provider = this.normalizeWebSearchProvider(approval.payload.provider);
+      const targetAuthSessionId = String(approval.payload.authSessionId ?? authSessionId).trim() || authSessionId;
+      const requestedAuthPreference = this.normalizeAuthPreference(approval.payload.authPreference ?? authPreference);
+      const fileFormat = this.normalizeAttachmentFormat(approval.payload.fileFormat) ?? "md";
+      const fileName = this.normalizeAttachmentFileName(approval.payload.fileName);
+      if (!query) {
+        return "Approved action failed: missing research query.";
+      }
+      const job = await this.enqueueLongTaskJob(channelSessionId, {
+        taskType: "web_to_file",
+        query,
+        provider: provider ?? this.capabilityPolicy.webSearchProvider,
+        authSessionId: targetAuthSessionId,
+        authPreference: requestedAuthPreference,
+        reason: "approved_web_to_file_send",
+        fileFormat,
+        fileName
+      });
+      await this.recordMemoryCheckpoint(channelSessionId, {
+        class: "decision",
+        source: "approval_execute",
+        summary: `Approved web_to_file_send action (${fileFormat})`,
+        details: query,
+        dedupeKey: `approval_execute:${channelSessionId}:web_to_file_send:${query.slice(0, 40)}`
+      });
+      return `Approved action executed: web_to_file_send (queued job ${job.id}).`;
     }
     if (approval.action === "file_write") {
       if (!this.capabilityPolicy.fileWriteEnabled) {
@@ -1639,6 +1823,7 @@ export class GatewayService {
     const content = [
       "intent_planner",
       "web_search",
+      "web_to_file_send",
       "memory_search",
       "calendar",
       "reminders",
@@ -1668,6 +1853,29 @@ export class GatewayService {
       return value;
     }
     return undefined;
+  }
+
+  private normalizeAttachmentFormat(raw: unknown): "md" | "txt" | "doc" | undefined {
+    if (typeof raw !== "string") {
+      return undefined;
+    }
+    const value = raw.trim().toLowerCase();
+    if (value === "md" || value === "txt" || value === "doc") {
+      return value;
+    }
+    return undefined;
+  }
+
+  private normalizeAttachmentFileName(raw: unknown): string | undefined {
+    if (typeof raw !== "string") {
+      return undefined;
+    }
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return undefined;
+    }
+    const normalized = trimmed.replace(/[^a-zA-Z0-9._-]+/g, "_").replace(/_+/g, "_").slice(0, 80);
+    return normalized || undefined;
   }
 
   private noModelResponse(authPreference: LlmAuthPreference): string {

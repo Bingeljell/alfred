@@ -3,6 +3,7 @@
 - Safety and approvals:
   - Follow approval policy mode: `strict`, `balanced`, `relaxed`.
   - In `balanced`, prefer autonomy for low-risk reads/research and require approval for writes/high-risk actions.
+  - For multi-step research-to-file runs, gate file-delivery side effects behind approval when file-write approvals are enabled.
 - Confidence:
   - If uncertain, ask the user before taking action.
   - Do not fabricate certainty.
