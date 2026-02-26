@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import type { BaileysInboundMessage } from "../../../../packages/contracts/src";
 import type { BaileysTransport } from "../../../../packages/provider-adapters/src";
 
@@ -58,6 +59,10 @@ function defaultModuleLoader(): Promise<BaileysModule> {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object";
 }
 
 function extractMessageText(message: Record<string, unknown> | null | undefined): string {
@@ -367,6 +372,7 @@ export class BaileysRuntime implements BaileysTransport {
     });
 
     try {
+      await this.repairPartialCreds();
       const module = await this.loadModule();
       const authState = await module.useMultiFileAuthState(this.authDir);
       const version = await module.fetchLatestBaileysVersion();
@@ -386,6 +392,38 @@ export class BaileysRuntime implements BaileysTransport {
         lastError: error instanceof Error ? error.message : String(error)
       });
       throw error;
+    }
+  }
+
+  private async repairPartialCreds(): Promise<void> {
+    const credsPath = path.join(this.authDir, "creds.json");
+    let parsed: unknown;
+    try {
+      const raw = await fs.readFile(credsPath, "utf8");
+      parsed = JSON.parse(raw) as unknown;
+    } catch {
+      return;
+    }
+
+    if (!isRecord(parsed)) {
+      return;
+    }
+
+    const registered = parsed.registered === true;
+    const hasMe = isRecord(parsed.me);
+    const hasAccount = isRecord(parsed.account);
+    if (registered || (!hasMe && !hasAccount)) {
+      return;
+    }
+
+    const backupPath = path.join(this.authDir, `creds.partial.${Date.now()}.json`);
+    try {
+      await fs.rename(credsPath, backupPath);
+      this.updateStatus({
+        lastError: "baileys_partial_creds_reset"
+      });
+    } catch {
+      // If backup fails, continue with existing creds and let connect surface the error.
     }
   }
 
