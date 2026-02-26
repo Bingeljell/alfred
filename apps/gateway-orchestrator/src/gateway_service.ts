@@ -289,90 +289,18 @@ export class GatewayService {
       }
 
       if (inbound.text) {
-        const paging = await this.handlePagingRequest(inbound.sessionId, inbound.text);
-        if (paging) {
-          await markPhase("persist", "Serving paged response");
-          await this.recordConversation(inbound.sessionId, "outbound", paging, {
-            source: "gateway",
-            channel: "internal",
-            kind: "command",
-            metadata: { authSessionId, runId }
-          });
-          return {
-            accepted: true,
-            mode: "chat",
-            response: paging
-          };
-        }
-
-        const directiveCommand = parseCommand(inbound.text);
-        if (directiveCommand) {
-          await markPhase("route", "Routing directive command execution", { command: directiveCommand.kind });
-          const response = await this.executeCommand(inbound.sessionId, directiveCommand, authSessionId, authPreference);
-          await markPhase("persist", "Persisting directive command response", { command: directiveCommand.kind });
-          await this.recordConversation(inbound.sessionId, "outbound", response, {
-            source: "gateway",
-            channel: "internal",
-            kind: "command",
-            metadata: {
-              authSessionId,
-              runId
-            }
-          });
-          return {
-            accepted: true,
-            mode: "chat",
-            response
-          };
-        }
-
-        const implicitApprovalDecision = this.parseImplicitApprovalDecision(inbound.text);
-        if (implicitApprovalDecision) {
-          const decisionResult = await this.executeImplicitApprovalDecision(
-            inbound.sessionId,
-            implicitApprovalDecision,
-            authSessionId,
-            authPreference
-          );
-          if (decisionResult.handled) {
-            await markPhase("route", "Routing implicit approval decision", { decision: implicitApprovalDecision });
-            await markPhase("persist", "Persisting implicit approval response");
-            await this.recordConversation(inbound.sessionId, "outbound", decisionResult.response, {
-              source: "gateway",
-              channel: "internal",
-              kind: "command",
-              metadata: {
-                authSessionId,
-                runId
-              }
-            });
-            return {
-              accepted: true,
-              mode: "chat",
-              response: decisionResult.response
-            };
-          }
-        }
-
-        const directProgressStatus = await this.answerProgressQuery(inbound.sessionId, inbound.text);
-        if (directProgressStatus) {
-          await markPhase("route", "Routing progress-query directive");
-          await markPhase("persist", "Persisting progress-query response");
-          await this.recordConversation(inbound.sessionId, "outbound", directProgressStatus, {
-            source: "gateway",
-            channel: "internal",
-            kind: "job",
-            metadata: {
-              authSessionId,
-              runId,
-              progressQuery: true
-            }
-          });
-          return {
-            accepted: true,
-            mode: "chat",
-            response: directProgressStatus
-          };
+        const prePlannerResponse = await this.handlePrePlannerDirectiveSurface({
+          inbound: {
+            sessionId: inbound.sessionId,
+            text: inbound.text
+          },
+          runId,
+          authSessionId,
+          authPreference,
+          markPhase
+        });
+        if (prePlannerResponse) {
+          return prePlannerResponse;
         }
 
         await markPhase("plan", "Planning intent");
@@ -831,6 +759,106 @@ export class GatewayService {
       mode: "async-job",
       jobId: job.id
     };
+  }
+
+  private async handlePrePlannerDirectiveSurface(input: {
+    inbound: { sessionId: string; text: string };
+    runId?: string;
+    authSessionId: string;
+    authPreference: LlmAuthPreference;
+    markPhase: (
+      phase: "normalize" | "session" | "directives" | "plan" | "policy" | "route" | "persist" | "dispatch",
+      message?: string,
+      details?: Record<string, unknown>
+    ) => Promise<void>;
+  }): Promise<InboundHandleResult | null> {
+    const paging = await this.handlePagingRequest(input.inbound.sessionId, input.inbound.text);
+    if (paging) {
+      await input.markPhase("persist", "Serving paged response");
+      await this.recordConversation(input.inbound.sessionId, "outbound", paging, {
+        source: "gateway",
+        channel: "internal",
+        kind: "command",
+        metadata: { authSessionId: input.authSessionId, runId: input.runId }
+      });
+      return {
+        accepted: true,
+        mode: "chat",
+        response: paging
+      };
+    }
+
+    const directiveCommand = parseCommand(input.inbound.text);
+    if (directiveCommand) {
+      await input.markPhase("route", "Routing directive command execution", { command: directiveCommand.kind });
+      const response = await this.executeCommand(input.inbound.sessionId, directiveCommand, input.authSessionId, input.authPreference);
+      await input.markPhase("persist", "Persisting directive command response", { command: directiveCommand.kind });
+      await this.recordConversation(input.inbound.sessionId, "outbound", response, {
+        source: "gateway",
+        channel: "internal",
+        kind: "command",
+        metadata: {
+          authSessionId: input.authSessionId,
+          runId: input.runId
+        }
+      });
+      return {
+        accepted: true,
+        mode: "chat",
+        response
+      };
+    }
+
+    const implicitApprovalDecision = this.parseImplicitApprovalDecision(input.inbound.text);
+    if (implicitApprovalDecision) {
+      const decisionResult = await this.executeImplicitApprovalDecision(
+        input.inbound.sessionId,
+        implicitApprovalDecision,
+        input.authSessionId,
+        input.authPreference
+      );
+      if (decisionResult.handled) {
+        await input.markPhase("route", "Routing implicit approval decision", { decision: implicitApprovalDecision });
+        await input.markPhase("persist", "Persisting implicit approval response");
+        await this.recordConversation(input.inbound.sessionId, "outbound", decisionResult.response, {
+          source: "gateway",
+          channel: "internal",
+          kind: "command",
+          metadata: {
+            authSessionId: input.authSessionId,
+            runId: input.runId
+          }
+        });
+        return {
+          accepted: true,
+          mode: "chat",
+          response: decisionResult.response
+        };
+      }
+    }
+
+    const directProgressStatus = await this.answerProgressQuery(input.inbound.sessionId, input.inbound.text);
+    if (directProgressStatus) {
+      await input.markPhase("route", "Routing progress-query directive");
+      await input.markPhase("persist", "Persisting progress-query response");
+      await this.recordConversation(input.inbound.sessionId, "outbound", directProgressStatus, {
+        source: "gateway",
+        channel: "internal",
+        kind: "job",
+        metadata: {
+          authSessionId: input.authSessionId,
+          runId: input.runId,
+          progressQuery: true
+        }
+      });
+      return {
+        accepted: true,
+        mode: "chat",
+        response: directProgressStatus
+      };
+    }
+
+    return null;
   }
 
   async getJob(jobId: string) {
