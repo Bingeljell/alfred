@@ -36,6 +36,19 @@ type RoutedLongTask = {
   reason: string;
 };
 
+type PlannerDecision = {
+  intent: "chat" | "web_research" | "status_query" | "clarify" | "command";
+  confidence: number;
+  needsWorker: boolean;
+  query?: string;
+  question?: string;
+  provider?: WebSearchProvider;
+  sendAttachment?: boolean;
+  fileFormat?: "md" | "txt" | "doc";
+  fileName?: string;
+  reason: string;
+};
+
 type MemoryReference = {
   source: string;
   class: MemoryCheckpointClass;
@@ -128,18 +141,7 @@ export class GatewayService {
         sessionId: string,
         message: string,
         options?: { authPreference?: LlmAuthPreference; hasActiveJob?: boolean }
-      ) => Promise<{
-        intent: "chat" | "web_research" | "status_query" | "clarify" | "command";
-        confidence: number;
-        needsWorker: boolean;
-        query?: string;
-        question?: string;
-        provider?: WebSearchProvider;
-        sendAttachment?: boolean;
-        fileFormat?: "md" | "txt" | "doc";
-        fileName?: string;
-        reason: string;
-      }>;
+      ) => Promise<PlannerDecision>;
     },
     private readonly runLedger?: {
       startRun: (input: {
@@ -342,168 +344,21 @@ export class GatewayService {
         };
 
         await markPhase("policy", "Evaluating policy and approvals");
-        if (plan?.intent === "clarify") {
-          await recordPlannerTrace("ask_clarification");
-          const question = plan.question?.trim() || "Can you clarify what output you want first?";
-          await markPhase("persist", "Persisting clarification");
-          await this.recordConversation(inbound.sessionId, "outbound", question, {
-            source: "gateway",
-            channel: "internal",
-            kind: "chat",
-            metadata: {
-              authSessionId,
-              runId,
-              plannerIntent: plan.intent,
-              plannerConfidence: plan.confidence,
-              plannerReason: plan.reason
-            }
-          });
-          return {
-            accepted: true,
-            mode: "chat",
-            response: question
-          };
-        }
-
-        if (plan?.intent === "status_query") {
-          const progressStatus = await this.answerProgressQuery(inbound.sessionId, inbound.text);
-          if (progressStatus) {
-            await recordPlannerTrace("reply_progress_status");
-            await markPhase("persist", "Persisting status-query response");
-            await this.recordConversation(inbound.sessionId, "outbound", progressStatus, {
-              source: "gateway",
-              channel: "internal",
-              kind: "job",
-              metadata: {
-                authSessionId,
-                runId,
-                progressQuery: true,
-                plannerIntent: plan.intent,
-                plannerConfidence: plan.confidence,
-                plannerReason: plan.reason
-              }
-            });
-            return {
-              accepted: true,
-              mode: "chat",
-              response: progressStatus
-            };
-          }
-        }
-
-        if (plan?.intent === "web_research" && plan.needsWorker && plan.query?.trim()) {
-          if (plan.sendAttachment) {
-            const runSpecRunId = runId ?? randomUUID();
-            const runSpec = this.buildWebToFileRunSpec({
-              runSpecRunId,
-              query: plan.query.trim(),
-              provider: plan.provider ?? "auto",
-              fileFormat: plan.fileFormat ?? "md",
-              fileName: plan.fileName
-            });
-            if (this.requiresApproval("file_write")) {
-              const approvalResponse = await this.requestNextRunSpecApprovalIfNeeded({
-                sessionId: inbound.sessionId,
-                runSpecRunId,
-                runSpec,
-                approvedStepIds: [],
-                authSessionId,
-                authPreference,
-                reason: `planner_${plan.reason}`
-              });
-              const response =
-                approvalResponse ??
-                "Approval flow is configured but no approval checkpoint was found for this run.";
-              await recordPlannerTrace("request_approval_web_to_file_send");
-              await markPhase("persist", "Persisting planner approval request");
-              await this.recordConversation(inbound.sessionId, "outbound", response, {
-                source: "gateway",
-                channel: "internal",
-                kind: "command",
-                metadata: {
-                  authSessionId,
-                  runId,
-                  plannerIntent: plan.intent,
-                  plannerConfidence: plan.confidence,
-                  plannerReason: plan.reason
-                }
-              });
-              return {
-                accepted: true,
-                mode: "chat",
-                response
-              };
-            }
-
-            await markPhase("route", "Routing planner research-to-file task to worker queue");
-            const job = await this.enqueueLongTaskJob(inbound.sessionId, {
-              taskType: "web_to_file",
-              query: plan.query.trim(),
-              provider: plan.provider ?? this.capabilityPolicy.webSearchProvider,
-              authSessionId,
-              authPreference,
-              reason: `planner_${plan.reason}`,
-              fileFormat: plan.fileFormat ?? "md",
-              fileName: plan.fileName,
-              runSpecRunId
-            });
-            await recordPlannerTrace("enqueue_worker_web_to_file", { jobId: job.id, taskType: "web_to_file" });
-            await markRunNote("Planner delegated research-to-file to worker", { jobId: job.id, reason: plan.reason });
-            const response = `Queued research + document delivery as job ${job.id}. I will share progress and send the file when ready.`;
-            await markPhase("persist", "Persisting worker delegation response");
-            await this.recordConversation(inbound.sessionId, "outbound", response, {
-              source: "gateway",
-              channel: "internal",
-              kind: "job",
-              metadata: {
-                authSessionId,
-                runId,
-                plannerIntent: plan.intent,
-                plannerConfidence: plan.confidence,
-                plannerReason: plan.reason,
-                jobId: job.id
-              }
-            });
-            return {
-              accepted: true,
-              mode: "async-job",
-              response,
-              jobId: job.id
-            };
-          }
-
-          await markPhase("route", "Routing planner research to worker queue");
-          const job = await this.enqueueLongTaskJob(inbound.sessionId, {
-            taskType: "web_search",
-            query: plan.query.trim(),
-            provider: plan.provider ?? this.capabilityPolicy.webSearchProvider,
-            authSessionId,
-            authPreference,
-            reason: `planner_${plan.reason}`
-          });
-          await recordPlannerTrace("enqueue_worker_web_search", { jobId: job.id, taskType: "web_search" });
-          await markRunNote("Planner delegated to worker", { jobId: job.id, reason: plan.reason });
-          const response = `Queued research as job ${job.id}. I will share concise progress and final results here.`;
-          await markPhase("persist", "Persisting worker delegation response");
-          await this.recordConversation(inbound.sessionId, "outbound", response, {
-            source: "gateway",
-            channel: "internal",
-            kind: "job",
-            metadata: {
-              authSessionId,
-              runId,
-              plannerIntent: plan.intent,
-              plannerConfidence: plan.confidence,
-              plannerReason: plan.reason,
-              jobId: job.id
-            }
-          });
-          return {
-            accepted: true,
-            mode: "async-job",
-            response,
-            jobId: job.id
-          };
+        const primaryPlannerRoute = await this.handlePlannerPrimaryRoutes({
+          inbound: {
+            sessionId: inbound.sessionId,
+            text: inbound.text
+          },
+          plan,
+          runId,
+          authSessionId,
+          authPreference,
+          markPhase,
+          markRunNote,
+          recordPlannerTrace
+        });
+        if (primaryPlannerRoute) {
+          return primaryPlannerRoute;
         }
 
         const command = parseCommand(inbound.text);
@@ -855,6 +710,192 @@ export class GatewayService {
         accepted: true,
         mode: "chat",
         response: directProgressStatus
+      };
+    }
+
+    return null;
+  }
+
+  private async handlePlannerPrimaryRoutes(input: {
+    inbound: { sessionId: string; text: string };
+    plan?: PlannerDecision;
+    runId?: string;
+    authSessionId: string;
+    authPreference: LlmAuthPreference;
+    markPhase: (
+      phase: "normalize" | "session" | "directives" | "plan" | "policy" | "route" | "persist" | "dispatch",
+      message?: string,
+      details?: Record<string, unknown>
+    ) => Promise<void>;
+    markRunNote: (message: string, details?: Record<string, unknown>) => Promise<void>;
+    recordPlannerTrace: (chosenAction: string, extra?: Record<string, unknown>) => Promise<void>;
+  }): Promise<InboundHandleResult | null> {
+    const { plan } = input;
+    if (!plan) {
+      return null;
+    }
+
+    if (plan.intent === "clarify") {
+      await input.recordPlannerTrace("ask_clarification");
+      const question = plan.question?.trim() || "Can you clarify what output you want first?";
+      await input.markPhase("persist", "Persisting clarification");
+      await this.recordConversation(input.inbound.sessionId, "outbound", question, {
+        source: "gateway",
+        channel: "internal",
+        kind: "chat",
+        metadata: {
+          authSessionId: input.authSessionId,
+          runId: input.runId,
+          plannerIntent: plan.intent,
+          plannerConfidence: plan.confidence,
+          plannerReason: plan.reason
+        }
+      });
+      return {
+        accepted: true,
+        mode: "chat",
+        response: question
+      };
+    }
+
+    if (plan.intent === "status_query") {
+      const progressStatus = await this.answerProgressQuery(input.inbound.sessionId, input.inbound.text);
+      if (progressStatus) {
+        await input.recordPlannerTrace("reply_progress_status");
+        await input.markPhase("persist", "Persisting status-query response");
+        await this.recordConversation(input.inbound.sessionId, "outbound", progressStatus, {
+          source: "gateway",
+          channel: "internal",
+          kind: "job",
+          metadata: {
+            authSessionId: input.authSessionId,
+            runId: input.runId,
+            progressQuery: true,
+            plannerIntent: plan.intent,
+            plannerConfidence: plan.confidence,
+            plannerReason: plan.reason
+          }
+        });
+        return {
+          accepted: true,
+          mode: "chat",
+          response: progressStatus
+        };
+      }
+    }
+
+    if (plan.intent === "web_research" && plan.needsWorker && plan.query?.trim()) {
+      if (plan.sendAttachment) {
+        const runSpecRunId = input.runId ?? randomUUID();
+        const runSpec = this.buildWebToFileRunSpec({
+          runSpecRunId,
+          query: plan.query.trim(),
+          provider: plan.provider ?? "auto",
+          fileFormat: plan.fileFormat ?? "md",
+          fileName: plan.fileName
+        });
+        if (this.requiresApproval("file_write")) {
+          const approvalResponse = await this.requestNextRunSpecApprovalIfNeeded({
+            sessionId: input.inbound.sessionId,
+            runSpecRunId,
+            runSpec,
+            approvedStepIds: [],
+            authSessionId: input.authSessionId,
+            authPreference: input.authPreference,
+            reason: `planner_${plan.reason}`
+          });
+          const response =
+            approvalResponse ??
+            "Approval flow is configured but no approval checkpoint was found for this run.";
+          await input.recordPlannerTrace("request_approval_web_to_file_send");
+          await input.markPhase("persist", "Persisting planner approval request");
+          await this.recordConversation(input.inbound.sessionId, "outbound", response, {
+            source: "gateway",
+            channel: "internal",
+            kind: "command",
+            metadata: {
+              authSessionId: input.authSessionId,
+              runId: input.runId,
+              plannerIntent: plan.intent,
+              plannerConfidence: plan.confidence,
+              plannerReason: plan.reason
+            }
+          });
+          return {
+            accepted: true,
+            mode: "chat",
+            response
+          };
+        }
+
+        await input.markPhase("route", "Routing planner research-to-file task to worker queue");
+        const job = await this.enqueueLongTaskJob(input.inbound.sessionId, {
+          taskType: "web_to_file",
+          query: plan.query.trim(),
+          provider: plan.provider ?? this.capabilityPolicy.webSearchProvider,
+          authSessionId: input.authSessionId,
+          authPreference: input.authPreference,
+          reason: `planner_${plan.reason}`,
+          fileFormat: plan.fileFormat ?? "md",
+          fileName: plan.fileName,
+          runSpecRunId
+        });
+        await input.recordPlannerTrace("enqueue_worker_web_to_file", { jobId: job.id, taskType: "web_to_file" });
+        await input.markRunNote("Planner delegated research-to-file to worker", { jobId: job.id, reason: plan.reason });
+        const response = `Queued research + document delivery as job ${job.id}. I will share progress and send the file when ready.`;
+        await input.markPhase("persist", "Persisting worker delegation response");
+        await this.recordConversation(input.inbound.sessionId, "outbound", response, {
+          source: "gateway",
+          channel: "internal",
+          kind: "job",
+          metadata: {
+            authSessionId: input.authSessionId,
+            runId: input.runId,
+            plannerIntent: plan.intent,
+            plannerConfidence: plan.confidence,
+            plannerReason: plan.reason,
+            jobId: job.id
+          }
+        });
+        return {
+          accepted: true,
+          mode: "async-job",
+          response,
+          jobId: job.id
+        };
+      }
+
+      await input.markPhase("route", "Routing planner research to worker queue");
+      const job = await this.enqueueLongTaskJob(input.inbound.sessionId, {
+        taskType: "web_search",
+        query: plan.query.trim(),
+        provider: plan.provider ?? this.capabilityPolicy.webSearchProvider,
+        authSessionId: input.authSessionId,
+        authPreference: input.authPreference,
+        reason: `planner_${plan.reason}`
+      });
+      await input.recordPlannerTrace("enqueue_worker_web_search", { jobId: job.id, taskType: "web_search" });
+      await input.markRunNote("Planner delegated to worker", { jobId: job.id, reason: plan.reason });
+      const response = `Queued research as job ${job.id}. I will share concise progress and final results here.`;
+      await input.markPhase("persist", "Persisting worker delegation response");
+      await this.recordConversation(input.inbound.sessionId, "outbound", response, {
+        source: "gateway",
+        channel: "internal",
+        kind: "job",
+        metadata: {
+          authSessionId: input.authSessionId,
+          runId: input.runId,
+          plannerIntent: plan.intent,
+          plannerConfidence: plan.confidence,
+          plannerReason: plan.reason,
+          jobId: job.id
+        }
+      });
+      return {
+        accepted: true,
+        mode: "async-job",
+        response,
+        jobId: job.id
       };
     }
 
