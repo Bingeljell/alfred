@@ -332,7 +332,7 @@ describe("GatewayService llm path", () => {
     });
 
     expect(routed.mode).toBe("chat");
-    expect(routed.response).toContain("Approval required for research-to-file send");
+    expect(routed.response).toContain("Approval required for step 'Write File'");
     const jobs = await queueStore.listJobs();
     expect(jobs.length).toBe(0);
   });
@@ -467,20 +467,32 @@ describe("GatewayService llm path", () => {
       text: "Please research best stable diffusion models and send me a markdown file",
       requestJob: false
     });
-    expect(gated.response).toContain("Approval required for research-to-file send");
+    expect(gated.response).toContain("Approval required for step 'Write File'");
 
-    const token = String(gated.response?.split("approve ")[1] ?? "").trim();
-    const approved = await service.handleInbound({
+    const firstToken = String(gated.response?.split("approve ")[1] ?? "").trim();
+    const firstApproval = await service.handleInbound({
       sessionId: "owner@s.whatsapp.net",
-      text: `approve ${token}`,
+      text: `approve ${firstToken}`,
       requestJob: false
     });
-    expect(approved.response).toContain("Approved action executed: web_to_file_send");
+    expect(firstApproval.response).toContain("Step 'write' approved.");
+    expect(firstApproval.response).toContain("Approval required for step 'Send Attachment'");
+
+    const secondToken = String(firstApproval.response?.split("approve ")[1] ?? "").trim();
+    const secondApproval = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `approve ${secondToken}`,
+      requestJob: false
+    });
+    expect(secondApproval.response).toContain("Step 'send' approved. Run queued as job");
 
     const jobs = await queueStore.listJobs();
     expect(jobs.length).toBe(1);
-    expect(jobs[0]?.payload?.taskType).toBe("web_to_file");
-    expect(jobs[0]?.payload?.fileFormat).toBe("md");
+    expect(jobs[0]?.payload?.taskType).toBe("run_spec");
+    const approvedRunSpec = jobs[0]?.payload?.runSpec as
+      | { steps?: Array<{ input?: { fileFormat?: string } }> }
+      | undefined;
+    expect(approvedRunSpec?.steps?.[2]?.input?.fileFormat).toBe("md");
   });
 
   it("queues planner attachment request directly when approval is not required", async () => {
@@ -538,8 +550,11 @@ describe("GatewayService llm path", () => {
 
     const jobs = await queueStore.listJobs();
     expect(jobs.length).toBe(1);
-    expect(jobs[0]?.payload?.taskType).toBe("web_to_file");
-    expect(jobs[0]?.payload?.fileFormat).toBe("txt");
+    expect(jobs[0]?.payload?.taskType).toBe("run_spec");
+    const directRunSpec = jobs[0]?.payload?.runSpec as
+      | { steps?: Array<{ input?: { fileFormat?: string } }> }
+      | undefined;
+    expect(directRunSpec?.steps?.[2]?.input?.fileFormat).toBe("txt");
   });
 
   it("serves #next pages from paged response store", async () => {

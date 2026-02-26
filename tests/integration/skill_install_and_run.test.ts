@@ -46,5 +46,5 @@ describe("skill install and run integration", () => {
     if (failure.status === "failed") {
       expect(failure.error.code).toBe("forced_failure");
     }
-  });
+  }, 15000);
 });

@@ -403,6 +403,22 @@ export function renderWebConsoleHtml(): string {
           </div>
         </div>
 
+        <h2>Run Timeline</h2>
+        <div class="row">
+          <div>
+            <label for="runSessionKey">Run Session Key</label>
+            <input id="runSessionKey" placeholder="defaults to Session ID above" />
+          </div>
+          <div>
+            <label for="runId">Run ID</label>
+            <input id="runId" placeholder="paste run id" />
+          </div>
+        </div>
+        <div class="actions">
+          <button class="secondary" id="runList">List Runs</button>
+          <button class="secondary" id="runStatus">Run Status</button>
+        </div>
+
         <h2>Memory</h2>
         <div class="row">
           <div>
@@ -630,6 +646,8 @@ export function renderWebConsoleHtml(): string {
       const $ = (id) => document.getElementById(id);
       const log = $("log");
       const sessionTranscript = $("sessionTranscript");
+      const runSessionKeyInput = $("runSessionKey");
+      const runIdInput = $("runId");
       const transcriptDate = $("transcriptDate");
       const transcriptAllSessions = $("transcriptAllSessions");
       const statusLine = $("statusLine");
@@ -1736,6 +1754,69 @@ export function renderWebConsoleHtml(): string {
         }
       });
 
+      $("runList").addEventListener("click", async () => {
+        const sessionKey = runSessionKeyInput.value.trim() || $("sessionId").value.trim();
+        const query = sessionKey ? "?sessionKey=" + encodeURIComponent(sessionKey) + "&limit=20" : "?limit=20";
+        const response = await runButtonAction($("runList"), "RUNS_LIST", () => api("GET", "/v1/runs" + query));
+        if (response.ok) {
+          const runs = Array.isArray(response.data?.runs) ? response.data.runs : [];
+          const brief = runs.map((run) => ({
+            runId: run?.runId ?? "n/a",
+            sessionKey: run?.sessionKey ?? "n/a",
+            status: run?.status ?? "unknown",
+            phase: run?.phase ?? "n/a",
+            createdAt: run?.createdAt ?? "n/a",
+            updatedAt: run?.updatedAt ?? "n/a"
+          }));
+          if (!runIdInput.value.trim() && runs.length > 0 && runs[0]?.runId) {
+            runIdInput.value = String(runs[0].runId);
+          }
+          pushLog("RUNS_LIST", {
+            sessionKey: sessionKey || "all",
+            count: brief.length,
+            runs: brief
+          });
+        } else {
+          pushLog("RUNS_LIST", response);
+        }
+        setStatus("Last action: RUNS_LIST (" + response.status + ")", response.ok ? "success" : "error");
+      });
+
+      $("runStatus").addEventListener("click", async () => {
+        const runId = runIdInput.value.trim();
+        if (!runId) {
+          return setStatus("Run ID is required.", "error");
+        }
+        const response = await runButtonAction($("runStatus"), "RUN_STATUS", () => api("GET", "/v1/runs/" + encodeURIComponent(runId)));
+        if (response.ok) {
+          const run = response.data || {};
+          const runSpec = run.runSpec && typeof run.runSpec === "object" ? run.runSpec : null;
+          const specSteps = runSpec && runSpec.spec && Array.isArray(runSpec.spec.steps) ? runSpec.spec.steps : [];
+          const stepStates = runSpec && runSpec.stepStates && typeof runSpec.stepStates === "object" ? runSpec.stepStates : {};
+          const steps = specSteps.map((step) => {
+            const state = stepStates[step.id] && typeof stepStates[step.id] === "object" ? stepStates[step.id] : {};
+            return {
+              id: step.id,
+              name: step.name,
+              type: step.type,
+              status: state.status ?? "unknown",
+              message: state.message ?? null
+            };
+          });
+          pushLog("RUN_STATUS", {
+            runId: run.runId ?? runId,
+            status: run.status ?? "unknown",
+            phase: run.phase ?? "n/a",
+            runSpecStatus: runSpec?.status ?? "none",
+            stepCount: steps.length,
+            steps
+          });
+        } else {
+          pushLog("RUN_STATUS", response);
+        }
+        setStatus("Last action: RUN_STATUS (" + response.status + ")", response.ok ? "success" : "error");
+      });
+
       $("memorySearch").addEventListener("click", async () => {
         const q = encodeURIComponent($("memoryQuery").value.trim());
         const response = await runButtonAction($("memorySearch"), "MEMORY_SEARCH", () => api("GET", "/v1/memory/search?q=" + q));
@@ -2046,6 +2127,9 @@ export function renderWebConsoleHtml(): string {
         if (!$("oauthSession").value.trim()) {
           mapAuthSessionId.value = nextSession;
         }
+        if (!runSessionKeyInput.value.trim()) {
+          runSessionKeyInput.value = nextSession;
+        }
         void pollTranscriptSilently();
       });
 
@@ -2067,6 +2151,7 @@ export function renderWebConsoleHtml(): string {
       }
       mapAuthSessionId.value = selectedOAuthSession();
       mapWhatsAppJid.value = $("sessionId").value.trim() || "owner@s.whatsapp.net";
+      runSessionKeyInput.value = $("sessionId").value.trim() || "owner@s.whatsapp.net";
       updateMapSummary("No mapping action yet.", "idle");
       void (async () => {
         const sessionId = selectedOAuthSession();
