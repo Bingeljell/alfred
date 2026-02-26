@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { InboundMessageSchema, JobCreateSchema, RunSpecV1Schema } from "../../../packages/contracts/src";
+import { JobCreateSchema, RunSpecV1Schema } from "../../../packages/contracts/src";
 import type { RunSpecV1 } from "../../../packages/contracts/src";
 import { parseCommand, type ParsedCommand } from "./builtins/command_parser";
 import { ApprovalStore } from "./builtins/approval_store";
@@ -22,8 +22,10 @@ import type { RunQueueMode } from "./builtins/run_ledger_store";
 import type { SupervisorStore } from "./builtins/supervisor_store";
 import type { MemoryCheckpointClass } from "./builtins/memory_checkpoint_service";
 import type { RunSpecStore } from "./builtins/run_spec_store";
+import { runNormalizePhase } from "./orchestrator/normalize_phase";
+import { runSessionPhase } from "./orchestrator/session_phase";
+import type { LlmAuthPreference } from "./orchestrator/types";
 
-type LlmAuthPreference = "auto" | "oauth" | "api_key";
 type ImplicitApprovalDecision = "approve_latest" | "reject_latest";
 type ExternalCapability = "web_search" | "file_write";
 type RoutedLongTask = {
@@ -208,21 +210,17 @@ export class GatewayService {
     response?: string;
     jobId?: string;
   }> {
-    const inbound = InboundMessageSchema.parse(payload ?? {});
-    const provider = String(inbound.metadata?.provider ?? "");
-    const source = provider === "baileys" ? "whatsapp" : "gateway";
-    const channel = provider === "baileys" ? "baileys" : "direct";
-    const authSessionId = await this.resolveAuthSessionId(inbound.sessionId, provider);
-    const authPreference = this.normalizeAuthPreference(inbound.metadata?.authPreference);
-    const queueMode = this.normalizeQueueMode(inbound.metadata?.queueMode);
-    const idempotencyKey = this.resolveIdempotencyKey(inbound.metadata?.idempotencyKey);
-    const runStart = await this.runLedger?.startRun({
-      sessionKey: authSessionId,
-      queueMode,
-      idempotencyKey,
-      model: authPreference === "oauth" ? "openai-codex/default" : this.codexApiKey ? "openai/default" : "none",
-      provider: authPreference === "oauth" ? "openai-codex" : "openai",
-      toolPolicySnapshot: {
+    const normalized = runNormalizePhase(payload);
+    const { inbound, provider, source, channel } = normalized;
+    const session = await runSessionPhase({
+      normalized,
+      resolveAuthSessionId: (sessionId, currentProvider) => this.resolveAuthSessionId(sessionId, currentProvider),
+      normalizeAuthPreference: (raw) => this.normalizeAuthPreference(raw),
+      normalizeQueueMode: (raw) => this.normalizeQueueMode(raw),
+      resolveIdempotencyKey: (raw) => this.resolveIdempotencyKey(raw),
+      runLedger: this.runLedger,
+      codexApiKey: this.codexApiKey,
+      capabilityPolicySnapshot: {
         approvalMode: this.capabilityPolicy.approvalMode,
         approvalDefault: this.capabilityPolicy.approvalDefault,
         webSearchEnabled: this.capabilityPolicy.webSearchEnabled,
@@ -233,34 +231,9 @@ export class GatewayService {
         fileWriteNotesOnly: this.capabilityPolicy.fileWriteNotesOnly,
         fileWriteNotesDir: this.capabilityPolicy.fileWriteNotesDir
       },
-      skillsSnapshot: this.buildSkillsSnapshot()
+      buildSkillsSnapshot: () => this.buildSkillsSnapshot()
     });
-    const runId = runStart?.run.runId;
-
-    const markPhase = async (
-      phase: "normalize" | "session" | "directives" | "plan" | "policy" | "route" | "persist" | "dispatch",
-      message?: string,
-      details?: Record<string, unknown>
-    ): Promise<void> => {
-      if (!runId || !this.runLedger) {
-        return;
-      }
-      try {
-        await this.runLedger.transitionPhase(runId, phase, message, details);
-      } catch {
-        // best-effort observability
-      }
-    };
-    const markRunNote = async (message: string, details?: Record<string, unknown>): Promise<void> => {
-      if (!runId || !this.runLedger) {
-        return;
-      }
-      try {
-        await this.runLedger.appendEvent(runId, "note", undefined, message, details);
-      } catch {
-        // best-effort observability
-      }
-    };
+    const { authSessionId, authPreference, queueMode, runStart, runId, markPhase, markRunNote } = session;
 
     await markPhase("normalize", "Inbound payload normalized", {
       source,
@@ -790,10 +763,7 @@ export class GatewayService {
       runFailure = error instanceof Error ? error.message : String(error);
       throw error;
     } finally {
-      if (runId && this.runLedger) {
-        await markPhase("dispatch", runFailure ? "Dispatch ended with failure" : "Dispatch completed");
-        await this.runLedger.completeRun(runId, runFailure ? "failed" : "completed", runFailure ?? undefined);
-      }
+      await session.completeRun(runFailure);
     }
   }
 
