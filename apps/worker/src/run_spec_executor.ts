@@ -1,13 +1,56 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { RunSpecV1 } from "../../../packages/contracts/src";
-import type { HybridLlmService } from "../../gateway-orchestrator/src/llm/hybrid_llm_service";
-import type { WebSearchService } from "../../gateway-orchestrator/src/builtins/web_search_service";
-import type { OutboundNotificationStore } from "../../gateway-orchestrator/src/notification_store";
-import type { RunSpecStore } from "../../gateway-orchestrator/src/builtins/run_spec_store";
 
 type AuthPreference = "auto" | "oauth" | "api_key";
 type WebProvider = "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto";
+type WebSearchServiceLike = {
+  search: (
+    query: string,
+    options: {
+      provider?: WebProvider;
+      authSessionId: string;
+      authPreference?: AuthPreference;
+    }
+  ) => Promise<{ provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata"; text: string } | null>;
+};
+type HybridLlmServiceLike = {
+  generateText: (
+    sessionId: string,
+    input: string,
+    options?: { authPreference?: AuthPreference }
+  ) => Promise<{ text: string } | null>;
+};
+type OutboundNotificationStoreLike = {
+  enqueue: (notification: {
+    sessionId: string;
+    kind?: "text" | "file";
+    text?: string;
+    filePath?: string;
+    fileName?: string;
+    mimeType?: string;
+    caption?: string;
+    jobId?: string;
+    status?: string;
+  }) => Promise<unknown>;
+};
+type RunSpecStoreLike = {
+  setStatus: (
+    runId: string,
+    status: "queued" | "awaiting_approval" | "running" | "completed" | "failed" | "cancelled",
+    options?: { message?: string; payload?: Record<string, unknown> }
+  ) => Promise<unknown>;
+  updateStep: (
+    runId: string,
+    stepId: string,
+    input: {
+      status: "pending" | "approval_required" | "approved" | "running" | "completed" | "failed" | "cancelled" | "skipped";
+      message?: string;
+      output?: Record<string, unknown>;
+      attempts?: number;
+    }
+  ) => Promise<unknown>;
+};
 
 export async function executeRunSpec(input: {
   runId: string;
@@ -17,10 +60,10 @@ export async function executeRunSpec(input: {
   runSpec: RunSpecV1;
   approvedStepIds: string[];
   workspaceDir: string;
-  webSearchService: WebSearchService;
-  llmService: HybridLlmService;
-  notificationStore: OutboundNotificationStore;
-  runSpecStore: RunSpecStore;
+  webSearchService: WebSearchServiceLike;
+  llmService: HybridLlmServiceLike;
+  notificationStore: OutboundNotificationStoreLike;
+  runSpecStore: RunSpecStoreLike;
   reportProgress: (progress: { message: string; step?: string; percent?: number }) => Promise<void>;
 }): Promise<{
   summary: string;
@@ -270,7 +313,7 @@ function resolveMimeType(format: "md" | "txt" | "doc"): string {
 }
 
 async function composeDocument(input: {
-  llmService: HybridLlmService;
+  llmService: HybridLlmServiceLike;
   authSessionId: string;
   authPreference: AuthPreference;
   query: string;
