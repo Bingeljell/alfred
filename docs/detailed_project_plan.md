@@ -197,10 +197,13 @@ Deliverables:
 - Long-task routing hardening: route `/web` and research-style long prompts into worker jobs with immediate acknowledgements, worker-side progress events, `status?` responses, and paged `#next` result delivery for large responses.
 - Planner-first routing: run an LLM intent planner for non-command chat turns with structured intent output, confidence-based clarification fallback, and deterministic policy enforcement.
 - Goal-runner path: planner can route a natural-language research-to-deliverable request into a single worker task (`web_to_file`) that executes search, synthesis, workspace write, and WhatsApp attachment delivery.
+- RunSpec v1 baseline: formalize long-task execution as immutable run specs (schema + store), with generic worker step execution and explicit step timeline persistence.
+- Step approval checkpoints: side-effecting RunSpec steps require per-step approval tokens and can continue sequentially across channels without re-planning.
 - System-prompt stack: load Alfred identity/capability/policy markdown files and inject them into planner context so behavior remains auditable and easy to tune without code changes.
 - Approval-mode policy: support `strict`/`balanced`/`relaxed` capability approval modes with `balanced` as default for early autonomy with bounded risk.
 - Planner trace observability: emit a planner decision trace event (intent/confidence/reason/chosen action) to the unified stream so `/ui` operators can diagnose routing decisions quickly.
 - Turn state-machine + run ledger: persist per-turn orchestration phases and immutable run-spec metadata, with run inspection APIs (`/v1/runs`, `/v1/runs/:runId`).
+- Run timeline operator UX: expose run list/detail controls in `/ui` and include RunSpec step status in `/v1/runs/:runId` responses for fast debugging.
 - Supervisor + fan-out baseline: support gateway-supervised parent/child web fan-out jobs, child budget controls, and supervisor status APIs (`/v1/supervisors`, `/v1/supervisors/:id`).
 - Worker concurrency baseline: allow configurable parallel workers (`WORKER_CONCURRENCY`) while keeping gateway as orchestration source of truth.
 - Memory V2 autonomy baseline: add checkpoint memory writes on decisions/task boundaries, class-aware retrieval (`fact`/`preference`/`todo`/`decision`), dedupe/day-cap guards, class-tagged compaction summaries, and checkpoint status API (`/v1/memory/checkpoints/status`).

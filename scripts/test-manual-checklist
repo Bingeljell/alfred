@@ -38,14 +38,15 @@ Web Console Manual Checklist
 31. Confirm `STREAM_PLANNER_TRACE` appears in Console Output for planner-routed turns and includes intent/confidence/chosen action metadata.
 32. Send `/policy` and confirm `approvalMode: balanced` (or your configured mode) is reported.
 33. Call `GET /v1/runs?sessionKey=<your-session>&limit=5` and confirm latest run includes phase events (`session`, `directives`, `route`, `persist`, `dispatch`) and run spec metadata.
-34. Call `GET /v1/runs/<runId>` for one run from step 33 and confirm final status/event (`completed` or `failed`) is present.
-35. Send `/supervise web --providers=searxng,openai compare stable diffusion options` and confirm response includes supervisor id + child count.
-36. Call `GET /v1/supervisors` and `GET /v1/supervisors/<id>` and verify child job statuses move from queued/running to terminal.
-37. Set `WORKER_CONCURRENCY=2`, restart worker, trigger two long web jobs, and confirm both progress concurrently in stream output.
-38. Send `/calendar add <future-iso> dentist appointment`, then `/calendar list`, and confirm the event appears with a stable id.
-39. Send `/calendar cancel <id>` and confirm the event is marked cancelled and no longer listed in `/calendar list`.
-40. Enable file-write policy (`ALFRED_FILE_WRITE_ENABLED=true`), write a workspace file (`/file write notes/share.md hello`), then run `/file send notes/share.md test attachment`; approve if prompted and confirm a file notification is queued/delivered.
-41. Send one natural-language request (WhatsApp or `/ui`) like: `Research the best stable diffusion models and send me a markdown doc`. Approve if prompted, then confirm progress updates arrive and a document attachment is delivered.
+34. Call `GET /v1/runs/<runId>` for one run from step 33 and confirm final status/event (`completed` or `failed`) and `runSpec.stepStates` are present.
+35. In `/ui`, use `Run Timeline` controls (`List Runs`, `Run Status`) and confirm step-level statuses render for a selected run id.
+36. Send `/supervise web --providers=searxng,openai compare stable diffusion options` and confirm response includes supervisor id + child count.
+37. Call `GET /v1/supervisors` and `GET /v1/supervisors/<id>` and verify child job statuses move from queued/running to terminal.
+38. Set `WORKER_CONCURRENCY=2`, restart worker, trigger two long web jobs, and confirm both progress concurrently in stream output.
+39. Send `/calendar add <future-iso> dentist appointment`, then `/calendar list`, and confirm the event appears with a stable id.
+40. Send `/calendar cancel <id>` and confirm the event is marked cancelled and no longer listed in `/calendar list`.
+41. Enable file-write policy (`ALFRED_FILE_WRITE_ENABLED=true`), write a workspace file (`/file write notes/share.md hello`), then run `/file send notes/share.md test attachment`; approve if prompted and confirm a file notification is queued/delivered.
+42. Send one natural-language request (WhatsApp or `/ui`) like: `Research the best stable diffusion models and send me a markdown doc`. Approve if prompted, then confirm progress updates arrive and a document attachment is delivered.
 
 Heartbeat Manual Checklist
 1. Open `/ui` and use the Heartbeat section.

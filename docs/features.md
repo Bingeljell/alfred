@@ -226,14 +226,17 @@ Acceptance criteria:
 - `/web ...` command queues a worker job instead of blocking the chat turn.
 - Research-like long requests are heuristically routed to worker with immediate “queued” acknowledgement.
 - Natural-language “research + send file/doc” requests can be routed as one worker run that writes a document and sends it as a WhatsApp attachment.
+- Research-to-file runs execute through a versioned RunSpec contract (`version=1`) with explicit step types (`web.search`, `doc.compose`, `file.write`, `channel.send_attachment`).
+- Side-effect checkpoints can pause at required RunSpec steps and require per-step approvals before continuation.
 - Worker emits progress events (`progress`, `running`, `succeeded`, `failed`) and gateway surfaces those updates in stream/chat channels.
 - User can ask `status?`/`progress` and receive latest active job state + last progress message.
 - Long results can be delivered in pages using `#next`/`next` via session-scoped paged response state.
 - Attachment routing honors approval policy (file side effects require approval when configured).
+- Run details endpoint (`GET /v1/runs/:runId`) includes RunSpec step timeline/status so operators can audit execution path.
 
 Testing:
-- Automated: unit coverage for routed web-search command behavior, planner attachment-routing decisions, progress query handling, `#next` paging, and paged store persistence.
-- Manual: trigger long research request, confirm immediate queue acknowledgement + progress updates, then use `status?` and `#next` until pages are exhausted; validate one-message research-to-file flow sends an attachment on WhatsApp.
+- Automated: unit coverage for routed web-search command behavior, planner attachment-routing decisions, step-approval sequencing, RunSpec store/executor behavior, progress query handling, `#next` paging, and paged store persistence.
+- Manual: trigger long research request, confirm immediate queue acknowledgement + progress updates, then use `status?` and `#next` until pages are exhausted; validate one-message research-to-file flow sends an attachment on WhatsApp and inspect RunSpec steps via `/v1/runs/:runId`.
 
 ## 13) Planner-first Orchestration + System Prompt Stack
 

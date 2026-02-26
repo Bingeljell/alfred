@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-26: Completed RunSpec v1 baseline for long-task orchestration: added schema/contracts, durable run-spec store, generic worker step executor, migrated `web_to_file` to RunSpec steps, added per-step approval checkpoint sequencing, exposed RunSpec details on `/v1/runs/:runId`, and added `/ui` run timeline controls.
 - 2026-02-26: Added calendar command flow (`/calendar add|list|cancel`) backed by reminder state, plus workspace-scoped file attachment delivery (`/file send`) over WhatsApp with approval support and `.md/.txt/.doc` guardrails.
 - 2026-02-26: Added planner-driven research-to-file orchestration (`web_to_file`) so a natural-language request can trigger search + document synthesis + workspace write + WhatsApp attachment delivery in one worker run, with approval gating for side effects.
 
