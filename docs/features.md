@@ -186,8 +186,8 @@ Acceptance criteria:
 - Approval is enabled by default for external capabilities.
 - Dedicated workspace root (`ALFRED_WORKSPACE_DIR`, default `./workspace/alfred`) is auto-created on startup and gitignored.
 - `/web <query>` command is available for web research and can be approval-gated.
-- Web search supports provider selection (`openai`, `brave`, `perplexity`, `auto`) via `/web --provider=<provider> ...`, with default provider configured by `ALFRED_WEB_SEARCH_PROVIDER`.
-- Brave and Perplexity providers support dedicated API credentials/config (`BRAVE_SEARCH_*`, `PERPLEXITY_*`) while OpenAI provider reuses current Codex/OpenAI chat path.
+- Web search supports provider selection (`searxng`, `openai`, `brave`, `perplexity`, `brightdata`, `auto`) via `/web --provider=<provider> ...`, with default provider configured by `ALFRED_WEB_SEARCH_PROVIDER` (default `searxng`).
+- SearXNG and BrightData providers support dedicated config (`SEARXNG_SEARCH_*`, `BRIGHTDATA_*`), with BrightData using API key + zone; Brave and Perplexity remain optional API providers (`BRAVE_SEARCH_*`, `PERPLEXITY_*`) while OpenAI provider reuses current Codex/OpenAI chat path.
 - Long-running `/web` execution emits an in-flight `running` notification message so operators see progress before final output is returned.
 - `/write <relative-path> <text>` writes only inside workspace, is disabled by default, and can be restricted to notes-only paths.
 - `/policy` command reports active capability policy state for manual verification.

@@ -166,11 +166,11 @@ export function createGatewayApp(
       search: (
         query: string,
         options: {
-          provider?: "openai" | "brave" | "perplexity" | "auto";
+          provider?: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto";
           authSessionId: string;
           authPreference?: "auto" | "oauth" | "api_key";
         }
-      ) => Promise<{ provider: "openai" | "brave" | "perplexity"; text: string } | null>;
+      ) => Promise<{ provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata"; text: string } | null>;
     };
     intentPlanner?: {
       plan: (
@@ -183,7 +183,7 @@ export function createGatewayApp(
         needsWorker: boolean;
         query?: string;
         question?: string;
-        provider?: "openai" | "brave" | "perplexity" | "auto";
+        provider?: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto";
         reason: string;
       }>;
     };
@@ -254,7 +254,7 @@ export function createGatewayApp(
       approvalDefault?: boolean;
       webSearchEnabled?: boolean;
       webSearchRequireApproval?: boolean;
-      webSearchProvider?: "openai" | "brave" | "perplexity" | "auto";
+      webSearchProvider?: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto";
       fileWriteEnabled?: boolean;
       fileWriteRequireApproval?: boolean;
       fileWriteNotesOnly?: boolean;

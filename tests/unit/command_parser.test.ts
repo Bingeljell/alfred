@@ -44,6 +44,16 @@ describe("parseCommand", () => {
       query: "latest ai news",
       provider: "brave"
     });
+    expect(parseCommand("/web --provider=searxng latest ai news")).toEqual({
+      kind: "web_search",
+      query: "latest ai news",
+      provider: "searxng"
+    });
+    expect(parseCommand("/web --provider=brightdata latest ai news")).toEqual({
+      kind: "web_search",
+      query: "latest ai news",
+      provider: "brightdata"
+    });
     expect(parseCommand("/write notes/today.md Remember to call mom")).toEqual({
       kind: "file_write",
       relativePath: "notes/today.md",
@@ -68,6 +78,22 @@ describe("parseCommand", () => {
       maxRetries: 2,
       timeBudgetMs: 90000,
       tokenBudget: 6000
+    });
+    expect(parseCommand("/supervise web --providers=searxng,openai compare sd models")).toEqual({
+      kind: "supervise_web",
+      query: "compare sd models",
+      providers: ["searxng", "openai"],
+      maxRetries: undefined,
+      timeBudgetMs: undefined,
+      tokenBudget: undefined
+    });
+    expect(parseCommand("/supervise web --providers=brightdata,searxng compare sd models")).toEqual({
+      kind: "supervise_web",
+      query: "compare sd models",
+      providers: ["brightdata", "searxng"],
+      maxRetries: undefined,
+      timeBudgetMs: undefined,
+      tokenBudget: undefined
     });
     expect(parseCommand("/supervisor status sup-123")).toEqual({ kind: "supervisor_status", id: "sup-123" });
   });

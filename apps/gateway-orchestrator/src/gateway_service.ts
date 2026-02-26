@@ -54,7 +54,7 @@ const DEFAULT_CAPABILITY_POLICY: CapabilityPolicy = {
   approvalDefault: true,
   webSearchEnabled: true,
   webSearchRequireApproval: true,
-  webSearchProvider: "openai",
+  webSearchProvider: "searxng",
   fileWriteEnabled: false,
   fileWriteRequireApproval: true,
   fileWriteNotesOnly: true,
@@ -71,7 +71,7 @@ export class GatewayService {
         authSessionId: string;
         authPreference?: LlmAuthPreference;
       }
-    ) => Promise<{ provider: "openai" | "brave" | "perplexity"; text: string } | null>;
+    ) => Promise<{ provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata"; text: string } | null>;
   };
 
   constructor(
@@ -104,7 +104,7 @@ export class GatewayService {
           authSessionId: string;
           authPreference?: LlmAuthPreference;
         }
-      ) => Promise<{ provider: "openai" | "brave" | "perplexity"; text: string } | null>;
+      ) => Promise<{ provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata"; text: string } | null>;
     },
     private readonly pagedResponseStore?: {
       popNext: (sessionId: string) => Promise<{ page: string; remaining: number } | null>;
@@ -958,8 +958,10 @@ export class GatewayService {
           return "Supervisor is not configured.";
         }
 
-        const initialProviders: Array<"openai" | "brave" | "perplexity"> =
-          command.providers && command.providers.length > 0 ? command.providers : ["openai", "brave", "perplexity"];
+        const initialProviders: Array<"searxng" | "openai" | "brave" | "perplexity" | "brightdata"> =
+          command.providers && command.providers.length > 0
+            ? command.providers
+            : ["searxng", "openai", "brave", "perplexity", "brightdata"];
         const providers = [...new Set(initialProviders)].slice(0, 6);
         if (providers.length === 0) {
           return "No valid providers were selected for supervision.";
@@ -1550,7 +1552,14 @@ export class GatewayService {
       return undefined;
     }
     const value = raw.trim().toLowerCase();
-    if (value === "openai" || value === "brave" || value === "perplexity" || value === "auto") {
+    if (
+      value === "searxng" ||
+      value === "openai" ||
+      value === "brave" ||
+      value === "perplexity" ||
+      value === "brightdata" ||
+      value === "auto"
+    ) {
       return value;
     }
     return undefined;

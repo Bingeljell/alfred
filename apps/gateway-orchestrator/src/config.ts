@@ -161,7 +161,7 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
-  ALFRED_WEB_SEARCH_PROVIDER: z.enum(["openai", "brave", "perplexity", "auto"]).optional().default("openai"),
+  ALFRED_WEB_SEARCH_PROVIDER: z.enum(["searxng", "openai", "brave", "perplexity", "brightdata", "auto"]).optional().default("searxng"),
   ALFRED_FILE_WRITE_ENABLED: z
     .string()
     .optional()
@@ -183,6 +183,36 @@ const EnvSchema = z.object({
     .transform((v) => (v ? Number(v) : 12000))
     .pipe(z.number().int().min(1000).max(60000)),
   BRAVE_SEARCH_MAX_RESULTS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 5))
+    .pipe(z.number().int().min(1).max(20)),
+  SEARXNG_SEARCH_URL: z.string().optional().default("http://127.0.0.1:8080/search"),
+  SEARXNG_SEARCH_TIMEOUT_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 12000))
+    .pipe(z.number().int().min(1000).max(60000)),
+  SEARXNG_SEARCH_MAX_RESULTS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 5))
+    .pipe(z.number().int().min(1).max(20)),
+  SEARXNG_SEARCH_LANGUAGE: z.string().optional().default("en"),
+  SEARXNG_SEARCH_SAFESEARCH: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 1))
+    .pipe(z.number().int().min(0).max(2)),
+  BRIGHTDATA_API_KEY: z.string().optional(),
+  BRIGHTDATA_SERP_URL: z.string().optional().default("https://api.brightdata.com/request"),
+  BRIGHTDATA_ZONE: z.string().optional(),
+  BRIGHTDATA_TIMEOUT_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 15000))
+    .pipe(z.number().int().min(1000).max(120000)),
+  BRIGHTDATA_MAX_RESULTS: z
     .string()
     .optional()
     .transform((v) => (v ? Number(v) : 5))
@@ -307,7 +337,7 @@ export type AppConfig = {
   alfredPlannerSystemFiles: string[];
   alfredWebSearchEnabled: boolean;
   alfredWebSearchRequireApproval: boolean;
-  alfredWebSearchProvider: "openai" | "brave" | "perplexity" | "auto";
+  alfredWebSearchProvider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto";
   alfredFileWriteEnabled: boolean;
   alfredFileWriteRequireApproval: boolean;
   alfredFileWriteNotesOnly: boolean;
@@ -316,6 +346,16 @@ export type AppConfig = {
   braveSearchUrl: string;
   braveSearchTimeoutMs: number;
   braveSearchMaxResults: number;
+  searxngSearchUrl: string;
+  searxngSearchTimeoutMs: number;
+  searxngSearchMaxResults: number;
+  searxngSearchLanguage: string;
+  searxngSearchSafeSearch: number;
+  brightDataApiKey?: string;
+  brightDataSerpUrl: string;
+  brightDataZone?: string;
+  brightDataTimeoutMs: number;
+  brightDataMaxResults: number;
   perplexityApiKey?: string;
   perplexitySearchUrl: string;
   perplexityModel: string;
@@ -418,6 +458,16 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     braveSearchUrl: parsed.BRAVE_SEARCH_URL,
     braveSearchTimeoutMs: parsed.BRAVE_SEARCH_TIMEOUT_MS,
     braveSearchMaxResults: parsed.BRAVE_SEARCH_MAX_RESULTS,
+    searxngSearchUrl: parsed.SEARXNG_SEARCH_URL,
+    searxngSearchTimeoutMs: parsed.SEARXNG_SEARCH_TIMEOUT_MS,
+    searxngSearchMaxResults: parsed.SEARXNG_SEARCH_MAX_RESULTS,
+    searxngSearchLanguage: parsed.SEARXNG_SEARCH_LANGUAGE.trim() || "en",
+    searxngSearchSafeSearch: parsed.SEARXNG_SEARCH_SAFESEARCH,
+    brightDataApiKey: parsed.BRIGHTDATA_API_KEY,
+    brightDataSerpUrl: parsed.BRIGHTDATA_SERP_URL,
+    brightDataZone: parsed.BRIGHTDATA_ZONE?.trim() || undefined,
+    brightDataTimeoutMs: parsed.BRIGHTDATA_TIMEOUT_MS,
+    brightDataMaxResults: parsed.BRIGHTDATA_MAX_RESULTS,
     perplexityApiKey: parsed.PERPLEXITY_API_KEY,
     perplexitySearchUrl: parsed.PERPLEXITY_SEARCH_URL,
     perplexityModel: parsed.PERPLEXITY_MODEL,

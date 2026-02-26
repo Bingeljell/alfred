@@ -243,6 +243,20 @@ async function main(): Promise<void> {
       timeoutMs: config.braveSearchTimeoutMs,
       maxResults: config.braveSearchMaxResults
     },
+    searxng: {
+      url: config.searxngSearchUrl,
+      timeoutMs: config.searxngSearchTimeoutMs,
+      maxResults: config.searxngSearchMaxResults,
+      language: config.searxngSearchLanguage,
+      safeSearch: config.searxngSearchSafeSearch
+    },
+    brightdata: {
+      apiKey: config.brightDataApiKey,
+      serpUrl: config.brightDataSerpUrl,
+      zone: config.brightDataZone,
+      timeoutMs: config.brightDataTimeoutMs,
+      maxResults: config.brightDataMaxResults
+    },
     perplexity: {
       apiKey: config.perplexityApiKey,
       url: config.perplexitySearchUrl,

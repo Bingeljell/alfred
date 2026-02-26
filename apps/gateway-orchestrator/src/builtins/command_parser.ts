@@ -13,11 +13,11 @@ export type ParsedCommand =
   | { kind: "auth_status" }
   | { kind: "auth_limits" }
   | { kind: "auth_disconnect" }
-  | { kind: "web_search"; query: string; provider?: "openai" | "brave" | "perplexity" }
+  | { kind: "web_search"; query: string; provider?: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" }
   | {
       kind: "supervise_web";
       query: string;
-      providers?: Array<"openai" | "brave" | "perplexity">;
+      providers?: Array<"searxng" | "openai" | "brave" | "perplexity" | "brightdata">;
       maxRetries?: number;
       timeBudgetMs?: number;
       tokenBudget?: number;
@@ -127,8 +127,14 @@ export function parseCommand(text: string): ParsedCommand | null {
 
   if (value.toLowerCase().startsWith("/web ")) {
     const payload = value.slice("/web ".length).trim();
-    const providerMatch = payload.match(/^--provider=(openai|brave|perplexity)\s+/i);
-    const provider = providerMatch?.[1]?.toLowerCase() as "openai" | "brave" | "perplexity" | undefined;
+    const providerMatch = payload.match(/^--provider=(searxng|openai|brave|perplexity|brightdata)\s+/i);
+    const provider = providerMatch?.[1]?.toLowerCase() as
+      | "searxng"
+      | "openai"
+      | "brave"
+      | "perplexity"
+      | "brightdata"
+      | undefined;
     const query = provider ? payload.slice(providerMatch?.[0]?.length ?? 0).trim() : payload;
     if (query) {
       return { kind: "web_search", query, provider };
@@ -138,7 +144,7 @@ export function parseCommand(text: string): ParsedCommand | null {
   if (value.toLowerCase().startsWith("/supervise web ")) {
     const payload = value.slice("/supervise web ".length).trim();
     const tokens = payload.split(/\s+/);
-    const providers: Array<"openai" | "brave" | "perplexity"> = [];
+    const providers: Array<"searxng" | "openai" | "brave" | "perplexity" | "brightdata"> = [];
     let maxRetries: number | undefined;
     let timeBudgetMs: number | undefined;
     let tokenBudget: number | undefined;
@@ -152,9 +158,9 @@ export function parseCommand(text: string): ParsedCommand | null {
           .slice("--providers=".length)
           .split(",")
           .map((item) => item.trim().toLowerCase())
-          .filter((item) => item === "openai" || item === "brave" || item === "perplexity") as Array<
-          "openai" | "brave" | "perplexity"
-        >;
+          .filter(
+            (item) => item === "searxng" || item === "openai" || item === "brave" || item === "perplexity" || item === "brightdata"
+          ) as Array<"searxng" | "openai" | "brave" | "perplexity" | "brightdata">;
         for (const provider of values) {
           if (!providers.includes(provider)) {
             providers.push(provider);

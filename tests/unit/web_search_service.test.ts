@@ -28,6 +28,44 @@ describe("WebSearchService", () => {
     expect(llm.generateText).toHaveBeenCalledTimes(1);
   });
 
+  it("uses searxng provider and formats top results", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [
+          {
+            title: "SearXNG Result",
+            url: "https://example.com/one",
+            content: "First snippet",
+            engines: ["duckduckgo", "google"]
+          }
+        ]
+      })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const service = new WebSearchService({
+      defaultProvider: "searxng",
+      searxng: {
+        url: "http://127.0.0.1:8080/search",
+        language: "en",
+        safeSearch: 1
+      }
+    });
+
+    const result = await service.search("openai updates", {
+      provider: "searxng",
+      authSessionId: "owner@s.whatsapp.net"
+    });
+
+    expect(result?.provider).toBe("searxng");
+    expect(result?.text).toContain("SearXNG web results");
+    expect(result?.text).toContain("SearXNG Result - https://example.com/one");
+    const [requestUrl] = fetchMock.mock.calls[0] as [URL];
+    expect(String(requestUrl)).toContain("q=openai+updates");
+    expect(String(requestUrl)).toContain("format=json");
+  });
+
   it("uses brave provider and formats top results", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -106,7 +144,47 @@ describe("WebSearchService", () => {
     expect(result?.text).toContain("https://perplexity.ai/source/1");
   });
 
-  it("falls back from openai to brave when openai is unavailable in auto mode", async () => {
+  it("uses brightdata provider and formats top results", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: {
+        get: () => "application/json"
+      },
+      json: async () => ({
+        results: [
+          {
+            title: "Bright result",
+            url: "https://example.com/bright",
+            snippet: "Bright snippet"
+          }
+        ]
+      })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const service = new WebSearchService({
+      defaultProvider: "brightdata",
+      brightdata: {
+        apiKey: "bright-key",
+        zone: "serp_zone",
+        serpUrl: "https://api.brightdata.com/request"
+      }
+    });
+
+    const result = await service.search("best local llm", {
+      provider: "brightdata",
+      authSessionId: "owner@s.whatsapp.net"
+    });
+
+    expect(result?.provider).toBe("brightdata");
+    expect(result?.text).toContain("BrightData web results");
+    expect(result?.text).toContain("Bright result - https://example.com/bright");
+    const [, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string>; body: string }];
+    expect(init.headers.authorization).toBe("Bearer bright-key");
+    expect(init.body).toContain("\"zone\":\"serp_zone\"");
+  });
+
+  it("falls back to brave when earlier auto providers are unavailable", async () => {
     const llm = {
       generateText: vi.fn().mockResolvedValue(null)
     };
@@ -142,6 +220,6 @@ describe("WebSearchService", () => {
     expect(result?.provider).toBe("brave");
     expect(result?.text).toContain("Fallback result");
     expect(llm.generateText).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

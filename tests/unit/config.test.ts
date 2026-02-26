@@ -44,7 +44,7 @@ describe("loadConfig", () => {
     ]);
     expect(config.alfredWebSearchEnabled).toBe(true);
     expect(config.alfredWebSearchRequireApproval).toBe(true);
-    expect(config.alfredWebSearchProvider).toBe("openai");
+    expect(config.alfredWebSearchProvider).toBe("searxng");
     expect(config.alfredFileWriteEnabled).toBe(false);
     expect(config.alfredFileWriteRequireApproval).toBe(true);
     expect(config.alfredFileWriteNotesOnly).toBe(true);
@@ -53,6 +53,16 @@ describe("loadConfig", () => {
     expect(config.braveSearchUrl).toBe("https://api.search.brave.com/res/v1/web/search");
     expect(config.braveSearchTimeoutMs).toBe(12000);
     expect(config.braveSearchMaxResults).toBe(5);
+    expect(config.searxngSearchUrl).toBe("http://127.0.0.1:8080/search");
+    expect(config.searxngSearchTimeoutMs).toBe(12000);
+    expect(config.searxngSearchMaxResults).toBe(5);
+    expect(config.searxngSearchLanguage).toBe("en");
+    expect(config.searxngSearchSafeSearch).toBe(1);
+    expect(config.brightDataApiKey).toBeUndefined();
+    expect(config.brightDataSerpUrl).toBe("https://api.brightdata.com/request");
+    expect(config.brightDataZone).toBeUndefined();
+    expect(config.brightDataTimeoutMs).toBe(15000);
+    expect(config.brightDataMaxResults).toBe(5);
     expect(config.perplexityApiKey).toBeUndefined();
     expect(config.perplexitySearchUrl).toBe("https://api.perplexity.ai/chat/completions");
     expect(config.perplexityModel).toBe("sonar");
@@ -121,6 +131,16 @@ describe("loadConfig", () => {
       BRAVE_SEARCH_URL: "https://brave.example/search",
       BRAVE_SEARCH_TIMEOUT_MS: "9000",
       BRAVE_SEARCH_MAX_RESULTS: "7",
+      SEARXNG_SEARCH_URL: "http://searxng.local/search",
+      SEARXNG_SEARCH_TIMEOUT_MS: "11000",
+      SEARXNG_SEARCH_MAX_RESULTS: "8",
+      SEARXNG_SEARCH_LANGUAGE: "fr",
+      SEARXNG_SEARCH_SAFESEARCH: "2",
+      BRIGHTDATA_API_KEY: "bright-key",
+      BRIGHTDATA_SERP_URL: "https://bright.example/request",
+      BRIGHTDATA_ZONE: "serp_zone",
+      BRIGHTDATA_TIMEOUT_MS: "17000",
+      BRIGHTDATA_MAX_RESULTS: "6",
       PERPLEXITY_API_KEY: "px-key",
       PERPLEXITY_SEARCH_URL: "https://perplexity.example/chat",
       PERPLEXITY_MODEL: "sonar-pro",
@@ -193,6 +213,16 @@ describe("loadConfig", () => {
     expect(config.braveSearchUrl).toBe("https://brave.example/search");
     expect(config.braveSearchTimeoutMs).toBe(9000);
     expect(config.braveSearchMaxResults).toBe(7);
+    expect(config.searxngSearchUrl).toBe("http://searxng.local/search");
+    expect(config.searxngSearchTimeoutMs).toBe(11000);
+    expect(config.searxngSearchMaxResults).toBe(8);
+    expect(config.searxngSearchLanguage).toBe("fr");
+    expect(config.searxngSearchSafeSearch).toBe(2);
+    expect(config.brightDataApiKey).toBe("bright-key");
+    expect(config.brightDataSerpUrl).toBe("https://bright.example/request");
+    expect(config.brightDataZone).toBe("serp_zone");
+    expect(config.brightDataTimeoutMs).toBe(17000);
+    expect(config.brightDataMaxResults).toBe(6);
     expect(config.perplexityApiKey).toBe("px-key");
     expect(config.perplexitySearchUrl).toBe("https://perplexity.example/chat");
     expect(config.perplexityModel).toBe("sonar-pro");

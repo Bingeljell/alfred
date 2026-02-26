@@ -78,6 +78,20 @@ async function main(): Promise<void> {
       timeoutMs: config.braveSearchTimeoutMs,
       maxResults: config.braveSearchMaxResults
     },
+    searxng: {
+      url: config.searxngSearchUrl,
+      timeoutMs: config.searxngSearchTimeoutMs,
+      maxResults: config.searxngSearchMaxResults,
+      language: config.searxngSearchLanguage,
+      safeSearch: config.searxngSearchSafeSearch
+    },
+    brightdata: {
+      apiKey: config.brightDataApiKey,
+      serpUrl: config.brightDataSerpUrl,
+      zone: config.brightDataZone,
+      timeoutMs: config.brightDataTimeoutMs,
+      maxResults: config.brightDataMaxResults
+    },
     perplexity: {
       apiKey: config.perplexityApiKey,
       url: config.perplexitySearchUrl,
@@ -164,7 +178,7 @@ async function main(): Promise<void> {
 
     let attempt = 0;
     let resultText = "";
-    let resultProvider: "openai" | "brave" | "perplexity" | null = null;
+    let resultProvider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | null = null;
     let lastError: unknown = null;
 
     while (attempt <= maxRetries) {
@@ -348,12 +362,14 @@ function normalizeAuthPreference(raw: unknown): "auto" | "oauth" | "api_key" {
   return "auto";
 }
 
-function normalizeWebSearchProvider(raw: unknown): "openai" | "brave" | "perplexity" | "auto" | null {
+function normalizeWebSearchProvider(
+  raw: unknown
+): "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto" | null {
   if (typeof raw !== "string") {
     return null;
   }
   const value = raw.trim().toLowerCase();
-  if (value === "openai" || value === "brave" || value === "perplexity" || value === "auto") {
+  if (value === "searxng" || value === "openai" || value === "brave" || value === "perplexity" || value === "brightdata" || value === "auto") {
     return value;
   }
   return null;

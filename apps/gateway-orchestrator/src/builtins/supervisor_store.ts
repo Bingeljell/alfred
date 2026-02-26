@@ -7,7 +7,7 @@ export type SupervisorStatus = "running" | "completed" | "failed" | "cancelled";
 
 export type SupervisorChild = {
   jobId: string;
-  provider: "openai" | "brave" | "perplexity";
+  provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata";
   status: SupervisorChildStatus;
   createdAt: string;
   updatedAt: string;
@@ -57,7 +57,7 @@ export class SupervisorStore {
     query: string;
     parentRunId?: string;
     children: Array<{
-      provider: "openai" | "brave" | "perplexity";
+      provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata";
       maxRetries: number;
       timeBudgetMs: number;
       tokenBudget: number;
@@ -91,7 +91,11 @@ export class SupervisorStore {
     return run;
   }
 
-  async assignChildJob(supervisorId: string, provider: "openai" | "brave" | "perplexity", jobId: string): Promise<SupervisorRun | null> {
+  async assignChildJob(
+    supervisorId: string,
+    provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata",
+    jobId: string
+  ): Promise<SupervisorRun | null> {
     const state = await this.read();
     const run = state.runs.find((item) => item.id === supervisorId);
     if (!run) {
