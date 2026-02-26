@@ -24,7 +24,7 @@ import type { MemoryCheckpointClass } from "./builtins/memory_checkpoint_service
 import type { RunSpecStore } from "./builtins/run_spec_store";
 import { runNormalizePhase } from "./orchestrator/normalize_phase";
 import { runSessionPhase } from "./orchestrator/session_phase";
-import type { LlmAuthPreference } from "./orchestrator/types";
+import type { LlmAuthPreference, PlannerDecision } from "./orchestrator/types";
 
 type ImplicitApprovalDecision = "approve_latest" | "reject_latest";
 type ExternalCapability = "web_search" | "file_write";
@@ -33,19 +33,6 @@ type RoutedLongTask = {
   query: string;
   provider?: WebSearchProvider;
   fileFormat?: "md" | "txt" | "doc";
-  reason: string;
-};
-
-type PlannerDecision = {
-  intent: "chat" | "web_research" | "status_query" | "clarify" | "command";
-  confidence: number;
-  needsWorker: boolean;
-  query?: string;
-  question?: string;
-  provider?: WebSearchProvider;
-  sendAttachment?: boolean;
-  fileFormat?: "md" | "txt" | "doc";
-  fileName?: string;
   reason: string;
 };
 

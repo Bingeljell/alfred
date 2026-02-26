@@ -1,5 +1,6 @@
 import type { InboundMessage } from "../../../../packages/contracts/src";
 import type { RunQueueMode } from "../builtins/run_ledger_store";
+import type { WebSearchProvider } from "../builtins/web_search_service";
 
 export type LlmAuthPreference = "auto" | "oauth" | "api_key";
 
@@ -53,3 +54,15 @@ export type ToolPolicySnapshot = {
   fileWriteNotesDir: string;
 };
 
+export type PlannerDecision = {
+  intent: "chat" | "web_research" | "status_query" | "clarify" | "command";
+  confidence: number;
+  needsWorker: boolean;
+  query?: string;
+  question?: string;
+  provider?: WebSearchProvider;
+  sendAttachment?: boolean;
+  fileFormat?: "md" | "txt" | "doc";
+  fileName?: string;
+  reason: string;
+};

@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-26: Unified orchestrator typing by moving planner/auth preference contracts into shared phase types and reusing them across gateway app + service composition paths to reduce duplicate type maintenance during ongoing refactor.
 - 2026-02-26: Refactored UI shell by extracting shared header/navigation rendering into a reusable helper used by `/ui`, `/ui/transcripts`, and `/ui/console`, reducing cross-page duplication while preserving behavior.
 - 2026-02-26: Extracted planner-primary routing (`clarify`, `status_query`, `web_research`) into a dedicated helper in gateway service, improving phase separation between planning decisions and downstream route/persist behavior.
 - 2026-02-26: Extracted pre-planner directive surface from gateway inbound flow into a dedicated helper covering paging, command execution, implicit approvals, and progress-query responses, keeping planner routing logic cleaner without behavior changes.

@@ -20,6 +20,7 @@ import { RunLedgerStore } from "./builtins/run_ledger_store";
 import { SupervisorStore } from "./builtins/supervisor_store";
 import { RunSpecStore } from "./builtins/run_spec_store";
 import type { MemoryCheckpointClass } from "./builtins/memory_checkpoint_service";
+import type { LlmAuthPreference, PlannerDecision } from "./orchestrator/types";
 
 const CancelParamsSchema = z.object({
   jobId: z.string().min(1)
@@ -162,7 +163,7 @@ export function createGatewayApp(
       generateText: (
         sessionId: string,
         input: string,
-        options?: { authPreference?: "auto" | "oauth" | "api_key" }
+        options?: { authPreference?: LlmAuthPreference }
       ) => Promise<{ text: string } | null>;
     };
     webSearchService?: {
@@ -171,7 +172,7 @@ export function createGatewayApp(
         options: {
           provider?: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto";
           authSessionId: string;
-          authPreference?: "auto" | "oauth" | "api_key";
+          authPreference?: LlmAuthPreference;
         }
       ) => Promise<{ provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata"; text: string } | null>;
     };
@@ -179,19 +180,8 @@ export function createGatewayApp(
       plan: (
         sessionId: string,
         message: string,
-        options?: { authPreference?: "auto" | "oauth" | "api_key"; hasActiveJob?: boolean }
-      ) => Promise<{
-        intent: "chat" | "web_research" | "status_query" | "clarify" | "command";
-        confidence: number;
-        needsWorker: boolean;
-        query?: string;
-        question?: string;
-        provider?: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto";
-        sendAttachment?: boolean;
-        fileFormat?: "md" | "txt" | "doc";
-        fileName?: string;
-        reason: string;
-      }>;
+        options?: { authPreference?: LlmAuthPreference; hasActiveJob?: boolean }
+      ) => Promise<PlannerDecision>;
     };
     codexAuthService?: CodexAuthService;
     codexLoginMode?: CodexLoginStartMode;
