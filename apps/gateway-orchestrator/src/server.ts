@@ -22,6 +22,7 @@ import { SystemPromptCatalog } from "./builtins/system_prompt_catalog";
 import { IntentPlanner } from "./builtins/intent_planner";
 import { RunLedgerStore } from "./builtins/run_ledger_store";
 import { SupervisorStore } from "./builtins/supervisor_store";
+import { RunSpecStore } from "./builtins/run_spec_store";
 import { IdentityProfileStore } from "./auth/identity_profile_store";
 import { OAuthService } from "./auth/oauth_service";
 import { OpenAIResponsesService } from "./llm/openai_responses_service";
@@ -52,6 +53,7 @@ async function main(): Promise<void> {
   const pagedResponseStore = new PagedResponseStore(config.stateDir);
   const runLedger = new RunLedgerStore(config.stateDir);
   const supervisorStore = new SupervisorStore(config.stateDir);
+  const runSpecStore = new RunSpecStore(config.stateDir);
   const identityProfileStore = new IdentityProfileStore(config.stateDir);
   const oauthService = new OAuthService({
     stateDir: config.stateDir,
@@ -212,6 +214,7 @@ async function main(): Promise<void> {
   await pagedResponseStore.ensureReady();
   await runLedger.ensureReady();
   await supervisorStore.ensureReady();
+  await runSpecStore.ensureReady();
   await heartbeatService.ensureReady();
   await memoryCompactionService.ensureReady();
   await memoryCheckpointService.ensureReady();
@@ -343,6 +346,7 @@ async function main(): Promise<void> {
     pagedResponseStore,
     runLedger,
     supervisorStore,
+    runSpecStore,
     whatsAppLiveManager: whatsAppLiveRuntime,
     capabilityPolicy: {
       workspaceDir: config.alfredWorkspaceDir,

@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { loadConfig, loadDotEnvFile } from "../../gateway-orchestrator/src/config";
 import { FileBackedQueueStore } from "../../gateway-orchestrator/src/local_queue_store";
 import { OutboundNotificationStore } from "../../gateway-orchestrator/src/notification_store";
@@ -14,7 +12,10 @@ import { CodexThreadStore } from "../../gateway-orchestrator/src/codex/thread_st
 import { CodexChatService } from "../../gateway-orchestrator/src/llm/codex_chat_service";
 import { PagedResponseStore } from "../../gateway-orchestrator/src/builtins/paged_response_store";
 import { SupervisorStore } from "../../gateway-orchestrator/src/builtins/supervisor_store";
+import { RunSpecStore } from "../../gateway-orchestrator/src/builtins/run_spec_store";
+import type { RunSpecV1 } from "../../../packages/contracts/src";
 import { startWorker } from "./worker";
+import { executeRunSpec } from "./run_spec_executor";
 
 async function main(): Promise<void> {
   loadDotEnvFile();
@@ -23,6 +24,7 @@ async function main(): Promise<void> {
   const notificationStore = new OutboundNotificationStore(config.stateDir);
   const pagedResponseStore = new PagedResponseStore(config.stateDir);
   const supervisorStore = new SupervisorStore(config.stateDir);
+  const runSpecStore = new RunSpecStore(config.stateDir);
   const oauthService = new OAuthService({
     stateDir: config.stateDir,
     publicBaseUrl: config.publicBaseUrl,
@@ -106,6 +108,7 @@ async function main(): Promise<void> {
   await notificationStore.ensureReady();
   await pagedResponseStore.ensureReady();
   await supervisorStore.ensureReady();
+  await runSpecStore.ensureReady();
   await oauthService.ensureReady();
   if (codexAuthService) {
     try {
@@ -125,6 +128,82 @@ async function main(): Promise<void> {
         ? job.payload.authSessionId.trim()
         : sessionId;
     const authPreference = normalizeAuthPreference(job.payload.authPreference);
+
+    if (taskType === "run_spec") {
+      const runSpec = parseRunSpec(job.payload.runSpec);
+      if (!runSpec) {
+        return {
+          summary: "run_spec_invalid_payload",
+          responseText: "RunSpec payload is missing or invalid."
+        };
+      }
+      const runId = typeof job.payload.runSpecRunId === "string" ? job.payload.runSpecRunId.trim() : "";
+      const approvedStepIds = Array.isArray(job.payload.approvedStepIds)
+        ? job.payload.approvedStepIds
+            .map((item) => String(item ?? "").trim())
+            .filter((item) => item.length > 0)
+        : [];
+
+      const effectiveRunId = runId || job.id;
+      await runSpecStore.put({
+        runId: effectiveRunId,
+        sessionId: sessionId || authSessionId,
+        spec: runSpec,
+        status: "running",
+        jobId: job.id,
+        approvedStepIds
+      });
+
+      return executeRunSpec({
+        runId: effectiveRunId,
+        sessionId: sessionId || authSessionId,
+        authSessionId: authSessionId || sessionId,
+        authPreference,
+        runSpec,
+        approvedStepIds,
+        workspaceDir: config.alfredWorkspaceDir,
+        webSearchService,
+        llmService,
+        notificationStore,
+        runSpecStore,
+        reportProgress: context.reportProgress
+      });
+    }
+
+    if (taskType === "web_to_file") {
+      const query = String(job.payload.query ?? "").trim();
+      const legacySpec = buildLegacyWebToFileRunSpec({
+        runId: job.id,
+        query,
+        provider: normalizeWebSearchProvider(job.payload.provider) ?? config.alfredWebSearchProvider,
+        fileFormat: normalizeAttachmentFormat(job.payload.fileFormat) ?? "md",
+        fileName: typeof job.payload.fileName === "string" ? job.payload.fileName : undefined,
+        sessionId
+      });
+      await runSpecStore.put({
+        runId: job.id,
+        sessionId: sessionId || authSessionId,
+        spec: legacySpec,
+        status: "running",
+        jobId: job.id,
+        approvedStepIds: legacySpec.steps.filter((step) => step.approval?.required !== true).map((step) => step.id)
+      });
+
+      return executeRunSpec({
+        runId: job.id,
+        sessionId: sessionId || authSessionId,
+        authSessionId: authSessionId || sessionId,
+        authPreference,
+        runSpec: legacySpec,
+        approvedStepIds: legacySpec.steps.map((step) => step.id),
+        workspaceDir: config.alfredWorkspaceDir,
+        webSearchService,
+        llmService,
+        notificationStore,
+        runSpecStore,
+        reportProgress: context.reportProgress
+      });
+    }
 
     if (taskType === "chat_turn") {
       const input = String(job.payload.text ?? "").trim();
@@ -152,7 +231,7 @@ async function main(): Promise<void> {
       };
     }
 
-    if (taskType !== "web_search" && taskType !== "web_to_file") {
+    if (taskType !== "web_search") {
       const action = String(job.payload.action ?? job.payload.text ?? job.type);
       return {
         summary: `processed:${action}`,
@@ -221,61 +300,6 @@ async function main(): Promise<void> {
       return {
         summary: "web_search_no_results",
         responseText: `No web search result is available for this query. Reason: ${reason}`
-      };
-    }
-
-    if (taskType === "web_to_file") {
-      const fileFormat = normalizeAttachmentFormat(job.payload.fileFormat) ?? "md";
-      const safeFileName = buildAttachmentFileName(job.payload.fileName, query, fileFormat);
-      const targetDir = path.resolve(config.alfredWorkspaceDir, "notes", "generated");
-      const targetPath = path.resolve(targetDir, safeFileName);
-      if (!(targetPath === targetDir || targetPath.startsWith(`${targetDir}${path.sep}`))) {
-        return {
-          summary: "web_to_file_invalid_path",
-          responseText: "Could not create output file due to invalid path policy."
-        };
-      }
-
-      await context.reportProgress({
-        step: "drafting",
-        message: `Drafting ${fileFormat.toUpperCase()} document...`
-      });
-      const attachmentText = await composeAttachmentText({
-        llmService,
-        authSessionId: authSessionId || sessionId,
-        authPreference,
-        query,
-        provider: resultProvider,
-        sourceText: resultText,
-        fileFormat
-      });
-      await fs.mkdir(targetDir, { recursive: true });
-      await fs.writeFile(targetPath, attachmentText.endsWith("\n") ? attachmentText : `${attachmentText}\n`, "utf8");
-
-      if (sessionId) {
-        await context.reportProgress({
-          step: "dispatch",
-          message: "Sending document attachment..."
-        });
-        await notificationStore.enqueue({
-          kind: "file",
-          sessionId,
-          filePath: targetPath,
-          fileName: safeFileName,
-          mimeType: attachmentMimeType(fileFormat),
-          caption: `Research doc: ${query.slice(0, 80)}`
-        });
-      }
-
-      const relativePath = path.relative(config.alfredWorkspaceDir, targetPath).replace(/\\/g, "/");
-      return {
-        summary: `web_to_file_${resultProvider}`,
-        responseText: `Research complete via ${resultProvider}. Wrote workspace/${relativePath} and sent it as an attachment.`,
-        provider: resultProvider,
-        retriesUsed: Math.max(0, attempt - 1),
-        tokenBudget,
-        filePath: relativePath,
-        fileFormat
       };
     }
 
@@ -443,6 +467,130 @@ function normalizeAttachmentFormat(raw: unknown): "md" | "txt" | "doc" | null {
   return null;
 }
 
+function parseRunSpec(raw: unknown): RunSpecV1 | null {
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const record = raw as Record<string, unknown>;
+  if (record.version !== 1) {
+    return null;
+  }
+  if (typeof record.id !== "string" || !record.id.trim()) {
+    return null;
+  }
+  if (typeof record.goal !== "string" || !record.goal.trim()) {
+    return null;
+  }
+  if (!Array.isArray(record.steps) || record.steps.length === 0) {
+    return null;
+  }
+
+  const steps = record.steps
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const step = item as Record<string, unknown>;
+      if (typeof step.id !== "string" || !step.id.trim()) {
+        return null;
+      }
+      if (typeof step.type !== "string" || !step.type.trim()) {
+        return null;
+      }
+      if (typeof step.name !== "string" || !step.name.trim()) {
+        return null;
+      }
+      const input = step.input && typeof step.input === "object" ? (step.input as Record<string, unknown>) : {};
+      const approval =
+        step.approval && typeof step.approval === "object"
+          ? {
+              required: Boolean((step.approval as Record<string, unknown>).required),
+              capability:
+                typeof (step.approval as Record<string, unknown>).capability === "string"
+                  ? String((step.approval as Record<string, unknown>).capability)
+                  : "file_write"
+            }
+          : undefined;
+      return {
+        id: step.id.trim(),
+        type: step.type.trim() as "web.search" | "doc.compose" | "file.write" | "channel.send_attachment",
+        name: step.name.trim(),
+        input,
+        approval
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+
+  if (steps.length === 0) {
+    return null;
+  }
+
+  return {
+    version: 1,
+    id: record.id.trim(),
+    goal: record.goal.trim(),
+    metadata: record.metadata && typeof record.metadata === "object" ? (record.metadata as Record<string, unknown>) : {},
+    steps
+  };
+}
+
+function buildLegacyWebToFileRunSpec(input: {
+  runId: string;
+  query: string;
+  provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto";
+  fileFormat: "md" | "txt" | "doc";
+  fileName?: string;
+  sessionId?: string;
+}): RunSpecV1 {
+  const safeFileName = buildAttachmentFileName(input.fileName, input.query, input.fileFormat);
+  return {
+    version: 1,
+    id: `legacy-${input.runId}`,
+    goal: `Research and send attachment for query: ${input.query}`,
+    metadata: {
+      migratedFrom: "web_to_file"
+    },
+    steps: [
+      {
+        id: "search",
+        type: "web.search",
+        name: "Web Search",
+        input: {
+          query: input.query,
+          provider: input.provider
+        }
+      },
+      {
+        id: "compose",
+        type: "doc.compose",
+        name: "Compose Document",
+        input: {
+          query: input.query,
+          fileFormat: input.fileFormat
+        }
+      },
+      {
+        id: "write",
+        type: "file.write",
+        name: "Write File",
+        input: {
+          fileFormat: input.fileFormat,
+          fileName: safeFileName
+        }
+      },
+      {
+        id: "send",
+        type: "channel.send_attachment",
+        name: "Send Attachment",
+        input: {
+          sessionId: input.sessionId,
+          caption: `Research doc: ${input.query.slice(0, 80)}`
+        }
+      }
+    ]
+  };
+}
+
 function buildAttachmentFileName(raw: unknown, query: string, fileFormat: "md" | "txt" | "doc"): string {
   if (typeof raw === "string" && raw.trim()) {
     const sanitized = raw
@@ -472,61 +620,6 @@ function ensureExtension(fileName: string, ext: "md" | "txt" | "doc"): string {
     return fileName;
   }
   return `${fileName}.${ext}`;
-}
-
-function attachmentMimeType(format: "md" | "txt" | "doc"): string {
-  if (format === "md") {
-    return "text/markdown";
-  }
-  if (format === "txt") {
-    return "text/plain";
-  }
-  return "application/msword";
-}
-
-async function composeAttachmentText(input: {
-  llmService: HybridLlmService;
-  authSessionId: string;
-  authPreference: "auto" | "oauth" | "api_key";
-  query: string;
-  provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata";
-  sourceText: string;
-  fileFormat: "md" | "txt" | "doc";
-}): Promise<string> {
-  const formatLabel = input.fileFormat === "md" ? "markdown" : input.fileFormat === "txt" ? "plain text" : "word-friendly plain text";
-  const prompt = [
-    "You are formatting research notes for delivery as a file attachment.",
-    `Output format: ${formatLabel}.`,
-    "Keep it concise and practical.",
-    "Include sections: Summary, Top options, Comparison, Sources.",
-    "Do not invent sources; only use what is provided.",
-    "",
-    `Query: ${input.query}`,
-    `Provider: ${input.provider}`,
-    "",
-    "Search results:",
-    input.sourceText
-  ].join("\n");
-
-  try {
-    const generated = await input.llmService.generateText(input.authSessionId, prompt, {
-      authPreference: input.authPreference
-    });
-    const text = generated?.text?.trim();
-    if (text) {
-      return text;
-    }
-  } catch {
-    // fall back to deterministic formatting
-  }
-
-  return [
-    `Research notes for: ${input.query}`,
-    `Source provider: ${input.provider}`,
-    "",
-    "Summary:",
-    input.sourceText.slice(0, 2400)
-  ].join("\n");
 }
 
 function paginateResponse(text: string, maxCharsPerPage: number, maxPages: number): string[] {

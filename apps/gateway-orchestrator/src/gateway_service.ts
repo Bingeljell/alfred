@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { InboundMessageSchema, JobCreateSchema } from "../../../packages/contracts/src";
+import { randomUUID } from "node:crypto";
+import { InboundMessageSchema, JobCreateSchema, RunSpecV1Schema } from "../../../packages/contracts/src";
+import type { RunSpecV1 } from "../../../packages/contracts/src";
 import { parseCommand, type ParsedCommand } from "./builtins/command_parser";
 import { ApprovalStore } from "./builtins/approval_store";
 import { NoteStore } from "./builtins/note_store";
@@ -19,6 +21,7 @@ import type { WebSearchProvider } from "./builtins/web_search_service";
 import type { RunQueueMode } from "./builtins/run_ledger_store";
 import type { SupervisorStore } from "./builtins/supervisor_store";
 import type { MemoryCheckpointClass } from "./builtins/memory_checkpoint_service";
+import type { RunSpecStore } from "./builtins/run_spec_store";
 
 type LlmAuthPreference = "auto" | "oauth" | "api_key";
 type ImplicitApprovalDecision = "approve_latest" | "reject_latest";
@@ -169,7 +172,11 @@ export class GatewayService {
         dedupeKey?: string;
         day?: string;
       }) => Promise<unknown>;
-    }
+    },
+    private readonly runSpecStore?: Pick<
+      RunSpecStore,
+      "put" | "get" | "grantStepApproval" | "appendEvent" | "setStatus" | "updateStep"
+    >
   ) {
     this.webSearchService = webSearchService;
     this.capabilityPolicy = {
@@ -460,27 +467,28 @@ export class GatewayService {
 
         if (plan?.intent === "web_research" && plan.needsWorker && plan.query?.trim()) {
           if (plan.sendAttachment) {
+            const runSpecRunId = runId ?? randomUUID();
+            const runSpec = this.buildWebToFileRunSpec({
+              runSpecRunId,
+              query: plan.query.trim(),
+              provider: plan.provider ?? this.capabilityPolicy.webSearchProvider,
+              fileFormat: plan.fileFormat ?? "md",
+              fileName: plan.fileName
+            });
             if (this.requiresApproval("file_write")) {
-              if (!this.approvalStore) {
-                return {
-                  accepted: true,
-                  mode: "chat",
-                  response: "Approvals are not configured."
-                };
-              }
-
-              const approval = await this.approvalStore.create(inbound.sessionId, "web_to_file_send", {
-                query: plan.query.trim(),
-                provider: plan.provider ?? this.capabilityPolicy.webSearchProvider,
+              const approvalResponse = await this.requestNextRunSpecApprovalIfNeeded({
+                sessionId: inbound.sessionId,
+                runSpecRunId,
+                runSpec,
+                approvedStepIds: [],
                 authSessionId,
                 authPreference,
-                fileFormat: plan.fileFormat ?? "md",
-                fileName: plan.fileName
+                reason: `planner_${plan.reason}`
               });
-              await recordPlannerTrace("request_approval_web_to_file_send", {
-                token: approval.token
-              });
-              const response = `Approval required for research-to-file send. Reply yes/no, or approve ${approval.token}`;
+              const response =
+                approvalResponse ??
+                "Approval flow is configured but no approval checkpoint was found for this run.";
+              await recordPlannerTrace("request_approval_web_to_file_send");
               await markPhase("persist", "Persisting planner approval request");
               await this.recordConversation(inbound.sessionId, "outbound", response, {
                 source: "gateway",
@@ -510,7 +518,8 @@ export class GatewayService {
               authPreference,
               reason: `planner_${plan.reason}`,
               fileFormat: plan.fileFormat ?? "md",
-              fileName: plan.fileName
+              fileName: plan.fileName,
+              runSpecRunId
             });
             await recordPlannerTrace("enqueue_worker_web_to_file", { jobId: job.id, taskType: "web_to_file" });
             await markRunNote("Planner delegated research-to-file to worker", { jobId: job.id, reason: plan.reason });
@@ -1371,27 +1380,30 @@ export class GatewayService {
     }
 
     if (routed.taskType === "web_to_file" && this.requiresApproval("file_write")) {
-      if (!this.approvalStore) {
+      const runSpecRunId = randomUUID();
+      const runSpec = this.buildWebToFileRunSpec({
+        runSpecRunId,
+        query: routed.query,
+        provider: routed.provider ?? this.capabilityPolicy.webSearchProvider,
+        fileFormat: routed.fileFormat ?? "md"
+      });
+      const approvalResponse = await this.requestNextRunSpecApprovalIfNeeded({
+        sessionId,
+        runSpecRunId,
+        runSpec,
+        approvedStepIds: [],
+        authSessionId,
+        authPreference,
+        reason: routed.reason
+      });
+      if (approvalResponse) {
         return {
           jobId: "",
           taskType: routed.taskType,
           reason: routed.reason,
-          response: "Approvals are not configured."
+          response: approvalResponse
         };
       }
-      const approval = await this.approvalStore.create(sessionId, "web_to_file_send", {
-        query: routed.query,
-        provider: routed.provider ?? this.capabilityPolicy.webSearchProvider,
-        authSessionId,
-        authPreference,
-        fileFormat: routed.fileFormat ?? "md"
-      });
-      return {
-        jobId: "",
-        taskType: routed.taskType,
-        reason: routed.reason,
-        response: `Approval required for research-to-file send. Reply yes/no, or approve ${approval.token}`
-      };
     }
 
     const job = await this.enqueueLongTaskJob(sessionId, {
@@ -1401,7 +1413,8 @@ export class GatewayService {
       authSessionId,
       authPreference,
       reason: routed.reason,
-      fileFormat: routed.fileFormat
+      fileFormat: routed.fileFormat,
+      runSpecRunId: routed.taskType === "web_to_file" ? randomUUID() : undefined
     });
 
     return {
@@ -1511,10 +1524,32 @@ export class GatewayService {
       reason: string;
       fileFormat?: "md" | "txt" | "doc";
       fileName?: string;
+      runSpecRunId?: string;
+      runSpecApprovedStepIds?: string[];
     }
   ) {
     if (this.pagedResponseStore) {
       await this.pagedResponseStore.clear(sessionId);
+    }
+
+    if (input.taskType === "web_to_file") {
+      const runSpecRunId = input.runSpecRunId ?? randomUUID();
+      const runSpec = this.buildWebToFileRunSpec({
+        runSpecRunId,
+        query: input.query,
+        provider: input.provider ?? this.capabilityPolicy.webSearchProvider,
+        fileFormat: input.fileFormat ?? "md",
+        fileName: input.fileName
+      });
+      const approvedStepIds = (input.runSpecApprovedStepIds ?? []).map((item) => item.trim()).filter((item) => item.length > 0);
+      return this.enqueueRunSpecJob(sessionId, {
+        runSpecRunId,
+        runSpec,
+        approvedStepIds,
+        authSessionId: input.authSessionId,
+        authPreference: input.authPreference,
+        reason: input.reason
+      });
     }
 
     const job = await this.store.createJob({
@@ -1526,13 +1561,188 @@ export class GatewayService {
         provider: input.provider ?? this.capabilityPolicy.webSearchProvider,
         authSessionId: input.authSessionId,
         authPreference: input.authPreference,
-        routeReason: input.reason,
-        fileFormat: input.fileFormat,
-        fileName: input.fileName
+        routeReason: input.reason
       },
       priority: 5
     });
     return job;
+  }
+
+  private async enqueueRunSpecJob(
+    sessionId: string,
+    input: {
+      runSpecRunId: string;
+      runSpec: RunSpecV1;
+      approvedStepIds: string[];
+      authSessionId: string;
+      authPreference: LlmAuthPreference;
+      reason: string;
+    }
+  ) {
+    const approvedStepIds = input.approvedStepIds.map((item) => item.trim()).filter((item) => item.length > 0);
+    const job = await this.store.createJob({
+      type: "stub_task",
+      payload: {
+        sessionId,
+        taskType: "run_spec",
+        runSpec: input.runSpec,
+        runSpecRunId: input.runSpecRunId,
+        approvedStepIds,
+        authSessionId: input.authSessionId,
+        authPreference: input.authPreference,
+        routeReason: input.reason
+      },
+      priority: 5
+    });
+    if (this.runSpecStore) {
+      await this.runSpecStore.put({
+        runId: input.runSpecRunId,
+        sessionId,
+        spec: input.runSpec,
+        status: "queued",
+        approvedStepIds,
+        jobId: job.id
+      });
+    }
+    return job;
+  }
+
+  private buildWebToFileRunSpec(input: {
+    runSpecRunId: string;
+    query: string;
+    provider: WebSearchProvider;
+    fileFormat: "md" | "txt" | "doc";
+    fileName?: string;
+  }): RunSpecV1 {
+    const safeBaseName =
+      this.normalizeAttachmentFileName(input.fileName) ??
+      this.normalizeAttachmentFileName(input.query.toLowerCase().replace(/[^a-z0-9]+/g, "_")) ??
+      `research_${new Date().toISOString().slice(0, 10)}`;
+    const fileName = this.ensureAttachmentExtension(safeBaseName, input.fileFormat);
+    const requireSideEffectApproval = this.requiresApproval("file_write");
+    return {
+      version: 1,
+      id: input.runSpecRunId,
+      goal: `Research and send attachment: ${input.query}`,
+      metadata: {
+        route: "web_to_file",
+        provider: input.provider
+      },
+      steps: [
+        {
+          id: "search",
+          type: "web.search",
+          name: "Web Search",
+          input: {
+            query: input.query,
+            provider: input.provider
+          }
+        },
+        {
+          id: "compose",
+          type: "doc.compose",
+          name: "Compose Document",
+          input: {
+            query: input.query,
+            fileFormat: input.fileFormat
+          }
+        },
+        {
+          id: "write",
+          type: "file.write",
+          name: "Write File",
+          input: {
+            fileFormat: input.fileFormat,
+            fileName
+          },
+          approval: {
+            required: requireSideEffectApproval,
+            capability: "file_write"
+          }
+        },
+        {
+          id: "send",
+          type: "channel.send_attachment",
+          name: "Send Attachment",
+          input: {
+            caption: `Research doc: ${input.query.slice(0, 80)}`
+          },
+          approval: {
+            required: requireSideEffectApproval,
+            capability: "file_write"
+          }
+        }
+      ]
+    };
+  }
+
+  private ensureAttachmentExtension(fileName: string, format: "md" | "txt" | "doc"): string {
+    const lower = fileName.toLowerCase();
+    if (lower.endsWith(`.${format}`)) {
+      return fileName;
+    }
+    return `${fileName}.${format}`;
+  }
+
+  private findNextRequiredRunSpecStep(runSpec: RunSpecV1, approvedStepIds: string[]): string | null {
+    const approved = new Set(approvedStepIds);
+    for (const step of runSpec.steps) {
+      if (step.approval?.required === true && !approved.has(step.id)) {
+        return step.id;
+      }
+    }
+    return null;
+  }
+
+  private async requestNextRunSpecApprovalIfNeeded(input: {
+    sessionId: string;
+    runSpecRunId: string;
+    runSpec: RunSpecV1;
+    approvedStepIds: string[];
+    authSessionId: string;
+    authPreference: LlmAuthPreference;
+    reason: string;
+  }): Promise<string | null> {
+    const nextStepId = this.findNextRequiredRunSpecStep(input.runSpec, input.approvedStepIds);
+    if (!nextStepId) {
+      return null;
+    }
+    if (!this.approvalStore) {
+      return "Approvals are not configured.";
+    }
+
+    const nextStep = input.runSpec.steps.find((step) => step.id === nextStepId);
+    const approval = await this.approvalStore.create(input.sessionId, "run_spec_step", {
+      runSpecRunId: input.runSpecRunId,
+      runSpec: input.runSpec,
+      approvedStepIds: input.approvedStepIds,
+      nextStepId,
+      authSessionId: input.authSessionId,
+      authPreference: input.authPreference,
+      reason: input.reason
+    });
+
+    if (this.runSpecStore) {
+      await this.runSpecStore.put({
+        runId: input.runSpecRunId,
+        sessionId: input.sessionId,
+        spec: input.runSpec,
+        status: "awaiting_approval",
+        approvedStepIds: input.approvedStepIds
+      });
+      await this.runSpecStore.appendEvent(input.runSpecRunId, {
+        type: "approval_requested",
+        stepId: nextStepId,
+        message: `Approval requested for ${nextStepId}`,
+        payload: { token: approval.token }
+      });
+      await this.runSpecStore.updateStep(input.runSpecRunId, nextStepId, {
+        status: "approval_required",
+        message: "Awaiting user approval"
+      });
+    }
+
+    return `Approval required for step '${nextStep?.name ?? nextStepId}'. Reply yes/no, or approve ${approval.token}`;
   }
 
   private async executeApprovedAction(
@@ -1614,6 +1824,63 @@ export class GatewayService {
         dedupeKey: `approval_execute:${channelSessionId}:web_to_file_send:${query.slice(0, 40)}`
       });
       return `Approved action executed: web_to_file_send (queued job ${job.id}).`;
+    }
+    if (approval.action === "run_spec_step") {
+      const runSpecParsed = RunSpecV1Schema.safeParse(approval.payload.runSpec);
+      if (!runSpecParsed.success) {
+        return "Approved action failed: run spec payload is invalid.";
+      }
+      const runSpec = runSpecParsed.data;
+      const runSpecRunId = String(approval.payload.runSpecRunId ?? runSpec.id ?? "").trim();
+      if (!runSpecRunId) {
+        return "Approved action failed: missing run spec id.";
+      }
+      const nextStepId = String(approval.payload.nextStepId ?? "").trim();
+      if (!nextStepId) {
+        return "Approved action failed: missing step id.";
+      }
+      const payloadApprovedStepIds = Array.isArray(approval.payload.approvedStepIds)
+        ? approval.payload.approvedStepIds
+            .map((item) => String(item ?? "").trim())
+            .filter((item) => item.length > 0)
+        : [];
+      const approvedStepIds = Array.from(new Set([...payloadApprovedStepIds, nextStepId]));
+      const targetAuthSessionId = String(approval.payload.authSessionId ?? authSessionId).trim() || authSessionId;
+      const requestedAuthPreference = this.normalizeAuthPreference(approval.payload.authPreference ?? authPreference);
+      const reason = String(approval.payload.reason ?? "approved_run_spec_step");
+      if (this.runSpecStore) {
+        await this.runSpecStore.grantStepApproval(runSpecRunId, nextStepId);
+      }
+
+      const pendingApproval = await this.requestNextRunSpecApprovalIfNeeded({
+        sessionId: channelSessionId,
+        runSpecRunId,
+        runSpec,
+        approvedStepIds,
+        authSessionId: targetAuthSessionId,
+        authPreference: requestedAuthPreference,
+        reason
+      });
+      if (pendingApproval) {
+        return `Step '${nextStepId}' approved. ${pendingApproval}`;
+      }
+
+      const job = await this.enqueueRunSpecJob(channelSessionId, {
+        runSpecRunId,
+        runSpec,
+        approvedStepIds,
+        authSessionId: targetAuthSessionId,
+        authPreference: requestedAuthPreference,
+        reason
+      });
+      await this.recordMemoryCheckpoint(channelSessionId, {
+        class: "decision",
+        source: "approval_execute",
+        summary: `Approved run_spec_step action (${nextStepId})`,
+        details: runSpecRunId,
+        dedupeKey: `approval_execute:${channelSessionId}:run_spec_step:${runSpecRunId}:${nextStepId}`
+      });
+      return `Step '${nextStepId}' approved. Run queued as job ${job.id}.`;
     }
     if (approval.action === "file_write") {
       if (!this.capabilityPolicy.fileWriteEnabled) {

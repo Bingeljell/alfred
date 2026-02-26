@@ -16,6 +16,7 @@ import { ConversationStore } from "./builtins/conversation_store";
 import { IdentityProfileStore } from "./auth/identity_profile_store";
 import { RunLedgerStore } from "./builtins/run_ledger_store";
 import { SupervisorStore } from "./builtins/supervisor_store";
+import { RunSpecStore } from "./builtins/run_spec_store";
 import type { MemoryCheckpointClass } from "./builtins/memory_checkpoint_service";
 
 const CancelParamsSchema = z.object({
@@ -197,6 +198,7 @@ export function createGatewayApp(
     identityProfileStore?: IdentityProfileStore;
     runLedger?: RunLedgerStore;
     supervisorStore?: SupervisorStore;
+    runSpecStore?: Pick<RunSpecStore, "get" | "put" | "grantStepApproval" | "appendEvent" | "setStatus" | "updateStep">;
     whatsAppLiveManager?: {
       status: () => unknown | Promise<unknown>;
       connect: () => Promise<unknown>;
@@ -288,7 +290,8 @@ export function createGatewayApp(
     options?.intentPlanner,
     options?.runLedger,
     options?.supervisorStore,
-    options?.memoryCheckpointService
+    options?.memoryCheckpointService,
+    options?.runSpecStore
   );
   const dedupeStore = options?.dedupeStore ?? new MessageDedupeStore(process.cwd());
   const memoryService = options?.memoryService;
@@ -302,6 +305,7 @@ export function createGatewayApp(
   const identityProfileStore = options?.identityProfileStore;
   const runLedger = options?.runLedger;
   const supervisorStore = options?.supervisorStore;
+  const runSpecStore = options?.runSpecStore;
   const baileysInboundToken = options?.baileysInboundToken?.trim() ? options.baileysInboundToken.trim() : undefined;
   void dedupeStore.ensureReady();
   app.use(express.json());
@@ -420,7 +424,11 @@ export function createGatewayApp(
       res.status(404).json({ error: "run_not_found" });
       return;
     }
-    res.status(200).json(run);
+    const runSpec = runSpecStore ? await runSpecStore.get(req.params.runId) : null;
+    res.status(200).json({
+      ...run,
+      runSpec
+    });
   });
 
   app.get("/v1/supervisors", async (req, res) => {
