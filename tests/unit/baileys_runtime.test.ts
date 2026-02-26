@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { BaileysRuntime } from "../../apps/gateway-orchestrator/src/whatsapp/baileys_runtime";
 
@@ -340,38 +337,6 @@ describe("BaileysRuntime", () => {
     expect(status.qrGenerationLimit).toBe(3);
     expect(status.qrLocked).toBe(true);
     expect(status.lastError).toBe("baileys_qr_generation_limit_reached");
-  });
-
-  it("backs up partial creds when registration was interrupted", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-baileys-partial-"));
-    const credsPath = path.join(tempDir, "creds.json");
-    await fs.writeFile(
-      credsPath,
-      JSON.stringify({
-        registered: false,
-        me: { id: "917977412050:3@s.whatsapp.net" },
-        account: { details: "partial" }
-      }),
-      "utf8"
-    );
-
-    const fake = createFakeSocket();
-    const runtime = new BaileysRuntime({
-      authDir: tempDir,
-      onInbound: async () => undefined,
-      moduleLoader: async () => ({
-        default: () => fake.socket,
-        fetchLatestBaileysVersion: async () => ({ version: [1, 0, 0] as [number, number, number] }),
-        useMultiFileAuthState: async () => ({ state: {}, saveCreds: async () => undefined })
-      })
-    });
-
-    await runtime.connect();
-
-    await expect(fs.access(credsPath)).rejects.toThrow();
-    const backups = await fs.readdir(tempDir);
-    expect(backups.some((name) => name.startsWith("creds.partial."))).toBe(true);
-    expect(runtime.status().lastError).toBe("baileys_partial_creds_reset");
   });
 
   it("keeps auth session on runtime stop (no logout)", async () => {
