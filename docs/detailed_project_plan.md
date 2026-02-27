@@ -4,6 +4,8 @@
 
 Build a WhatsApp-first personal agent that runs on a single self-hosted machine (local dev, then low-cost VM/edge), executes real tasks through external skills, and provides auditable, secure behavior.
 
+Agentic direction is locked in `docs/agentic_vision.md`: Alfred should primarily execute via planner-selected tools from natural language goals, with command surfaces treated as operator/debug fallback.
+
 ## Architectural Decisions (Locked)
 
 - Runtime: TypeScript/Node for v1, Go review in v2/v3.
@@ -14,6 +16,9 @@ Build a WhatsApp-first personal agent that runs on a single self-hosted machine 
   - worker is the execution plane for long/background tasks
   - hybrid planning handshake: worker may propose plans, but gateway remains authoritative and locks execution via run specs
   - do not collapse these roles in v1; evolve toward multi-worker/subagent fan-out under gateway supervision
+- Execution strategy:
+  - user intent is primarily natural language -> planner -> tool calls
+  - slash commands are retained for deterministic operator fallback and debugging, not as the primary end-user interaction mode
 - Execution lanes:
   - chat lane: per-user serialized turns
   - job lane: async queued jobs for long-running work

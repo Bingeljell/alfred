@@ -4,6 +4,9 @@
 
 Deliver a WhatsApp-first self-hosted personal agent that can complete practical tasks safely, with auditable execution and strong memory recall.
 
+Design constraint:
+- Alfred is agent-first and tool-mediated (`docs/agentic_vision.md`): natural-language goals should flow through planner + tool execution; command endpoints are secondary/operator-oriented.
+
 ## MVP Features (v1)
 
 ## 1) Persistent Gateway + Conversational Orchestration
