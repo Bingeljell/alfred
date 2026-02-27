@@ -6,6 +6,7 @@ Build a WhatsApp-first personal agent that runs on a single self-hosted machine 
 
 Agentic direction is locked in `docs/agentic_vision.md`: Alfred should primarily execute via planner-selected tools from natural language goals, with command surfaces treated as operator/debug fallback.
 Channel-control-plane direction is locked in `docs/channel_control_plane_architecture.md`: channels are thin input lanes; gateway owns normalization/planning/policy/routing/persistence.
+Architecture decision record: `docs/adr/0001-gateway-control-plane-and-agentic-runtime.md`.
 
 ## Architectural Decisions (Locked)
 

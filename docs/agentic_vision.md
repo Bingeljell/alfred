@@ -5,6 +5,7 @@
 Alfred is an **agentic orchestrator**, not a form-based SaaS command app.
 
 Channel adapters are input/output lanes only. Gateway is the only orchestration control plane (`docs/channel_control_plane_architecture.md`).
+This direction is locked via ADR: `docs/adr/0001-gateway-control-plane-and-agentic-runtime.md`.
 
 - The user states goals in natural language.
 - Alfred clarifies intent, constraints, and success criteria.
