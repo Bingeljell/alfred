@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-27: Hardened worker Codex bootstrap with `ensureWorkerCodexRuntime` so failed Codex auth initialization now cleanly drops Codex chat runtime before hybrid LLM construction, preventing stale Codex handles from being retained in worker execution paths.
 - 2026-02-27: Extracted root/UI/health handlers into `registerCoreRoutes` (`apps/gateway-orchestrator/src/routes/core_routes.ts`), leaving `createGatewayApp` focused on composing route modules and dependency wiring.
 - 2026-02-27: Extracted heartbeat API handlers into `registerHeartbeatRoutes` (`apps/gateway-orchestrator/src/routes/heartbeat_routes.ts`) so heartbeat config/run validation and route behavior are maintained as a separate composition unit.
 - 2026-02-27: Extracted identity/inbound/WhatsApp live/jobs APIs into `registerChannelRoutes` (`apps/gateway-orchestrator/src/routes/channel_routes.ts`), preserving existing Baileys inbound authorization, QR status rendering, and async job response semantics while reducing route density in `createGatewayApp`.

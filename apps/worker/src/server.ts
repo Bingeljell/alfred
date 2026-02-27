@@ -16,6 +16,7 @@ import { RunSpecStore } from "../../gateway-orchestrator/src/builtins/run_spec_s
 import { startWorker } from "./worker";
 import { createWorkerProcessor } from "./execution/processor";
 import { createWorkerStatusHandler } from "./execution/status_handler";
+import { ensureWorkerCodexRuntime } from "./runtime/codex_runtime";
 
 async function main(): Promise<void> {
   loadDotEnvFile();
@@ -69,6 +70,19 @@ async function main(): Promise<void> {
     });
   }
 
+  await store.ensureReady();
+  await notificationStore.ensureReady();
+  await pagedResponseStore.ensureReady();
+  await supervisorStore.ensureReady();
+  await runSpecStore.ensureReady();
+  await oauthService.ensureReady();
+  const ensuredCodex = await ensureWorkerCodexRuntime({
+    auth: codexAuthService,
+    chat: codexChatService
+  });
+  codexAuthService = ensuredCodex.auth;
+  codexChatService = ensuredCodex.chat;
+
   const llmService = new HybridLlmService({
     codex: codexChatService,
     responses: responsesService
@@ -103,22 +117,6 @@ async function main(): Promise<void> {
       timeoutMs: config.perplexityTimeoutMs
     }
   });
-
-  await store.ensureReady();
-  await notificationStore.ensureReady();
-  await pagedResponseStore.ensureReady();
-  await supervisorStore.ensureReady();
-  await runSpecStore.ensureReady();
-  await oauthService.ensureReady();
-  if (codexAuthService) {
-    try {
-      await codexAuthService.ensureReady();
-    } catch {
-      await codexAuthService.stop();
-      codexAuthService = undefined;
-      codexChatService = undefined;
-    }
-  }
   const processor = createWorkerProcessor({
     config: {
       alfredWorkspaceDir: config.alfredWorkspaceDir,
