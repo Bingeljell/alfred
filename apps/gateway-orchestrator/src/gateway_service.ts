@@ -269,7 +269,7 @@ export class GatewayService {
       await markPhase("directives", "Resolving directives and command surface");
 
       if (inbound.requestJob) {
-        return this.handleExplicitJobRequest({
+        return await this.handleExplicitJobRequest({
           inbound,
           runId,
           markPhase,
@@ -348,134 +348,18 @@ export class GatewayService {
           return primaryPlannerRoute;
         }
 
-        const command = parseCommand(inbound.text);
-        if (command) {
-          await markPhase("route", "Routing command execution", { command: command.kind });
-          await recordPlannerTrace("execute_command", { command: command.kind });
-          const response = await this.executeCommand(inbound.sessionId, command, authSessionId, authPreference);
-          await markPhase("persist", "Persisting command response", { command: command.kind });
-          await this.recordConversation(inbound.sessionId, "outbound", response, {
-            source: "gateway",
-            channel: "internal",
-            kind: "command",
-            metadata: {
-              authSessionId,
-              runId
-            }
-          });
-          return {
-            accepted: true,
-            mode: "chat",
-            response
-          };
-        }
-
-        const implicitApproval = this.parseImplicitApprovalDecision(inbound.text);
-        if (implicitApproval) {
-          const decisionResult = await this.executeImplicitApprovalDecision(
-            inbound.sessionId,
-            implicitApproval,
-            authSessionId,
-            authPreference
-          );
-          if (decisionResult.handled) {
-            await markPhase("route", "Routing implicit approval decision", { decision: implicitApproval });
-            await recordPlannerTrace("resolve_approval_decision", { decision: implicitApproval });
-            await markPhase("persist", "Persisting implicit approval response");
-            await this.recordConversation(inbound.sessionId, "outbound", decisionResult.response, {
-              source: "gateway",
-              channel: "internal",
-              kind: "command",
-              metadata: {
-                authSessionId,
-                runId
-              }
-            });
-            return {
-              accepted: true,
-              mode: "chat",
-              response: decisionResult.response
-            };
-          }
-        }
-
-        const progressStatus = await this.answerProgressQuery(inbound.sessionId, inbound.text);
-        if (progressStatus) {
-          await markPhase("route", "Routing progress-query fallback");
-          await recordPlannerTrace("reply_progress_status_fallback");
-          await markPhase("persist", "Persisting progress fallback response");
-          await this.recordConversation(inbound.sessionId, "outbound", progressStatus, {
-            source: "gateway",
-            channel: "internal",
-            kind: "job",
-            metadata: {
-              authSessionId,
-              runId,
-              progressQuery: true
-            }
-          });
-          return {
-            accepted: true,
-            mode: "chat",
-            response: progressStatus
-          };
-        }
-
-        const routed = await this.routeLongTaskIfNeeded(inbound.sessionId, inbound.text, authSessionId, authPreference);
-        if (routed) {
-          const routedToWorker = Boolean(routed.jobId);
-          await markPhase("route", routedToWorker ? "Routing heuristic long task to worker" : "Routing heuristic approval request", {
-            taskType: routed.taskType,
-            reason: routed.reason
-          });
-          await recordPlannerTrace(routedToWorker ? "enqueue_heuristic_long_task" : "request_approval_heuristic_long_task", {
-            jobId: routed.jobId || undefined,
-            taskType: routed.taskType
-          });
-          await markRunNote(routedToWorker ? "Heuristic delegation to worker" : "Heuristic approval requested", {
-            jobId: routed.jobId || undefined,
-            reason: routed.reason
-          });
-          await markPhase("persist", "Persisting heuristic worker delegation response");
-          await this.recordConversation(inbound.sessionId, "outbound", routed.response, {
-            source: "gateway",
-            channel: "internal",
-            kind: routedToWorker ? "job" : "command",
-            metadata: {
-              authSessionId,
-              runId,
-              routedTaskType: routed.taskType,
-              reason: routed.reason,
-              jobId: routed.jobId || undefined
-            }
-          });
-          return {
-            accepted: true,
-            mode: routedToWorker ? "async-job" : "chat",
-            response: routed.response,
-            jobId: routed.jobId || undefined
-          };
-        }
-
-        await markPhase("route", "Running local chat turn");
-        await recordPlannerTrace("run_chat_turn");
-        const response = await this.executeChatTurn(authSessionId, inbound.text, authPreference);
-        await markPhase("persist", "Persisting chat response");
-        await this.recordConversation(inbound.sessionId, "outbound", response, {
-          source: "gateway",
-          channel: "internal",
-          kind: "chat",
-          metadata: {
-            authSessionId,
-            runId,
-            authPreference
-          }
+        return await this.handlePlannerFallbackRoutes({
+          inbound: {
+            sessionId: inbound.sessionId,
+            text: inbound.text
+          },
+          runId,
+          authSessionId,
+          authPreference,
+          markPhase,
+          markRunNote,
+          recordPlannerTrace
         });
-        return {
-          accepted: true,
-          mode: "chat",
-          response
-        };
       }
 
       await markPhase("persist", "No inbound chat text received");
@@ -887,6 +771,154 @@ export class GatewayService {
     }
 
     return null;
+  }
+
+  private async handlePlannerFallbackRoutes(input: {
+    inbound: { sessionId: string; text: string };
+    runId?: string;
+    authSessionId: string;
+    authPreference: LlmAuthPreference;
+    markPhase: (
+      phase: "normalize" | "session" | "directives" | "plan" | "policy" | "route" | "persist" | "dispatch",
+      message?: string,
+      details?: Record<string, unknown>
+    ) => Promise<void>;
+    markRunNote: (message: string, details?: Record<string, unknown>) => Promise<void>;
+    recordPlannerTrace: (chosenAction: string, extra?: Record<string, unknown>) => Promise<void>;
+  }): Promise<InboundHandleResult> {
+    const command = parseCommand(input.inbound.text);
+    if (command) {
+      await input.markPhase("route", "Routing command execution", { command: command.kind });
+      await input.recordPlannerTrace("execute_command", { command: command.kind });
+      const response = await this.executeCommand(input.inbound.sessionId, command, input.authSessionId, input.authPreference);
+      await input.markPhase("persist", "Persisting command response", { command: command.kind });
+      await this.recordConversation(input.inbound.sessionId, "outbound", response, {
+        source: "gateway",
+        channel: "internal",
+        kind: "command",
+        metadata: {
+          authSessionId: input.authSessionId,
+          runId: input.runId
+        }
+      });
+      return {
+        accepted: true,
+        mode: "chat",
+        response
+      };
+    }
+
+    const implicitApproval = this.parseImplicitApprovalDecision(input.inbound.text);
+    if (implicitApproval) {
+      const decisionResult = await this.executeImplicitApprovalDecision(
+        input.inbound.sessionId,
+        implicitApproval,
+        input.authSessionId,
+        input.authPreference
+      );
+      if (decisionResult.handled) {
+        await input.markPhase("route", "Routing implicit approval decision", { decision: implicitApproval });
+        await input.recordPlannerTrace("resolve_approval_decision", { decision: implicitApproval });
+        await input.markPhase("persist", "Persisting implicit approval response");
+        await this.recordConversation(input.inbound.sessionId, "outbound", decisionResult.response, {
+          source: "gateway",
+          channel: "internal",
+          kind: "command",
+          metadata: {
+            authSessionId: input.authSessionId,
+            runId: input.runId
+          }
+        });
+        return {
+          accepted: true,
+          mode: "chat",
+          response: decisionResult.response
+        };
+      }
+    }
+
+    const progressStatus = await this.answerProgressQuery(input.inbound.sessionId, input.inbound.text);
+    if (progressStatus) {
+      await input.markPhase("route", "Routing progress-query fallback");
+      await input.recordPlannerTrace("reply_progress_status_fallback");
+      await input.markPhase("persist", "Persisting progress fallback response");
+      await this.recordConversation(input.inbound.sessionId, "outbound", progressStatus, {
+        source: "gateway",
+        channel: "internal",
+        kind: "job",
+        metadata: {
+          authSessionId: input.authSessionId,
+          runId: input.runId,
+          progressQuery: true
+        }
+      });
+      return {
+        accepted: true,
+        mode: "chat",
+        response: progressStatus
+      };
+    }
+
+    const routed = await this.routeLongTaskIfNeeded(
+      input.inbound.sessionId,
+      input.inbound.text,
+      input.authSessionId,
+      input.authPreference
+    );
+    if (routed) {
+      const routedToWorker = Boolean(routed.jobId);
+      await input.markPhase("route", routedToWorker ? "Routing heuristic long task to worker" : "Routing heuristic approval request", {
+        taskType: routed.taskType,
+        reason: routed.reason
+      });
+      await input.recordPlannerTrace(routedToWorker ? "enqueue_heuristic_long_task" : "request_approval_heuristic_long_task", {
+        jobId: routed.jobId || undefined,
+        taskType: routed.taskType
+      });
+      await input.markRunNote(routedToWorker ? "Heuristic delegation to worker" : "Heuristic approval requested", {
+        jobId: routed.jobId || undefined,
+        reason: routed.reason
+      });
+      await input.markPhase("persist", "Persisting heuristic worker delegation response");
+      await this.recordConversation(input.inbound.sessionId, "outbound", routed.response, {
+        source: "gateway",
+        channel: "internal",
+        kind: routedToWorker ? "job" : "command",
+        metadata: {
+          authSessionId: input.authSessionId,
+          runId: input.runId,
+          routedTaskType: routed.taskType,
+          reason: routed.reason,
+          jobId: routed.jobId || undefined
+        }
+      });
+      return {
+        accepted: true,
+        mode: routedToWorker ? "async-job" : "chat",
+        response: routed.response,
+        jobId: routed.jobId || undefined
+      };
+    }
+
+    await input.markPhase("route", "Running local chat turn");
+    await input.recordPlannerTrace("run_chat_turn");
+    const response = await this.executeChatTurn(input.authSessionId, input.inbound.text, input.authPreference);
+    await input.markPhase("persist", "Persisting chat response");
+    await this.recordConversation(input.inbound.sessionId, "outbound", response, {
+      source: "gateway",
+      channel: "internal",
+      kind: "chat",
+      metadata: {
+        authSessionId: input.authSessionId,
+        runId: input.runId,
+        authPreference: input.authPreference
+      }
+    });
+    return {
+      accepted: true,
+      mode: "chat",
+      response
+    };
   }
 
   async getJob(jobId: string) {
