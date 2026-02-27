@@ -248,4 +248,51 @@ describe("WebSearchService", () => {
     expect(llm.generateText).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(0);
   });
+
+  it("falls through from timed-out openai auto search to searxng", async () => {
+    const llm = {
+      generateText: vi.fn().mockImplementation(
+        () =>
+          new Promise<null>(() => {
+            // Simulate a hanging OpenAI/Codex web-research turn.
+          })
+      )
+    };
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        results: [
+          {
+            title: "SearX fallback result",
+            url: "https://example.com/fallback",
+            content: "Fallback snippet from searxng",
+            engines: ["duckduckgo"]
+          }
+        ]
+      })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const service = new WebSearchService({
+      defaultProvider: "auto",
+      llmService: llm,
+      openai: {
+        timeoutMs: 5
+      },
+      searxng: {
+        url: "http://127.0.0.1:8080/search"
+      }
+    });
+
+    const result = await service.search("agent orchestration fallback", {
+      provider: "auto",
+      authSessionId: "owner@s.whatsapp.net",
+      authPreference: "auto"
+    });
+
+    expect(llm.generateText).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result?.provider).toBe("searxng");
+    expect(result?.text).toContain("SearX fallback result");
+  });
 });

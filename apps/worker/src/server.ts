@@ -90,6 +90,9 @@ async function main(): Promise<void> {
   const webSearchService = new WebSearchService({
     defaultProvider: config.alfredWebSearchProvider,
     llmService,
+    openai: {
+      timeoutMs: config.openAiResponsesTimeoutMs
+    },
     brave: {
       apiKey: config.braveSearchApiKey,
       url: config.braveSearchUrl,

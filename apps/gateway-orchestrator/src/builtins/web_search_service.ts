@@ -15,6 +15,7 @@ export class WebSearchService {
       options?: { authPreference?: LlmAuthPreference }
     ) => Promise<{ text: string } | null>;
   };
+  private readonly openAiTimeoutMs: number;
   private readonly braveApiKey?: string;
   private readonly braveUrl: string;
   private readonly braveTimeoutMs: number;
@@ -42,6 +43,9 @@ export class WebSearchService {
         input: string,
         options?: { authPreference?: LlmAuthPreference }
       ) => Promise<{ text: string } | null>;
+    };
+    openai?: {
+      timeoutMs?: number;
     };
     brave?: {
       apiKey?: string;
@@ -72,6 +76,7 @@ export class WebSearchService {
   }) {
     this.defaultProvider = options?.defaultProvider ?? "openai";
     this.llmService = options?.llmService;
+    this.openAiTimeoutMs = options?.openai?.timeoutMs ?? 20000;
     this.braveApiKey = options?.brave?.apiKey?.trim() ? options.brave.apiKey : undefined;
     this.braveUrl = options?.brave?.url ?? "https://api.search.brave.com/res/v1/web/search";
     this.braveTimeoutMs = options?.brave?.timeoutMs ?? 12000;
@@ -229,7 +234,11 @@ export class WebSearchService {
       "Return concise findings with source links and publication dates when possible.",
       `Query: ${query.trim()}`
     ].join("\n");
-    const result = await this.llmService.generateText(authSessionId, prompt, { authPreference });
+    const result = await withTimeout(
+      this.llmService.generateText(authSessionId, prompt, { authPreference }),
+      this.openAiTimeoutMs,
+      "openai_search_timeout"
+    );
     const text = result?.text?.trim();
     return text ? text : null;
   }
@@ -524,4 +533,22 @@ function extractBrightDataResults(
     }
   }
   return results;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeoutHandle: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(message));
+        }, timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeoutHandle) {
+      clearTimeout(timeoutHandle);
+    }
+  }
 }
