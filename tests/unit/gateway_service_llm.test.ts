@@ -282,7 +282,7 @@ describe("GatewayService llm path", () => {
     const jobs = await queueStore.listJobs();
     expect(jobs.length).toBe(1);
     const job = jobs[0];
-    expect(job?.payload?.taskType).toBe("web_search");
+    expect(job?.payload?.taskType).toBe("agentic_turn");
 
     const status = await service.handleInbound({
       sessionId: "owner@s.whatsapp.net",
@@ -398,7 +398,7 @@ describe("GatewayService llm path", () => {
     const trace = traces[0];
     expect(trace?.text).toContain("Planner selected web_research");
     expect(trace?.metadata?.plannerIntent).toBe("web_research");
-    expect(trace?.metadata?.plannerChosenAction).toBe("enqueue_worker_web_search");
+    expect(trace?.metadata?.plannerChosenAction).toBe("enqueue_worker_agentic_turn");
     expect(trace?.metadata?.plannerReason).toBe("unit_test_planner");
     expect(trace?.metadata?.plannerNeedsWorker).toBe(true);
   });

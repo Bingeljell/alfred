@@ -188,6 +188,111 @@ export function createWorkerProcessor(input: {
       };
     }
 
+    if (taskType === "agentic_turn") {
+      const goal = String(job.payload.query ?? job.payload.goal ?? job.payload.text ?? "").trim();
+      const provider = normalizeWebSearchProvider(job.payload.provider) ?? input.config.alfredWebSearchProvider;
+      const maxRetries = clampInt(job.payload.maxRetries, 0, 5, 1);
+      const timeBudgetMs = clampInt(job.payload.timeBudgetMs, 5000, 10 * 60 * 1000, 120_000);
+      const tokenBudget = clampInt(job.payload.tokenBudget, 128, 50_000, 8_000);
+
+      if (!goal) {
+        return {
+          summary: "agentic_turn_missing_goal",
+          responseText: "I could not start this task because no goal text was provided."
+        };
+      }
+
+      await context.reportProgress({
+        step: "planning",
+        message: "Planning the best approach..."
+      });
+
+      let searchText = "";
+      let searchProvider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | null = null;
+      let searchError: unknown = null;
+      let attempt = 0;
+      while (attempt <= maxRetries) {
+        attempt += 1;
+        await context.reportProgress({
+          step: "searching",
+          message: `Collecting context via ${provider} (attempt ${attempt}/${maxRetries + 1})...`
+        });
+        try {
+          const result = await withTimeout(
+            input.webSearchService.search(goal, {
+              provider,
+              authSessionId,
+              authPreference
+            }),
+            timeBudgetMs,
+            "agentic_turn_search_time_budget_exceeded"
+          );
+          if (result?.text?.trim()) {
+            searchText = result.text.trim();
+            searchProvider = result.provider;
+            break;
+          }
+        } catch (error) {
+          searchError = error;
+        }
+
+        if (attempt <= maxRetries) {
+          await context.reportProgress({
+            step: "retrying",
+            message: `Retrying context collection (${attempt}/${maxRetries})...`
+          });
+        }
+      }
+
+      if (!searchText || !searchProvider) {
+        const reason = searchError instanceof Error ? searchError.message : "no_result";
+        return {
+          summary: "agentic_turn_no_context",
+          responseText: `I couldn't gather web context for this request. Reason: ${reason}`
+        };
+      }
+
+      await context.reportProgress({
+        step: "synthesizing",
+        message: "Synthesizing findings into a concise answer..."
+      });
+
+      const synthesisPrompt = buildAgenticSynthesisPrompt(goal, searchProvider, searchText);
+      let synthesisText = "";
+      try {
+        const generated = await withTimeout(
+          input.llmService.generateText(authSessionId || sessionId, synthesisPrompt, { authPreference }),
+          timeBudgetMs,
+          "agentic_turn_synthesis_time_budget_exceeded"
+        );
+        synthesisText = typeof generated?.text === "string" ? generated.text.trim() : "";
+      } catch {
+        synthesisText = "";
+      }
+
+      const fullText = synthesisText || renderFallbackSearchResponse(searchProvider, searchText, goal);
+      const pages = paginateResponse(fullText, 1600, 8);
+      const firstPage = pages[0] ?? fullText;
+      if (sessionId && pages.length > 1) {
+        await input.pagedResponseStore.setPages(sessionId, pages.slice(1));
+      } else if (sessionId) {
+        await input.pagedResponseStore.clear(sessionId);
+      }
+
+      const responseText =
+        pages.length > 1 ? `${firstPage}\n\nReply #next for more (${pages.length - 1} remaining).` : firstPage;
+
+      return {
+        summary: `agentic_turn_${searchProvider}`,
+        responseText,
+        provider: searchProvider,
+        mode: "agentic_turn",
+        pageCount: pages.length,
+        retriesUsed: Math.max(0, attempt - 1),
+        tokenBudget
+      };
+    }
+
     if (taskType !== "web_search") {
       const action = String(job.payload.action ?? job.payload.text ?? job.type);
       return {
@@ -388,6 +493,41 @@ function parseRunSpec(raw: unknown): RunSpecV1 | null {
     metadata: record.metadata && typeof record.metadata === "object" ? (record.metadata as Record<string, unknown>) : {},
     steps
   };
+}
+
+function buildAgenticSynthesisPrompt(
+  goal: string,
+  provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata",
+  toolOutput: string
+): string {
+  return [
+    "You are Alfred, a practical execution agent.",
+    "The user asked for web research. Produce a useful, concise answer.",
+    "Requirements:",
+    "- Start with a 3-6 bullet executive summary.",
+    "- Then include top options with short rationale.",
+    "- Include source links inline for factual claims.",
+    "- If data quality is weak, say so briefly.",
+    "- Avoid boilerplate and avoid listing raw provider dumps.",
+    "",
+    `User goal: ${goal}`,
+    `Web tool provider: ${provider}`,
+    "",
+    "Tool observations:",
+    toolOutput
+  ].join("\n");
+}
+
+function renderFallbackSearchResponse(
+  provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata",
+  searchText: string,
+  goal: string
+): string {
+  return [
+    `I gathered web context via ${provider}, but synthesis failed. Here's the raw result for: ${goal}`,
+    "",
+    searchText
+  ].join("\n");
 }
 
 function buildLegacyWebToFileRunSpec(input: {

@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-27: Implemented hybrid runtime path in code: planner/heuristic long research now queues `agentic_turn` by default (instead of deterministic `web_search`), worker executes search + synthesis loop with fallback + retries/time budgets, and new worker unit tests cover both synthesis-success and fallback behavior.
 - 2026-02-27: Updated architecture direction to explicitly lock hybrid execution behavior: agentic mode remains default for unknown tasks, while structured RunSpec mode is applied selectively for high-risk or repeatable workflows.
 - 2026-02-27: Locked an explicit agentic product direction in docs (`docs/agentic_vision.md`) and linked it from identity/plan/features so roadmap decisions prioritize natural-language planning plus tool-mediated execution over command-only SaaS-style interaction patterns.
 - 2026-02-27: Extracted `CreateGatewayAppOptions` into `apps/gateway-orchestrator/src/app_types.ts`, reducing app-factory type noise and making gateway composition dependencies easier to evolve independently.

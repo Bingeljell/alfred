@@ -29,7 +29,7 @@ import type { LlmAuthPreference, PlannerDecision } from "./orchestrator/types";
 type ImplicitApprovalDecision = "approve_latest" | "reject_latest";
 type ExternalCapability = "web_search" | "file_write";
 type RoutedLongTask = {
-  taskType: "web_search" | "web_to_file";
+  taskType: "agentic_turn" | "web_search" | "web_to_file";
   query: string;
   provider?: WebSearchProvider;
   fileFormat?: "md" | "txt" | "doc";
@@ -738,14 +738,14 @@ export class GatewayService {
 
       await input.markPhase("route", "Routing planner research to worker queue");
       const job = await this.enqueueLongTaskJob(input.inbound.sessionId, {
-        taskType: "web_search",
+        taskType: "agentic_turn",
         query: plan.query.trim(),
         provider: plan.provider ?? this.capabilityPolicy.webSearchProvider,
         authSessionId: input.authSessionId,
         authPreference: input.authPreference,
         reason: `planner_${plan.reason}`
       });
-      await input.recordPlannerTrace("enqueue_worker_web_search", { jobId: job.id, taskType: "web_search" });
+      await input.recordPlannerTrace("enqueue_worker_agentic_turn", { jobId: job.id, taskType: "agentic_turn" });
       await input.markRunNote("Planner delegated to worker", { jobId: job.id, reason: plan.reason });
       const response = `Queued research as job ${job.id}. I will share concise progress and final results here.`;
       await input.markPhase("persist", "Persisting worker delegation response");
@@ -1641,7 +1641,7 @@ export class GatewayService {
     const fileFormat = this.detectRequestedAttachmentFormat(text);
 
     return {
-      taskType: sendAttachment ? "web_to_file" : "web_search",
+      taskType: sendAttachment ? "web_to_file" : "agentic_turn",
       query: text,
       provider: this.capabilityPolicy.webSearchProvider,
       fileFormat: sendAttachment ? fileFormat : undefined,
@@ -1698,7 +1698,7 @@ export class GatewayService {
   private async enqueueLongTaskJob(
     sessionId: string,
     input: {
-      taskType: "web_search" | "web_to_file";
+      taskType: "agentic_turn" | "web_search" | "web_to_file";
       query: string;
       provider?: WebSearchProvider;
       authSessionId: string;
