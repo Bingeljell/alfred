@@ -1,5 +1,4 @@
 import express from "express";
-import { z } from "zod";
 import { FileBackedQueueStore } from "./local_queue_store";
 import { GatewayService } from "./gateway_service";
 import { MessageDedupeStore } from "./whatsapp/dedupe_store";
@@ -21,31 +20,11 @@ import { SupervisorStore } from "./builtins/supervisor_store";
 import { RunSpecStore } from "./builtins/run_spec_store";
 import { registerAuthRoutes } from "./routes/auth_routes";
 import { registerChannelRoutes } from "./routes/channel_routes";
+import { registerHeartbeatRoutes } from "./routes/heartbeat_routes";
 import { registerMemoryRoutes } from "./routes/memory_routes";
 import { registerObservabilityRoutes } from "./routes/observability_routes";
 import type { MemoryCheckpointClass } from "./builtins/memory_checkpoint_service";
 import type { LlmAuthPreference, PlannerDecision } from "./orchestrator/types";
-
-const HeartbeatConfigureBodySchema = z.object({
-  enabled: z.boolean().optional(),
-  intervalMs: z.number().int().min(15000).max(24 * 60 * 60 * 1000).optional(),
-  activeHoursStart: z.number().int().min(0).max(23).optional(),
-  activeHoursEnd: z.number().int().min(0).max(23).optional(),
-  requireIdleQueue: z.boolean().optional(),
-  dedupeWindowMs: z.number().int().min(0).max(7 * 24 * 60 * 60 * 1000).optional(),
-  suppressOk: z.boolean().optional(),
-  sessionId: z.string().min(1).optional(),
-  pendingNotificationAlertThreshold: z.number().int().min(1).max(1000).optional(),
-  recentErrorLookbackMinutes: z.number().int().min(1).max(24 * 60).optional(),
-  alertOnAuthDisconnected: z.boolean().optional(),
-  alertOnWhatsAppDisconnected: z.boolean().optional(),
-  alertOnStuckJobs: z.boolean().optional(),
-  stuckJobThresholdMinutes: z.number().int().min(1).max(24 * 60).optional()
-});
-
-const HeartbeatRunBodySchema = z.object({
-  force: z.boolean().optional()
-});
 
 const QRCode = require("qrcode") as {
   toDataURL: (
@@ -276,45 +255,7 @@ export function createGatewayApp(
     res.status(200).json(health);
   });
 
-  app.get("/v1/heartbeat/status", async (_req, res) => {
-    if (!heartbeatService) {
-      res.status(404).json({ error: "heartbeat_not_configured" });
-      return;
-    }
-
-    const status = await heartbeatService.status();
-    res.status(200).json(status);
-  });
-
-  app.post("/v1/heartbeat/configure", async (req, res) => {
-    if (!heartbeatService) {
-      res.status(404).json({ error: "heartbeat_not_configured" });
-      return;
-    }
-
-    try {
-      const patch = HeartbeatConfigureBodySchema.parse(req.body ?? {});
-      const status = await heartbeatService.configure(patch);
-      res.status(200).json(status);
-    } catch (error) {
-      res.status(400).json({ error: "invalid_heartbeat_config", detail: String(error) });
-    }
-  });
-
-  app.post("/v1/heartbeat/run", async (req, res) => {
-    if (!heartbeatService) {
-      res.status(404).json({ error: "heartbeat_not_configured" });
-      return;
-    }
-
-    try {
-      const input = HeartbeatRunBodySchema.parse(req.body ?? {});
-      const status = await heartbeatService.runNow({ force: input.force ?? true, trigger: "manual_api" });
-      res.status(200).json(status);
-    } catch (error) {
-      res.status(400).json({ error: "invalid_heartbeat_run_request", detail: String(error) });
-    }
-  });
+  registerHeartbeatRoutes(app, { heartbeatService });
 
   registerObservabilityRoutes(app, {
     conversationStore,
