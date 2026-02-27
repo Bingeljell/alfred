@@ -15,6 +15,25 @@ describe("orchestrator phases", () => {
     expect(normalized.provider).toBe("baileys");
   });
 
+  it("normalizes source/channel from origin metadata when provider is not baileys", () => {
+    const normalized = runNormalizePhase({
+      sessionId: "user@s.whatsapp.net",
+      text: "hello",
+      metadata: {
+        provider: "gateway-http",
+        origin: {
+          channelId: "whatsapp",
+          channelContextId: "user@s.whatsapp.net",
+          transport: "baileys"
+        }
+      }
+    });
+
+    expect(normalized.source).toBe("whatsapp");
+    expect(normalized.channel).toBe("baileys");
+    expect(normalized.provider).toBe("gateway-http");
+  });
+
   it("creates session context with run ledger markers", async () => {
     const transitionPhase = vi.fn(async () => undefined);
     const appendEvent = vi.fn(async () => undefined);

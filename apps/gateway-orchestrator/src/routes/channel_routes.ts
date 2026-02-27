@@ -1,6 +1,7 @@
 import type { Express } from "express";
 import { z } from "zod";
 import { MessageDedupeStore } from "../whatsapp/dedupe_store";
+import { normalizeInboundFromChannel } from "../orchestrator/channel_submission";
 
 const CancelParamsSchema = z.object({
   jobId: z.string().min(1)
@@ -93,7 +94,12 @@ export function registerChannelRoutes(
 
   app.post("/v1/messages/inbound", async (req, res) => {
     try {
-      const result = await deps.service.handleInbound(req.body);
+      const inbound = normalizeInboundFromChannel(req.body, {
+        channelId: "web",
+        provider: "gateway-http",
+        transport: "http"
+      });
+      const result = await deps.service.handleInbound(inbound);
       res.status(result.mode === "async-job" ? 202 : 200).json(result);
     } catch (error) {
       res.status(400).json({ error: "invalid_inbound_message", detail: String(error) });
