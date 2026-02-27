@@ -267,6 +267,8 @@ export class FileBackedQueueStore {
       message: string;
       step?: string;
       percent?: number;
+      phase?: string;
+      details?: Record<string, unknown>;
     }
   ): Promise<Job | null> {
     const latest = await this.getJob(jobId);
@@ -282,12 +284,14 @@ export class FileBackedQueueStore {
         at: now,
         message: progress.message,
         step: progress.step,
-        percent: typeof progress.percent === "number" ? Math.max(0, Math.min(100, progress.percent)) : undefined
+        percent: typeof progress.percent === "number" ? Math.max(0, Math.min(100, progress.percent)) : undefined,
+        phase: typeof progress.phase === "string" && progress.phase.trim() ? progress.phase.trim() : undefined,
+        details: progress.details && typeof progress.details === "object" ? progress.details : undefined
       }
     };
 
     await this.writeJob(next);
-    const detailParts = [progress.step ? `step=${progress.step}` : undefined, progress.message]
+    const detailParts = [progress.step ? `step=${progress.step}` : undefined, progress.phase ? `phase=${progress.phase}` : undefined, progress.message]
       .filter((item) => !!item)
       .join(" | ");
     await this.appendEvent({ jobId, at: now, step: "job.progress", detail: detailParts });

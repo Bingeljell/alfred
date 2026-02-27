@@ -86,6 +86,8 @@ export class IntentPlanner {
       "Rules:",
       "- Use intent=status_query when user asks progress/status/check-in.",
       "- Use intent=web_research for web research/comparison tasks.",
+      "- For recommendation asks, ask clarification ONLY if key constraints are missing (budget/platform/priorities).",
+      "- If recommendation request already includes constraints, do not clarify; proceed with web_research.",
       "- Set sendAttachment=true only when user explicitly asks to create and send a file/doc back.",
       "- Default fileFormat to md unless user clearly requests txt/doc.",
       "- Use intent=clarify when the request is ambiguous.",
@@ -164,8 +166,20 @@ function heuristicPlan(message: string, hasActiveJob: boolean): PlannerDecision 
     normalized.includes("compare") ||
     normalized.includes("best ") ||
     normalized.includes("top ") ||
+    normalized.includes("recommend") ||
     normalized.includes("web search") ||
     normalized.includes("one at a time");
+
+  if (looksLikeRecommendationAsk(normalized) && !hasRecommendationConstraints(normalized)) {
+    return {
+      intent: "clarify",
+      confidence: 0.62,
+      needsWorker: false,
+      question: "Before I recommend one option, what matters most: cost, quality, speed, ecosystem, or privacy?",
+      reason: "heuristic_recommendation_missing_constraints"
+    };
+  }
+
   if (researchSignals && message.length >= 18) {
     const sendAttachment = wantsAttachment(message);
     return {
@@ -200,6 +214,22 @@ function heuristicPlan(message: string, hasActiveJob: boolean): PlannerDecision 
 
 function buildClarifyQuestion(message: string): string {
   return `You asked: "${message.trim()}". Do you want a quick answer, deeper research, or an action plan?`;
+}
+
+function looksLikeRecommendationAsk(normalized: string): boolean {
+  return /\b(recommend|which\s+.*\bshould\s+i\s+use|what\s+should\s+i\s+use)\b/i.test(normalized);
+}
+
+function hasRecommendationConstraints(normalized: string): boolean {
+  const signals = [
+    /\b(budget|cost|price|\$|cheap|expensive)\b/i,
+    /\b(speed|latency|performance|throughput)\b/i,
+    /\b(quality|accuracy|fidelity)\b/i,
+    /\b(mac|windows|linux|ios|android|platform|desktop|mobile)\b/i,
+    /\b(open source|license|privacy|self[- ]?hosted|cloud)\b/i,
+    /\b(integration|workflow|team|enterprise|personal)\b/i
+  ];
+  return signals.some((pattern) => pattern.test(normalized));
 }
 
 function parsePlannerJson(raw: string): Record<string, unknown> | null {

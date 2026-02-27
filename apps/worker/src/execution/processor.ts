@@ -5,6 +5,34 @@ import { executeRunSpec } from "../run_spec_executor";
 type AuthPreference = "auto" | "oauth" | "api_key";
 type SearchProvider = "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto";
 type AttachmentFormat = "md" | "txt" | "doc";
+type ResolvedProvider = "searxng" | "openai" | "brave" | "perplexity" | "brightdata";
+
+type SearchHit = {
+  title: string;
+  url: string;
+  snippet: string;
+  provider: ResolvedProvider;
+  domain: string;
+};
+
+type RankingCandidate = {
+  name: string;
+  category: string;
+  score: number;
+  pros: string[];
+  cons: string[];
+  rationale: string;
+  evidenceUrls: string[];
+};
+
+type RankingResult = {
+  confidence: "low" | "medium" | "high";
+  topPick: string;
+  candidates: RankingCandidate[];
+  ambiguityReasons: string[];
+  followUpQuestions: string[];
+  summary: string;
+};
 
 export function createWorkerProcessor(input: {
   config: {
@@ -190,11 +218,14 @@ export function createWorkerProcessor(input: {
 
     if (taskType === "agentic_turn") {
       const goal = String(job.payload.query ?? job.payload.goal ?? job.payload.text ?? "").trim();
-      const provider = normalizeWebSearchProvider(job.payload.provider) ?? input.config.alfredWebSearchProvider;
+      const requestedProvider = normalizeWebSearchProvider(job.payload.provider) ?? input.config.alfredWebSearchProvider;
       const maxRetries = clampInt(job.payload.maxRetries, 0, 5, 1);
       const timeBudgetMs = clampInt(job.payload.timeBudgetMs, 5000, 10 * 60 * 1000, 120_000);
       const tokenBudget = clampInt(job.payload.tokenBudget, 128, 50_000, 8_000);
-      const synthesisBudgetMs = Math.min(35_000, Math.max(8_000, Math.floor(timeBudgetMs * 0.35)));
+      const rankingBudgetMs = Math.min(15_000, Math.max(8_000, Math.floor(timeBudgetMs * 0.18)));
+      const synthesisBudgetMs = Math.min(28_000, Math.max(10_000, Math.floor(timeBudgetMs * 0.3)));
+      const progressPulseMs = 30_000;
+      const runStartedAt = Date.now();
 
       if (!goal) {
         return {
@@ -205,73 +236,231 @@ export function createWorkerProcessor(input: {
 
       await context.reportProgress({
         step: "planning",
-        message: "Planning the best approach..."
+        phase: "plan",
+        message: "Task accepted. Planning recommendation workflow.",
+        details: {
+          requestedProvider,
+          tokenBudget
+        }
       });
 
-      let searchText = "";
-      let searchProvider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | null = null;
+      const primaryProvider = resolvePrimaryProvider(requestedProvider);
+      const fallbackProviders = resolveFallbackProviders(primaryProvider);
+      const providersUsed: ResolvedProvider[] = [];
       let searchError: unknown = null;
-      let attempt = 0;
-      while (attempt <= maxRetries) {
-        attempt += 1;
-        await context.reportProgress({
-          step: "searching",
-          message: `Collecting context via ${provider} (attempt ${attempt}/${maxRetries + 1})...`
-        });
-        try {
-          const result = await withProgressPulse(
-            () =>
-              withTimeout(
-                input.webSearchService.search(goal, {
-                  provider,
-                  authSessionId,
-                  authPreference
-                }),
-                timeBudgetMs,
-                "agentic_turn_search_time_budget_exceeded"
-              ),
-            {
-              intervalMs: 20_000,
-              onPulse: async (elapsedMs) => {
-                await context.reportProgress({
-                  step: "searching",
-                  message: `Still gathering sources... (${Math.floor(elapsedMs / 1000)}s elapsed)`
-                });
-              }
-            }
-          );
-          if (result?.text?.trim()) {
-            searchText = result.text.trim();
-            searchProvider = result.provider;
-            break;
-          }
-        } catch (error) {
-          searchError = error;
-        }
+      let retriesUsed = 0;
 
-        if (attempt <= maxRetries) {
+      const runProviderSearch = async (provider: ResolvedProvider, retries: number): Promise<{ provider: ResolvedProvider; text: string; hits: SearchHit[] } | null> => {
+        for (let attempt = 1; attempt <= retries + 1; attempt += 1) {
           await context.reportProgress({
-            step: "retrying",
-            message: `Retrying context collection (${attempt}/${maxRetries})...`
+            step: "searching",
+            phase: "retrieve",
+            message: `Retrieving sources via ${provider} (attempt ${attempt}/${retries + 1})...`,
+            details: {
+              provider,
+              attempt,
+              maxAttempts: retries + 1
+            }
           });
-        }
-      }
+          try {
+            const result = await withProgressPulse(
+              () =>
+                withTimeout(
+                  input.webSearchService.search(goal, {
+                    provider,
+                    authSessionId,
+                    authPreference
+                  }),
+                  timeBudgetMs,
+                  "agentic_turn_search_time_budget_exceeded"
+                ),
+              {
+                intervalMs: progressPulseMs,
+                onPulse: async (elapsedMs) => {
+                  await context.reportProgress({
+                    step: "searching",
+                    phase: "retrieve",
+                    message: `Still retrieving via ${provider} (${Math.floor(elapsedMs / 1000)}s elapsed)...`,
+                    details: {
+                      provider,
+                      elapsedSec: Math.floor(elapsedMs / 1000)
+                    }
+                  });
+                }
+              }
+            );
+            const text = result?.text?.trim();
+            const resolvedProvider = result?.provider;
+            if (!text || !resolvedProvider) {
+              continue;
+            }
+            const hits = extractSearchHits(text, 18, resolvedProvider);
+            if (hits.length === 0) {
+              continue;
+            }
+            return {
+              provider: resolvedProvider,
+              text,
+              hits
+            };
+          } catch (error) {
+            searchError = error;
+            retriesUsed += 1;
+          }
 
-      if (!searchText || !searchProvider) {
+          if (attempt <= retries) {
+            await context.reportProgress({
+              step: "retrying",
+              phase: "retrieve",
+              message: `Source retrieval slowed down on ${provider}; retrying (${attempt}/${retries})...`,
+              details: {
+                provider,
+                retry: attempt,
+                maxRetries: retries
+              }
+            });
+          }
+        }
+        return null;
+      };
+
+      const primary = await runProviderSearch(primaryProvider, maxRetries);
+      if (!primary) {
         const reason = searchError instanceof Error ? searchError.message : "no_result";
         return {
           summary: "agentic_turn_no_context",
           responseText: `I couldn't gather web context for this request. Reason: ${reason}`
         };
       }
+      providersUsed.push(primary.provider);
+
+      let mergedHits = primary.hits;
+      const primaryCoverage = evaluateCoverage(primary.hits);
+      await context.reportProgress({
+        step: "searching",
+        phase: "retrieve",
+        message: `Retrieved ${primaryCoverage.hitCount} sources across ${primaryCoverage.distinctDomainCount} domains via ${primary.provider}.`,
+        details: {
+          provider: primary.provider,
+          hitCount: primaryCoverage.hitCount,
+          domainCount: primaryCoverage.distinctDomainCount
+        }
+      });
+
+      if (requestedProvider === "auto" && primary.provider === "searxng" && primaryCoverage.weakCoverage) {
+        for (const fallbackProvider of fallbackProviders) {
+          await context.reportProgress({
+            step: "searching",
+            phase: "fallback_retrieve",
+            message: `Coverage looks weak on ${primary.provider}; running fallback retrieval via ${fallbackProvider}.`,
+            details: {
+              primaryProvider: primary.provider,
+              fallbackProvider
+            }
+          });
+          const fallback = await runProviderSearch(fallbackProvider, 0);
+          if (!fallback) {
+            continue;
+          }
+          providersUsed.push(fallback.provider);
+          mergedHits = mergeSearchHits(mergedHits, fallback.hits, 24);
+          const mergedCoverage = evaluateCoverage(mergedHits);
+          await context.reportProgress({
+            step: "searching",
+            phase: "fallback_retrieve",
+            message: `Fallback retrieval added context: ${mergedCoverage.hitCount} total sources across ${mergedCoverage.distinctDomainCount} domains.`,
+            details: {
+              provider: fallback.provider,
+              mergedHitCount: mergedCoverage.hitCount,
+              mergedDomainCount: mergedCoverage.distinctDomainCount
+            }
+          });
+          if (!mergedCoverage.weakCoverage) {
+            break;
+          }
+        }
+      }
+
+      const compactEvidence = compactSearchHitsForSynthesis(mergedHits, 12);
+      await context.reportProgress({
+        step: "ranking",
+        phase: "rank",
+        message: `Ranking ${compactEvidence.length} candidates against your goal.`,
+        details: {
+          candidateCount: compactEvidence.length,
+          providersUsed
+        }
+      });
+
+      const rankPrompt = buildAgenticRankingPrompt(goal, compactEvidence);
+      let ranking: RankingResult | null = null;
+      try {
+        const ranked = await withTimeout(
+          input.llmService.generateText(authSessionId || sessionId, rankPrompt, { authPreference }),
+          rankingBudgetMs,
+          "agentic_turn_ranking_time_budget_exceeded"
+        );
+        ranking = parseRankingResult(ranked?.text ?? "");
+      } catch {
+        ranking = null;
+      }
+
+      if (!ranking) {
+        const fallbackText = renderNoRankingFallback(goal, mergedHits, providersUsed);
+        return finalizePagedAgenticResponse({
+          sessionId,
+          fullText: fallbackText,
+          pagedResponseStore: input.pagedResponseStore,
+          summary: `agentic_turn_${primary.provider}`,
+          providersUsed,
+          retriesUsed,
+          tokenBudget,
+          confidence: "low",
+          recommendationMode: "rank_only"
+        });
+      }
+
+      if (ranking.ambiguityReasons.length > 0 && ranking.followUpQuestions.length > 0) {
+        const clarify = renderClarificationRequest(goal, ranking);
+        return {
+          summary: "agentic_turn_needs_clarification",
+          responseText: clarify,
+          providersUsed,
+          confidence: ranking.confidence,
+          recommendationMode: "rank_only",
+          retriesUsed,
+          tokenBudget
+        };
+      }
+
+      const quality = evaluateRecommendationQuality(mergedHits, ranking);
+      if (!quality.passed) {
+        const gated = renderQualityGateFallback(goal, ranking, mergedHits, quality);
+        return finalizePagedAgenticResponse({
+          sessionId,
+          fullText: gated,
+          pagedResponseStore: input.pagedResponseStore,
+          summary: `agentic_turn_${primary.provider}`,
+          providersUsed,
+          retriesUsed,
+          tokenBudget,
+          confidence: ranking.confidence,
+          recommendationMode: "rank_only"
+        });
+      }
 
       await context.reportProgress({
         step: "synthesizing",
-        message: "Comparing findings and drafting recommendation..."
+        phase: "synth",
+        message: "Composing final recommendation from ranked evidence.",
+        details: {
+          topPick: ranking.topPick,
+          confidence: ranking.confidence
+        }
       });
 
-      const synthesisPrompt = buildAgenticSynthesisPrompt(goal, searchProvider, compactSearchContextForSynthesis(searchText, 5000));
-      let synthesisText = "";
+      const synthesisPrompt = buildAgenticSynthesisPrompt(goal, ranking, compactEvidence, providersUsed);
+      let synthesisText: string | null = null;
       try {
         const generated = await withProgressPulse(
           () =>
@@ -281,41 +470,43 @@ export function createWorkerProcessor(input: {
               "agentic_turn_synthesis_time_budget_exceeded"
             ),
           {
-            intervalMs: 15_000,
+            intervalMs: progressPulseMs,
             onPulse: async (elapsedMs) => {
               await context.reportProgress({
                 step: "synthesizing",
-                message: `Still analyzing sources... (${Math.floor(elapsedMs / 1000)}s elapsed)`
+                phase: "synth",
+                message: `Still composing recommendation (${Math.floor(elapsedMs / 1000)}s elapsed)...`,
+                details: {
+                  elapsedSec: Math.floor(elapsedMs / 1000),
+                  topPick: ranking?.topPick ?? ""
+                }
               });
             }
           }
         );
-        synthesisText = typeof generated?.text === "string" ? generated.text.trim() : "";
+        const composed = typeof generated?.text === "string" ? generated.text.trim() : "";
+        synthesisText = composed || null;
       } catch {
-        synthesisText = "";
+        synthesisText = null;
       }
 
-      const fullText = synthesisText || renderFriendlyFallbackSearchResponse(searchProvider, searchText, goal);
-      const pages = paginateResponse(fullText, 1600, 8);
-      const firstPage = pages[0] ?? fullText;
-      if (sessionId && pages.length > 1) {
-        await input.pagedResponseStore.setPages(sessionId, pages.slice(1));
-      } else if (sessionId) {
-        await input.pagedResponseStore.clear(sessionId);
-      }
-
-      const responseText =
-        pages.length > 1 ? `${firstPage}\n\nReply #next for more (${pages.length - 1} remaining).` : firstPage;
-
-      return {
-        summary: `agentic_turn_${searchProvider}`,
-        responseText,
-        provider: searchProvider,
-        mode: "agentic_turn",
-        pageCount: pages.length,
-        retriesUsed: Math.max(0, attempt - 1),
-        tokenBudget
-      };
+      const fullText = synthesisText || renderRankOnlyRecommendation(goal, ranking, mergedHits, providersUsed);
+      return finalizePagedAgenticResponse({
+        sessionId,
+        fullText,
+        pagedResponseStore: input.pagedResponseStore,
+        summary: `agentic_turn_${primary.provider}`,
+        providersUsed,
+        retriesUsed,
+        tokenBudget,
+        confidence: ranking.confidence,
+        recommendationMode: synthesisText ? "rank_plus_synthesis" : "rank_only",
+        sourceStats: {
+          hits: mergedHits.length,
+          distinctDomains: countDistinctDomains(mergedHits)
+        },
+        elapsedSec: Math.max(1, Math.floor((Date.now() - runStartedAt) / 1000))
+      });
     }
 
     if (taskType !== "web_search") {
@@ -520,94 +711,334 @@ function parseRunSpec(raw: unknown): RunSpecV1 | null {
   };
 }
 
+function buildAgenticRankingPrompt(goal: string, hits: SearchHit[]): string {
+  const evidence = hits
+    .map((hit, index) => `${index + 1}. ${hit.title} | ${hit.url} | ${hit.snippet} | provider=${hit.provider}`)
+    .join("\n");
+  return [
+    "You are Alfred's ranking engine.",
+    "Task: rank options for the user's goal using evidence.",
+    "",
+    "Return STRICT JSON only:",
+    '{"confidence":"low|medium|high","topPick":"",\"summary\":\"\",\"ambiguityReasons\":[],\"followUpQuestions\":[],\"candidates\":[{\"name\":\"\",\"category\":\"\",\"score\":0,\"pros\":[],\"cons\":[],\"rationale\":\"\",\"evidenceUrls\":[]}]}',
+    "",
+    "Rules:",
+    "- Recommend entities/tools/models, never links.",
+    "- Use evidenceUrls from provided sources.",
+    "- Set ambiguityReasons and followUpQuestions only when user constraints are missing.",
+    "- Keep scores between 0 and 100.",
+    "",
+    `Goal: ${goal}`,
+    "Evidence:",
+    evidence
+  ].join("\n");
+}
+
 function buildAgenticSynthesisPrompt(
   goal: string,
-  provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata",
-  toolOutput: string
+  ranking: RankingResult,
+  hits: SearchHit[],
+  providersUsed: ResolvedProvider[]
 ): string {
+  const evidence = hits
+    .slice(0, 10)
+    .map((hit, index) => `${index + 1}. ${hit.title} (${hit.url}) — ${hit.snippet}`)
+    .join("\n");
   return [
-    "You are Alfred, a practical execution agent.",
-    "The user asked for web research. Produce a useful, concise answer.",
-    "Requirements:",
-    "- Start with a 3-6 bullet executive summary.",
-    "- Then include top options with short rationale.",
-    "- Include source links inline for factual claims.",
-    "- If data quality is weak, say so briefly.",
-    "- Avoid boilerplate and avoid listing raw provider dumps.",
+    "You are Alfred, writing the final recommendation.",
+    "Use ranking output and evidence. Do not invent facts.",
+    "Output format:",
+    "1) Recommendation (single best option)",
+    "2) Why this option (3-5 bullets)",
+    "3) Alternatives (2 options with tradeoffs)",
+    "4) Confidence and caveats",
+    "5) Sources (URLs only)",
     "",
-    `User goal: ${goal}`,
-    `Web tool provider: ${provider}`,
+    `Goal: ${goal}`,
+    `Providers used: ${providersUsed.join(", ")}`,
     "",
-    "Tool observations:",
-    toolOutput
+    "Ranking JSON:",
+    JSON.stringify(ranking, null, 2),
+    "",
+    "Evidence snippets:",
+    evidence
   ].join("\n");
 }
 
-function renderFriendlyFallbackSearchResponse(
-  provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata",
-  searchText: string,
-  goal: string
-): string {
-  const hits = extractSearchHits(searchText, 4);
-  if (hits.length === 0) {
-    const compact = searchText.replace(/\s+/g, " ").trim().slice(0, 900);
+function parseRankingResult(raw: string): RankingResult | null {
+  const parsed = parseJsonObjectFromText(raw);
+  if (!parsed) {
+    return null;
+  }
+  const confidenceRaw = String(parsed.confidence ?? "low").trim().toLowerCase();
+  const confidence = confidenceRaw === "high" || confidenceRaw === "medium" ? confidenceRaw : "low";
+  const topPick = String(parsed.topPick ?? "").trim();
+  const summary = String(parsed.summary ?? "").trim();
+  const ambiguityReasons = Array.isArray(parsed.ambiguityReasons)
+    ? parsed.ambiguityReasons.map((item) => String(item ?? "").trim()).filter((item) => item.length > 0)
+    : [];
+  const followUpQuestions = Array.isArray(parsed.followUpQuestions)
+    ? parsed.followUpQuestions.map((item) => String(item ?? "").trim()).filter((item) => item.length > 0).slice(0, 2)
+    : [];
+  const rawCandidates = Array.isArray(parsed.candidates) ? parsed.candidates : [];
+  const candidates: RankingCandidate[] = rawCandidates
+    .map((candidate) => {
+      if (!candidate || typeof candidate !== "object") {
+        return null;
+      }
+      const record = candidate as Record<string, unknown>;
+      const name = String(record.name ?? "").trim();
+      if (!name) {
+        return null;
+      }
+      const scoreRaw = Number(record.score);
+      const score = Number.isFinite(scoreRaw) ? Math.max(0, Math.min(100, Math.round(scoreRaw))) : 0;
+      const category = String(record.category ?? "option").trim() || "option";
+      const pros = Array.isArray(record.pros)
+        ? record.pros.map((item) => String(item ?? "").trim()).filter((item) => item.length > 0).slice(0, 4)
+        : [];
+      const cons = Array.isArray(record.cons)
+        ? record.cons.map((item) => String(item ?? "").trim()).filter((item) => item.length > 0).slice(0, 4)
+        : [];
+      const evidenceUrls = Array.isArray(record.evidenceUrls)
+        ? record.evidenceUrls
+            .map((item) => String(item ?? "").trim())
+            .filter((item) => /^https?:\/\//i.test(item))
+            .slice(0, 5)
+        : [];
+      return {
+        name,
+        category,
+        score,
+        pros,
+        cons,
+        rationale: String(record.rationale ?? "").trim(),
+        evidenceUrls
+      };
+    })
+    .filter((item): item is RankingCandidate => item !== null);
+
+  if (candidates.length === 0) {
+    return null;
+  }
+  return {
+    confidence,
+    topPick: topPick || candidates[0]?.name || "",
+    candidates,
+    ambiguityReasons,
+    followUpQuestions,
+    summary
+  };
+}
+
+function parseJsonObjectFromText(raw: string): Record<string, unknown> | null {
+  const text = String(raw ?? "").trim();
+  if (!text) {
+    return null;
+  }
+  try {
+    const direct = JSON.parse(text) as unknown;
+    if (direct && typeof direct === "object" && !Array.isArray(direct)) {
+      return direct as Record<string, unknown>;
+    }
+  } catch {
+    // fallback extraction below
+  }
+  const first = text.indexOf("{");
+  const last = text.lastIndexOf("}");
+  if (first < 0 || last <= first) {
+    return null;
+  }
+  try {
+    const extracted = JSON.parse(text.slice(first, last + 1)) as unknown;
+    if (extracted && typeof extracted === "object" && !Array.isArray(extracted)) {
+      return extracted as Record<string, unknown>;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function resolvePrimaryProvider(requested: SearchProvider): ResolvedProvider {
+  if (requested === "auto") {
+    return "searxng";
+  }
+  return requested;
+}
+
+function resolveFallbackProviders(primary: ResolvedProvider): ResolvedProvider[] {
+  const all: ResolvedProvider[] = ["openai", "brave", "perplexity", "brightdata", "searxng"];
+  return all.filter((provider) => provider !== primary);
+}
+
+function evaluateCoverage(hits: SearchHit[]): {
+  hitCount: number;
+  distinctDomainCount: number;
+  hasPrimarySource: boolean;
+  weakCoverage: boolean;
+} {
+  const hitCount = hits.length;
+  const distinctDomainCount = countDistinctDomains(hits);
+  const hasPrimarySource = hits.some((hit) => looksLikePrimarySource(hit.url));
+  const weakCoverage = hitCount < 4 || distinctDomainCount < 3;
+  return {
+    hitCount,
+    distinctDomainCount,
+    hasPrimarySource,
+    weakCoverage
+  };
+}
+
+function evaluateRecommendationQuality(
+  hits: SearchHit[],
+  ranking: RankingResult
+): { passed: boolean; reasons: string[] } {
+  const coverage = evaluateCoverage(hits);
+  const reasons: string[] = [];
+  if (coverage.hitCount < 3) {
+    reasons.push("fewer_than_3_sources");
+  }
+  if (coverage.distinctDomainCount < 3) {
+    reasons.push("insufficient_domain_diversity");
+  }
+  if (!ranking.topPick.trim()) {
+    reasons.push("missing_top_pick");
+  }
+  if (ranking.candidates.length < 2) {
+    reasons.push("insufficient_ranked_candidates");
+  }
+  return {
+    passed: reasons.length === 0,
+    reasons
+  };
+}
+
+function renderNoRankingFallback(goal: string, hits: SearchHit[], providersUsed: ResolvedProvider[]): string {
+  const shortlist = hits.slice(0, 5);
+  if (shortlist.length === 0) {
     return [
-      `I couldn't finish the full analysis in time, but I did collect web context via ${provider}.`,
+      "I gathered context but could not complete ranking reliably.",
       `Goal: ${goal}`,
-      "",
-      compact || "No usable snippets were returned."
+      "I need one clarification: what's your top priority (cost, quality, speed, or flexibility)?"
     ].join("\n");
   }
-
-  const list = hits
-    .map((hit, index) => {
-      const snippet = hit.snippet ? ` — ${hit.snippet}` : "";
-      return `${index + 1}. ${hit.title} (${hit.url})${snippet}`;
-    })
-    .join("\n");
-  const provisional = hits[0];
-
   return [
-    `I couldn't finish deep synthesis in time, but I found strong sources via ${provider}.`,
+    "I collected sources but couldn't complete reliable ranking within budget.",
     `Goal: ${goal}`,
+    `Providers used: ${providersUsed.join(", ")}`,
     "",
-    "Quick shortlist:",
-    list,
+    "Top sources collected:",
+    shortlist.map((item, index) => `${index + 1}. ${item.title} (${item.url})`).join("\n"),
     "",
-    `Provisional recommendation: start with "${provisional.title}" and I can run a deeper side-by-side comparison next.`
+    "If you share your top priority (cost, quality, speed, or ecosystem), I can finalize a recommendation."
   ].join("\n");
 }
 
-function compactSearchContextForSynthesis(searchText: string, maxChars: number): string {
-  const normalized = searchText.replace(/\r/g, "").trim();
-  if (normalized.length <= maxChars) {
-    return normalized;
-  }
-  const lines = normalized.split("\n");
-  const compactLines: string[] = [];
-  let total = 0;
-  for (const rawLine of lines) {
-    const line = rawLine.replace(/\s+/g, " ").trim();
-    if (!line) {
-      continue;
-    }
-    const clipped = line.length > 320 ? `${line.slice(0, 317)}...` : line;
-    const candidateSize = total + clipped.length + 1;
-    if (candidateSize > maxChars) {
-      break;
-    }
-    compactLines.push(clipped);
-    total = candidateSize;
-  }
-  if (compactLines.length === 0) {
-    return normalized.slice(0, maxChars);
-  }
-  return compactLines.join("\n");
+function renderClarificationRequest(goal: string, ranking: RankingResult): string {
+  const questions = ranking.followUpQuestions.slice(0, 2);
+  return [
+    "Before I recommend one option, I need two quick clarifications:",
+    ...questions.map((item, index) => `${index + 1}. ${item}`),
+    "",
+    `Goal: ${goal}`
+  ].join("\n");
 }
 
-function extractSearchHits(searchText: string, limit: number): Array<{ title: string; url: string; snippet: string }> {
+function renderQualityGateFallback(
+  goal: string,
+  ranking: RankingResult,
+  hits: SearchHit[],
+  quality: { passed: boolean; reasons: string[] }
+): string {
+  const top = ranking.candidates.slice(0, 3);
+  const sources = hits.slice(0, 4).map((item) => `- ${item.url}`).join("\n");
+  return [
+    "I can give you a provisional shortlist, but confidence is not high enough for a final recommendation yet.",
+    `Why: ${quality.reasons.join(", ")}`,
+    "",
+    "Current top options:",
+    ...top.map((item, index) => `${index + 1}. ${item.name} (score ${item.score})`),
+    "",
+    "Top sources:",
+    sources || "- none",
+    "",
+    "If you share one priority (cost, quality, speed, or ecosystem), I can finalize the recommendation."
+  ].join("\n");
+}
+
+function renderRankOnlyRecommendation(
+  goal: string,
+  ranking: RankingResult,
+  hits: SearchHit[],
+  providersUsed: ResolvedProvider[]
+): string {
+  const top = ranking.candidates[0];
+  const alternatives = ranking.candidates.slice(1, 3);
+  const sourceUrls = Array.from(new Set(hits.map((item) => item.url))).slice(0, 6);
+  return [
+    `Recommendation: ${top?.name || ranking.topPick}`,
+    "",
+    `Why this pick: ${top?.rationale || ranking.summary || "Best overall tradeoff from current evidence."}`,
+    "",
+    "Alternatives:",
+    ...alternatives.map((item, index) => `${index + 1}. ${item.name} (score ${item.score})`),
+    "",
+    `Confidence: ${ranking.confidence}`,
+    `Providers used: ${providersUsed.join(", ")}`,
+    `Goal: ${goal}`,
+    "",
+    "Sources:",
+    ...sourceUrls.map((url) => `- ${url}`)
+  ].join("\n");
+}
+
+function mergeSearchHits(primary: SearchHit[], fallback: SearchHit[], limit: number): SearchHit[] {
+  const seen = new Set<string>();
+  const merged: SearchHit[] = [];
+  for (const hit of [...primary, ...fallback]) {
+    const key = hit.url.toLowerCase();
+    if (!key || seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    merged.push(hit);
+    if (merged.length >= limit) {
+      break;
+    }
+  }
+  return merged;
+}
+
+function compactSearchHitsForSynthesis(hits: SearchHit[], limit: number): SearchHit[] {
+  return hits.slice(0, limit).map((hit) => ({
+    ...hit,
+    snippet: hit.snippet.length > 220 ? `${hit.snippet.slice(0, 217)}...` : hit.snippet
+  }));
+}
+
+function countDistinctDomains(hits: SearchHit[]): number {
+  return new Set(hits.map((hit) => hit.domain).filter((item) => item.length > 0)).size;
+}
+
+function looksLikePrimarySource(url: string): boolean {
+  const host = safeDomain(url);
+  if (!host) {
+    return false;
+  }
+  if (host.includes("docs.")) {
+    return true;
+  }
+  if (host.endsWith(".gov") || host.endsWith(".edu")) {
+    return true;
+  }
+  const knownPrimary = ["openai.com", "anthropic.com", "google.com", "microsoft.com", "github.com", "redis.io"];
+  return knownPrimary.some((domain) => host === domain || host.endsWith(`.${domain}`));
+}
+
+function extractSearchHits(searchText: string, limit: number, provider: ResolvedProvider): SearchHit[] {
   const lines = searchText.split("\n");
-  const hits: Array<{ title: string; url: string; snippet: string }> = [];
+  const hits: SearchHit[] = [];
   for (const rawLine of lines) {
     if (hits.length >= limit) {
       break;
@@ -616,17 +1047,90 @@ function extractSearchHits(searchText: string, limit: number): Array<{ title: st
     if (!line) {
       continue;
     }
-    const match = line.match(/^\d+\.\s+(.+?)\s+-\s+(https?:\/\/\S+?)(?:\s+\|\s+(.+?))?(?:\s+\[engines:.*\])?$/i);
-    if (!match) {
+    const urlMatch = line.match(/https?:\/\/\S+/i);
+    if (!urlMatch) {
       continue;
     }
+    const url = urlMatch[0].replace(/[),.;]+$/, "").trim();
+    const domain = safeDomain(url);
+    if (!domain) {
+      continue;
+    }
+
+    let title = line;
+    let snippet = "";
+    const formatted = line.match(/^\d+\.\s+(.+?)\s+-\s+(https?:\/\/\S+?)(?:\s+\|\s+(.+?))?(?:\s+\[engines:.*\])?$/i);
+    if (formatted) {
+      title = formatted[1]?.trim() || title;
+      snippet = (formatted[3] ?? "").replace(/\s+/g, " ").trim().slice(0, 240);
+    } else {
+      title = line
+        .replace(/^\d+\.\s*/, "")
+        .replace(/\s*https?:\/\/\S+.*$/i, "")
+        .replace(/\s+\|.*/, "")
+        .trim();
+      const afterUrl = line.slice(line.indexOf(url) + url.length).replace(/^\s*[-|–—:]\s*/, "").trim();
+      snippet = afterUrl.replace(/\s+/g, " ").slice(0, 240);
+    }
+    if (!title) {
+      title = domain;
+    }
     hits.push({
-      title: match[1]?.trim() || "Untitled",
-      url: match[2]?.trim() || "",
-      snippet: (match[3] ?? "").replace(/\s+/g, " ").trim().slice(0, 220)
+      title,
+      url,
+      snippet,
+      provider,
+      domain
     });
   }
-  return hits.filter((item) => item.url.length > 0);
+  return hits;
+}
+
+function safeDomain(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+async function finalizePagedAgenticResponse(input: {
+  sessionId: string;
+  fullText: string;
+  pagedResponseStore: {
+    setPages: (sessionId: string, pages: string[]) => Promise<void>;
+    clear: (sessionId: string) => Promise<void>;
+  };
+  summary: string;
+  providersUsed: ResolvedProvider[];
+  retriesUsed: number;
+  tokenBudget: number;
+  confidence: "low" | "medium" | "high";
+  recommendationMode: "rank_only" | "rank_plus_synthesis";
+  sourceStats?: { hits: number; distinctDomains: number };
+  elapsedSec?: number;
+}) {
+  const pages = paginateResponse(input.fullText, 1600, 8);
+  const firstPage = pages[0] ?? input.fullText;
+  if (input.sessionId && pages.length > 1) {
+    await input.pagedResponseStore.setPages(input.sessionId, pages.slice(1));
+  } else if (input.sessionId) {
+    await input.pagedResponseStore.clear(input.sessionId);
+  }
+  const responseText = pages.length > 1 ? `${firstPage}\n\nReply #next for more (${pages.length - 1} remaining).` : firstPage;
+  return {
+    summary: input.summary,
+    responseText,
+    mode: "agentic_turn",
+    pageCount: pages.length,
+    providersUsed: input.providersUsed,
+    retriesUsed: Math.max(0, input.retriesUsed),
+    tokenBudget: input.tokenBudget,
+    confidence: input.confidence,
+    recommendationMode: input.recommendationMode,
+    sourceStats: input.sourceStats,
+    elapsedSec: input.elapsedSec
+  };
 }
 
 function buildLegacyWebToFileRunSpec(input: {

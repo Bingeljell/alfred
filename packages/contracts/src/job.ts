@@ -36,7 +36,9 @@ export const JobSchema = z.object({
       at: z.string(),
       message: z.string(),
       step: z.string().optional(),
-      percent: z.number().min(0).max(100).optional()
+      percent: z.number().min(0).max(100).optional(),
+      phase: z.string().optional(),
+      details: z.record(z.string(), z.unknown()).optional()
     })
     .optional(),
   result: z.record(z.string(), z.unknown()).optional(),

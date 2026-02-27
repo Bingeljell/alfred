@@ -10,7 +10,13 @@ function sleep(ms: number): Promise<void> {
 export type WorkerProcessor = (
   job: Job,
   context: {
-    reportProgress: (progress: { message: string; step?: string; percent?: number }) => Promise<void>;
+    reportProgress: (progress: {
+      message: string;
+      step?: string;
+      percent?: number;
+      phase?: string;
+      details?: Record<string, unknown>;
+    }) => Promise<void>;
   }
 ) => Promise<Record<string, unknown>>;
 
@@ -22,6 +28,8 @@ export type WorkerStatusEvent = {
   summary?: string;
   step?: string;
   percent?: number;
+  phase?: string;
+  details?: Record<string, unknown>;
   responseText?: string;
 };
 
@@ -68,7 +76,13 @@ export function startWorker(options: {
       }
 
       try {
-        const reportProgress = async (progress: { message: string; step?: string; percent?: number }): Promise<void> => {
+        const reportProgress = async (progress: {
+          message: string;
+          step?: string;
+          percent?: number;
+          phase?: string;
+          details?: Record<string, unknown>;
+        }): Promise<void> => {
           await store.updateJobProgress(claimed.job.id, progress);
           await onStatusChange?.({
             jobId: claimed.job.id,
@@ -77,7 +91,9 @@ export function startWorker(options: {
             status: "progress",
             summary: progress.message,
             step: progress.step,
-            percent: progress.percent
+            percent: progress.percent,
+            phase: progress.phase,
+            details: progress.details
           });
         };
 

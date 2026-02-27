@@ -995,6 +995,7 @@ export function renderWebConsoleHtml(): string {
             " " +
             String(activeTop.status || "unknown") +
             (activeTop.workerId ? "@" + String(activeTop.workerId) : "") +
+            (activeTop.progressPhase ? " [" + String(activeTop.progressPhase) + "]" : "") +
             (activeTop.progress ? " (" + String(activeTop.progress) + ")" : "")
           : "";
         updateSourceSnapshot(

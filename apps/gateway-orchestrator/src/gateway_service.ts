@@ -199,6 +199,8 @@ export class GatewayService {
       sessionId?: string;
       updatedAt: string;
       progress?: string;
+      progressPhase?: string;
+      progressDetails?: Record<string, unknown>;
     }>;
   }> {
     const queue = await this.store.statusCounts();
@@ -214,7 +216,12 @@ export class GatewayService {
         taskType: typeof job.payload.taskType === "string" ? job.payload.taskType : undefined,
         sessionId: typeof job.payload.sessionId === "string" ? job.payload.sessionId : undefined,
         updatedAt: job.updatedAt,
-        progress: typeof job.progress?.message === "string" ? job.progress.message : undefined
+        progress: typeof job.progress?.message === "string" ? job.progress.message : undefined,
+        progressPhase: typeof job.progress?.phase === "string" ? job.progress.phase : undefined,
+        progressDetails:
+          job.progress?.details && typeof job.progress.details === "object"
+            ? (job.progress.details as Record<string, unknown>)
+            : undefined
       }));
     return {
       service: "gateway-orchestrator",

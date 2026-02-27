@@ -55,15 +55,15 @@ export function createWorkerStatusHandler(input: {
     let text: string | null = null;
     if (event.status === "running") {
       const workerSuffix = event.workerId ? ` on ${event.workerId}` : "";
-      text = `On it. I started this on the worker queue${workerSuffix}.`;
+      text = `On it. This task is running on the worker queue${workerSuffix}.`;
     } else if (event.status === "progress") {
-      const nextText = normalizeProgressText(String(event.summary ?? "still working"));
+      const nextText = normalizeProgressText(String(event.summary ?? "still working"), event);
       const changed = nextText.trim() && nextText !== notifyState.lastProgressText;
       const sinceLast = now - notifyState.lastProgressAt;
       const shouldSend =
         (notifyState.progressCount < 2 && changed) ||
         (changed && sinceLast >= 15_000) ||
-        (!changed && sinceLast >= 45_000);
+        (!changed && sinceLast >= 30_000);
       if (shouldSend) {
         text = nextText;
         notifyState.lastProgressAt = now;
@@ -122,22 +122,32 @@ export function createWorkerStatusHandler(input: {
   };
 }
 
-function normalizeProgressText(raw: string): string {
+function normalizeProgressText(raw: string, event: WorkerStatusEvent): string {
   const text = raw.trim();
   if (!text) {
-    return "Still working on it.";
+    return "Still running. No new milestone yet.";
   }
-  if (/^planning\b/i.test(text)) {
-    return "Planning the approach...";
+  const details = event.details && typeof event.details === "object" ? event.details : {};
+  const elapsedSec =
+    typeof details.elapsedSec === "number" && Number.isFinite(details.elapsedSec) ? Math.max(0, Math.floor(details.elapsedSec)) : null;
+
+  if (event.phase === "retrieve" || /retrieving sources via/i.test(text)) {
+    const provider = typeof details.provider === "string" ? details.provider : null;
+    const hitCount = typeof details.hitCount === "number" ? details.hitCount : null;
+    const domainCount = typeof details.domainCount === "number" ? details.domainCount : null;
+    if (hitCount !== null && domainCount !== null) {
+      return `Retrieved ${hitCount} sources across ${domainCount} domains${provider ? ` via ${provider}` : ""}.`;
+    }
+    return elapsedSec !== null ? `${text} (${elapsedSec}s elapsed)` : text;
   }
-  if (/^collecting context\b/i.test(text) || /^still gathering sources\b/i.test(text)) {
-    return "Gathering sources...";
+  if (event.phase === "fallback_retrieve" || /coverage looks weak/i.test(text)) {
+    return text;
   }
-  if (/^retrying context collection\b/i.test(text) || /^retrying web search\b/i.test(text)) {
-    return "Source fetch is slow; retrying...";
+  if (event.phase === "rank") {
+    return text;
   }
-  if (/^comparing findings and drafting recommendation\b/i.test(text) || /^still analyzing sources\b/i.test(text)) {
-    return "Comparing findings and drafting a recommendation...";
+  if (event.phase === "synth") {
+    return elapsedSec !== null ? `${text} (${elapsedSec}s elapsed)` : text;
   }
   return text;
 }
