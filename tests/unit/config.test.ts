@@ -54,6 +54,7 @@ describe("loadConfig", () => {
     expect(config.alfredShellEnabled).toBe(false);
     expect(config.alfredShellTimeoutMs).toBe(20000);
     expect(config.alfredShellMaxOutputChars).toBe(8000);
+    expect(config.alfredWasmEnabled).toBe(false);
     expect(config.braveSearchApiKey).toBeUndefined();
     expect(config.braveSearchUrl).toBe("https://api.search.brave.com/res/v1/web/search");
     expect(config.braveSearchTimeoutMs).toBe(12000);
@@ -137,6 +138,7 @@ describe("loadConfig", () => {
       ALFRED_SHELL_ENABLED: "true",
       ALFRED_SHELL_TIMEOUT_MS: "30000",
       ALFRED_SHELL_MAX_OUTPUT_CHARS: "16000",
+      ALFRED_WASM_ENABLED: "true",
       BRAVE_SEARCH_API_KEY: "brave-key",
       BRAVE_SEARCH_URL: "https://brave.example/search",
       BRAVE_SEARCH_TIMEOUT_MS: "9000",
@@ -224,6 +226,7 @@ describe("loadConfig", () => {
     expect(config.alfredShellEnabled).toBe(true);
     expect(config.alfredShellTimeoutMs).toBe(30000);
     expect(config.alfredShellMaxOutputChars).toBe(16000);
+    expect(config.alfredWasmEnabled).toBe(true);
     expect(config.braveSearchApiKey).toBe("brave-key");
     expect(config.braveSearchUrl).toBe("https://brave.example/search");
     expect(config.braveSearchTimeoutMs).toBe(9000);

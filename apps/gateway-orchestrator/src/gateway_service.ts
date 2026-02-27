@@ -41,6 +41,10 @@ import {
   type ToolId,
   type ToolPolicyInput
 } from "./orchestrator/tool_policy_engine";
+import {
+  evaluateShellCommandPolicy as evaluateSandboxShellCommandPolicy,
+  isSandboxTargetEnabled
+} from "./orchestrator/sandbox_policy";
 
 type ImplicitApprovalDecision = "approve_latest" | "reject_latest";
 type RoutedLongTask = {
@@ -79,6 +83,7 @@ type CapabilityPolicy = {
   shellEnabled: boolean;
   shellTimeoutMs: number;
   shellMaxOutputChars: number;
+  wasmEnabled: boolean;
 };
 
 const DEFAULT_CAPABILITY_POLICY: CapabilityPolicy = {
@@ -96,19 +101,9 @@ const DEFAULT_CAPABILITY_POLICY: CapabilityPolicy = {
   fileWriteApprovalScope: "auth",
   shellEnabled: false,
   shellTimeoutMs: 20_000,
-  shellMaxOutputChars: 8_000
+  shellMaxOutputChars: 8_000,
+  wasmEnabled: false
 };
-
-const DEFAULT_SHELL_BLOCK_RULES = [
-  { id: "dangerous_rm_root", pattern: /\brm\s+-rf\s+\/(\s|$)/i },
-  { id: "fork_bomb", pattern: /:\(\)\s*\{\s*:\|:\s*&\s*\};:/i },
-  { id: "privilege_escalation", pattern: /\b(sudo|su)\b/i },
-  { id: "disk_format", pattern: /\b(mkfs|fdisk|diskutil\s+eraseDisk)\b/i },
-  { id: "raw_device_write", pattern: /\bdd\s+if=.*\sof=\/dev\//i },
-  { id: "shutdown_reboot", pattern: /\b(shutdown|reboot|halt)\b/i },
-  { id: "curl_pipe_shell", pattern: /\bcurl\b[^|]*\|\s*(bash|sh)\b/i },
-  { id: "wget_pipe_shell", pattern: /\bwget\b[^|]*\|\s*(bash|sh)\b/i }
-];
 
 export class GatewayService {
   private readonly capabilityPolicy: CapabilityPolicy;
@@ -236,7 +231,11 @@ export class GatewayService {
         : DEFAULT_CAPABILITY_POLICY.shellTimeoutMs,
       shellMaxOutputChars: Number.isFinite(configuredShellMaxOutputChars)
         ? Math.max(500, Math.min(50000, Math.floor(configuredShellMaxOutputChars)))
-        : DEFAULT_CAPABILITY_POLICY.shellMaxOutputChars
+        : DEFAULT_CAPABILITY_POLICY.shellMaxOutputChars,
+      wasmEnabled:
+        typeof capabilityPolicy?.wasmEnabled === "boolean"
+          ? capabilityPolicy.wasmEnabled
+          : DEFAULT_CAPABILITY_POLICY.wasmEnabled
     };
   }
 
@@ -307,7 +306,8 @@ export class GatewayService {
         fileWriteNotesDir: this.capabilityPolicy.fileWriteNotesDir,
         fileWriteApprovalMode: this.capabilityPolicy.fileWriteApprovalMode,
         fileWriteApprovalScope: this.capabilityPolicy.fileWriteApprovalScope,
-        shellEnabled: this.capabilityPolicy.shellEnabled
+        shellEnabled: this.capabilityPolicy.shellEnabled,
+        wasmEnabled: this.capabilityPolicy.wasmEnabled
       },
       buildSkillsSnapshot: () => this.buildSkillsSnapshot()
     });
@@ -1358,7 +1358,8 @@ export class GatewayService {
           `- approvalDefault: ${String(this.capabilityPolicy.approvalDefault)}`,
           `- webSearch: enabled=${String(this.capabilityPolicy.webSearchEnabled)}, requireApproval=${String(this.capabilityPolicy.webSearchRequireApproval)}, provider=${this.capabilityPolicy.webSearchProvider}`,
           `- fileWrite: enabled=${String(this.capabilityPolicy.fileWriteEnabled)}, requireApproval=${String(this.capabilityPolicy.fileWriteRequireApproval)}, mode=${this.capabilityPolicy.fileWriteApprovalMode}, scope=${this.capabilityPolicy.fileWriteApprovalScope}, notesOnly=${String(this.capabilityPolicy.fileWriteNotesOnly)}, notesDir=${this.capabilityPolicy.fileWriteNotesDir}`,
-          `- shell: enabled=${String(this.capabilityPolicy.shellEnabled)}, timeoutMs=${this.capabilityPolicy.shellTimeoutMs}, maxOutputChars=${this.capabilityPolicy.shellMaxOutputChars}`
+          `- shell: enabled=${String(this.capabilityPolicy.shellEnabled)}, timeoutMs=${this.capabilityPolicy.shellTimeoutMs}, maxOutputChars=${this.capabilityPolicy.shellMaxOutputChars}`,
+          `- wasm: enabled=${String(this.capabilityPolicy.wasmEnabled)}`
         ].join("\n");
       }
 
@@ -1524,6 +1525,9 @@ export class GatewayService {
       }
 
       case "shell_exec": {
+        if (!isSandboxTargetEnabled("shell.exec", this.buildSandboxPolicyConfig())) {
+          return "Shell execution is disabled by sandbox policy.";
+        }
         const policy = this.evaluateToolPolicy("shell.exec", { sessionId, authSessionId });
         if (!policy.allowed) {
           return policy.reason ?? "Shell execution is disabled by policy.";
@@ -2461,7 +2465,7 @@ export class GatewayService {
       "approval_gate",
       "file_write_policy",
       "file_send_attachment",
-      "shell_exec_policy"
+      "sandbox_policy_surface"
     ];
     const hash = content.join("|");
     return { hash, content };
@@ -2777,7 +2781,8 @@ export class GatewayService {
       fileWriteEnabled: this.capabilityPolicy.fileWriteEnabled,
       fileWriteRequireApproval: this.capabilityPolicy.fileWriteRequireApproval,
       fileWriteApprovalMode: this.capabilityPolicy.fileWriteApprovalMode,
-      shellEnabled: this.capabilityPolicy.shellEnabled
+      shellEnabled: this.capabilityPolicy.shellEnabled,
+      wasmEnabled: this.capabilityPolicy.wasmEnabled
     };
   }
 
@@ -2844,20 +2849,15 @@ export class GatewayService {
     });
   }
 
+  private buildSandboxPolicyConfig(): { shellEnabled: boolean; wasmEnabled: boolean } {
+    return {
+      shellEnabled: this.capabilityPolicy.shellEnabled,
+      wasmEnabled: this.capabilityPolicy.wasmEnabled
+    };
+  }
+
   private evaluateShellCommandPolicy(command: string): { blocked: false } | { blocked: true; ruleId: string } {
-    const trimmed = command.trim();
-    if (!trimmed) {
-      return { blocked: true, ruleId: "empty_command" };
-    }
-    for (const rule of DEFAULT_SHELL_BLOCK_RULES) {
-      if (rule.pattern.test(trimmed)) {
-        return {
-          blocked: true,
-          ruleId: rule.id
-        };
-      }
-    }
-    return { blocked: false };
+    return evaluateSandboxShellCommandPolicy(command);
   }
 
   private resolveWorkspacePath(relativePath: string): { ok: true; absolutePath: string } | { ok: false; error: string } {

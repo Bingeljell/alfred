@@ -191,6 +191,10 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ? Number(v) : 8000))
     .pipe(z.number().int().min(500).max(50000)),
+  ALFRED_WASM_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : false)),
   BRAVE_SEARCH_API_KEY: z.string().optional(),
   BRAVE_SEARCH_URL: z.string().optional().default("https://api.search.brave.com/res/v1/web/search"),
   BRAVE_SEARCH_TIMEOUT_MS: z
@@ -363,6 +367,7 @@ export type AppConfig = {
   alfredShellEnabled: boolean;
   alfredShellTimeoutMs: number;
   alfredShellMaxOutputChars: number;
+  alfredWasmEnabled: boolean;
   braveSearchApiKey?: string;
   braveSearchUrl: string;
   braveSearchTimeoutMs: number;
@@ -480,6 +485,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     alfredShellEnabled: parsed.ALFRED_SHELL_ENABLED,
     alfredShellTimeoutMs: parsed.ALFRED_SHELL_TIMEOUT_MS,
     alfredShellMaxOutputChars: parsed.ALFRED_SHELL_MAX_OUTPUT_CHARS,
+    alfredWasmEnabled: parsed.ALFRED_WASM_ENABLED,
     braveSearchApiKey: parsed.BRAVE_SEARCH_API_KEY,
     braveSearchUrl: parsed.BRAVE_SEARCH_URL,
     braveSearchTimeoutMs: parsed.BRAVE_SEARCH_TIMEOUT_MS,

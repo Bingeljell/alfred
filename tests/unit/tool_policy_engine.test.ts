@@ -9,7 +9,8 @@ const BASE_POLICY = {
   fileWriteEnabled: true,
   fileWriteRequireApproval: true,
   fileWriteApprovalMode: "session" as const,
-  shellEnabled: true
+  shellEnabled: true,
+  wasmEnabled: false
 };
 
 describe("tool_policy_engine", () => {
@@ -45,5 +46,15 @@ describe("tool_policy_engine", () => {
     });
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toContain("disabled");
+  });
+
+  it("gates wasm execution by explicit policy flag", () => {
+    const disabled = evaluateToolPolicy("wasm.exec", BASE_POLICY);
+    expect(disabled.allowed).toBe(false);
+    const enabled = evaluateToolPolicy("wasm.exec", {
+      ...BASE_POLICY,
+      wasmEnabled: true
+    });
+    expect(enabled.allowed).toBe(true);
   });
 });

@@ -19,6 +19,7 @@ export type ToolPolicyInput = {
   fileWriteRequireApproval: boolean;
   fileWriteApprovalMode: "per_action" | "session" | "always";
   shellEnabled: boolean;
+  wasmEnabled: boolean;
 };
 
 export type ToolPolicyDecision = {
@@ -171,9 +172,9 @@ export function evaluateToolPolicy(
   }
 
   return {
-    allowed: false,
+    allowed: policy.wasmEnabled,
     requiresApproval: false,
-    reason: "WASM execution is not yet enabled in this runtime.",
+    reason: policy.wasmEnabled ? undefined : "WASM execution is not yet enabled in this runtime.",
     spec
   };
 }

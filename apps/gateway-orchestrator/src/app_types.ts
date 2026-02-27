@@ -127,6 +127,7 @@ export type CreateGatewayAppOptions = {
     shellEnabled?: boolean;
     shellTimeoutMs?: number;
     shellMaxOutputChars?: number;
+    wasmEnabled?: boolean;
   };
   baileysInboundToken?: string;
 };

@@ -53,7 +53,8 @@ describe("orchestrator phases", () => {
         fileWriteNotesDir: "notes",
         fileWriteApprovalMode: "session",
         fileWriteApprovalScope: "auth",
-        shellEnabled: false
+        shellEnabled: false,
+        wasmEnabled: false
       },
       buildSkillsSnapshot: () => ({ hash: "skills-v1", content: ["planner", "web"] })
     });

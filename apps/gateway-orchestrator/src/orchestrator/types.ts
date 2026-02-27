@@ -55,6 +55,7 @@ export type ToolPolicySnapshot = {
   fileWriteApprovalMode: "per_action" | "session" | "always";
   fileWriteApprovalScope: "auth" | "channel";
   shellEnabled: boolean;
+  wasmEnabled: boolean;
 };
 
 export type PlannerDecision = {
