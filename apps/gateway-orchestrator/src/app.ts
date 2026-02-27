@@ -20,6 +20,7 @@ import { RunLedgerStore } from "./builtins/run_ledger_store";
 import { SupervisorStore } from "./builtins/supervisor_store";
 import { RunSpecStore } from "./builtins/run_spec_store";
 import { registerAuthRoutes } from "./routes/auth_routes";
+import { registerMemoryRoutes } from "./routes/memory_routes";
 import { registerObservabilityRoutes } from "./routes/observability_routes";
 import type { MemoryCheckpointClass } from "./builtins/memory_checkpoint_service";
 import type { LlmAuthPreference, PlannerDecision } from "./orchestrator/types";
@@ -52,11 +53,6 @@ const HeartbeatConfigureBodySchema = z.object({
 
 const HeartbeatRunBodySchema = z.object({
   force: z.boolean().optional()
-});
-
-const MemoryCompactionRunBodySchema = z.object({
-  force: z.boolean().optional(),
-  targetDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
 });
 
 const QRCode = require("qrcode") as {
@@ -502,110 +498,10 @@ export function createGatewayApp(
     }
   });
 
-  app.get("/v1/memory/status", (_req, res) => {
-    if (!memoryService) {
-      res.status(404).json({ error: "memory_not_configured" });
-      return;
-    }
-
-    res.status(200).json(memoryService.memoryStatus());
-  });
-
-  app.post("/v1/memory/sync", async (_req, res) => {
-    if (!memoryService) {
-      res.status(404).json({ error: "memory_not_configured" });
-      return;
-    }
-
-    await memoryService.syncMemory("manual_api");
-    res.status(200).json({ synced: true, status: memoryService.memoryStatus() });
-  });
-
-  app.get("/v1/memory/compaction/status", async (_req, res) => {
-    if (!memoryCompactionService) {
-      res.status(404).json({ error: "memory_compaction_not_configured" });
-      return;
-    }
-
-    const status = await memoryCompactionService.status();
-    res.status(200).json(status);
-  });
-
-  app.post("/v1/memory/compaction/run", async (req, res) => {
-    if (!memoryCompactionService) {
-      res.status(404).json({ error: "memory_compaction_not_configured" });
-      return;
-    }
-
-    try {
-      const input = MemoryCompactionRunBodySchema.parse(req.body ?? {});
-      const status = await memoryCompactionService.runNow({
-        force: input.force ?? true,
-        targetDate: input.targetDate,
-        trigger: "manual_api"
-      });
-      res.status(200).json(status);
-    } catch (error) {
-      res.status(400).json({ error: "invalid_memory_compaction_run_request", detail: String(error) });
-    }
-  });
-
-  app.get("/v1/memory/checkpoints/status", async (_req, res) => {
-    if (!memoryCheckpointService) {
-      res.status(404).json({ error: "memory_checkpoints_not_configured" });
-      return;
-    }
-
-    const status = await memoryCheckpointService.status();
-    res.status(200).json(status);
-  });
-
-  app.get("/v1/memory/search", async (req, res) => {
-    if (!memoryService) {
-      res.status(404).json({ error: "memory_not_configured" });
-      return;
-    }
-
-    const query = typeof req.query.q === "string" ? req.query.q : "";
-    const maxResults = typeof req.query.maxResults === "string" ? Number(req.query.maxResults) : undefined;
-    const minScore = typeof req.query.minScore === "string" ? Number(req.query.minScore) : undefined;
-
-    const results = await memoryService.searchMemory(query, { maxResults, minScore });
-    res.status(200).json({ results });
-  });
-
-  app.get("/v1/memory/snippet", async (req, res) => {
-    if (!memoryService) {
-      res.status(404).json({ error: "memory_not_configured" });
-      return;
-    }
-
-    const filePath = typeof req.query.path === "string" ? req.query.path : "";
-    const from = typeof req.query.from === "string" ? Number(req.query.from) : undefined;
-    const lines = typeof req.query.lines === "string" ? Number(req.query.lines) : undefined;
-
-    try {
-      const snippet = await memoryService.getMemorySnippet(filePath, from, lines);
-      res.status(200).json({ snippet });
-    } catch (error) {
-      res.status(400).json({ error: "invalid_snippet_request", detail: String(error) });
-    }
-  });
-
-  app.post("/v1/memory/notes", async (req, res) => {
-    if (!memoryService) {
-      res.status(404).json({ error: "memory_not_configured" });
-      return;
-    }
-
-    if (!req.body || typeof req.body.text !== "string" || req.body.text.trim().length === 0) {
-      res.status(400).json({ error: "invalid_note_payload" });
-      return;
-    }
-
-    const date = typeof req.body.date === "string" ? req.body.date : undefined;
-    const written = await memoryService.appendMemoryNote(req.body.text, date);
-    res.status(201).json(written);
+  registerMemoryRoutes(app, {
+    memoryService,
+    memoryCompactionService,
+    memoryCheckpointService
   });
 
   registerAuthRoutes(app, {
