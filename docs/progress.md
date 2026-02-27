@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-27: Extracted OpenAI/Codex auth HTTP surface into `registerAuthRoutes` (`apps/gateway-orchestrator/src/routes/auth_routes.ts`) and rewired `createGatewayApp` to compose auth dependencies separately from core message/job routes.
 - 2026-02-27: Extracted stream/run/supervisor/approval routes from `createGatewayApp` into `registerObservabilityRoutes` (`apps/gateway-orchestrator/src/routes/observability_routes.ts`), reducing app-level route clutter while preserving existing API response/validation behavior.
 - 2026-02-27: Extracted planner-fallback routing from `GatewayService.handleInbound` into `handlePlannerFallbackRoutes` and fixed async helper returns to `return await` in the `try/finally` flow so run-ledger persistence/finalization remains sequenced and avoids concurrent run-file write races.
 - 2026-02-26: Unified orchestrator typing by moving planner/auth preference contracts into shared phase types and reusing them across gateway app + service composition paths to reduce duplicate type maintenance during ongoing refactor.
