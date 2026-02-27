@@ -6,6 +6,7 @@ Deliver a WhatsApp-first self-hosted personal agent that can complete practical 
 
 Design constraint:
 - Alfred is agent-first and tool-mediated (`docs/agentic_vision.md`): natural-language goals should flow through planner + tool execution; command endpoints are secondary/operator-oriented.
+- Channel architecture is gateway-first (`docs/channel_control_plane_architecture.md`): WhatsApp/Web/TUI/future channels are transport lanes only; orchestration logic is centralized in gateway.
 - Alfred uses hybrid execution:
   - agentic mode by default for unknown tasks
   - structured RunSpec mode for high-risk/repeatable workflows
