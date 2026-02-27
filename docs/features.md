@@ -6,6 +6,9 @@ Deliver a WhatsApp-first self-hosted personal agent that can complete practical 
 
 Design constraint:
 - Alfred is agent-first and tool-mediated (`docs/agentic_vision.md`): natural-language goals should flow through planner + tool execution; command endpoints are secondary/operator-oriented.
+- Alfred uses hybrid execution:
+  - agentic mode by default for unknown tasks
+  - structured RunSpec mode for high-risk/repeatable workflows
 
 ## MVP Features (v1)
 
@@ -229,6 +232,7 @@ Acceptance criteria:
 - `/web ...` command queues a worker job instead of blocking the chat turn.
 - Research-like long requests are heuristically routed to worker with immediate “queued” acknowledgement.
 - Natural-language “research + send file/doc” requests can be routed as one worker run that writes a document and sends it as a WhatsApp attachment.
+- Structured RunSpec usage is selective (not universal); unknown tasks remain agentic unless policy/risk requires structured control.
 - Research-to-file runs execute through a versioned RunSpec contract (`version=1`) with explicit step types (`web.search`, `doc.compose`, `file.write`, `channel.send_attachment`).
 - Side-effect checkpoints can pause at required RunSpec steps and require per-step approvals before continuation.
 - Worker emits progress events (`progress`, `running`, `succeeded`, `failed`) and gateway surfaces those updates in stream/chat channels.

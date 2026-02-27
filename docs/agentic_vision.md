@@ -23,14 +23,31 @@ Alfred is an **agentic orchestrator**, not a form-based SaaS command app.
    - Workers execute RunSpecs and report progress/results.
    - Workers do not own orchestration truth.
 
+## Execution Modes (Locked)
+
+Alfred supports two complementary execution modes:
+
+1. **Agentic mode (default)**
+   - Used for unknown/open-ended tasks.
+   - Runtime can iteratively plan in-turn (`think -> tool -> observe -> next step`) under policy, budget, and approval guardrails.
+   - Optimized for adaptability and useful best-effort outcomes.
+
+2. **Structured mode (selective)**
+   - Used for high-risk or repeatable flows where deterministic phase control is needed.
+   - Gateway compiles explicit RunSpec execution and workers execute it with auditable step state.
+   - Optimized for reliability, traceability, and safer side effects.
+
+**Promotion loop:** successful repeated agentic patterns should be promoted into structured flows over time.
+
 ## Product Rule
 
 When we add any feature, default to this sequence:
 
 1. Define/extend tool contract.
 2. Add policy + approval semantics.
-3. Make the planner call the tool from natural language.
-4. Keep explicit slash commands as operator/debug fallbacks, not the primary product experience.
+3. Enable planner-first natural-language execution (agentic mode).
+4. Add structured RunSpec path only when risk/repeatability warrants it.
+5. Keep explicit slash commands as operator/debug fallbacks, not the primary product experience.
 
 ## Anti-Pattern to Avoid
 

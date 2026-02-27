@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-27: Updated architecture direction to explicitly lock hybrid execution behavior: agentic mode remains default for unknown tasks, while structured RunSpec mode is applied selectively for high-risk or repeatable workflows.
 - 2026-02-27: Locked an explicit agentic product direction in docs (`docs/agentic_vision.md`) and linked it from identity/plan/features so roadmap decisions prioritize natural-language planning plus tool-mediated execution over command-only SaaS-style interaction patterns.
 - 2026-02-27: Extracted `CreateGatewayAppOptions` into `apps/gateway-orchestrator/src/app_types.ts`, reducing app-factory type noise and making gateway composition dependencies easier to evolve independently.
 - 2026-02-27: Hardened worker Codex bootstrap with `ensureWorkerCodexRuntime` so failed Codex auth initialization now cleanly drops Codex chat runtime before hybrid LLM construction, preventing stale Codex handles from being retained in worker execution paths.
