@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-27: Extracted `CreateGatewayAppOptions` into `apps/gateway-orchestrator/src/app_types.ts`, reducing app-factory type noise and making gateway composition dependencies easier to evolve independently.
 - 2026-02-27: Hardened worker Codex bootstrap with `ensureWorkerCodexRuntime` so failed Codex auth initialization now cleanly drops Codex chat runtime before hybrid LLM construction, preventing stale Codex handles from being retained in worker execution paths.
 - 2026-02-27: Extracted root/UI/health handlers into `registerCoreRoutes` (`apps/gateway-orchestrator/src/routes/core_routes.ts`), leaving `createGatewayApp` focused on composing route modules and dependency wiring.
 - 2026-02-27: Extracted heartbeat API handlers into `registerHeartbeatRoutes` (`apps/gateway-orchestrator/src/routes/heartbeat_routes.ts`) so heartbeat config/run validation and route behavior are maintained as a separate composition unit.
