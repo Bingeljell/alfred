@@ -8,7 +8,7 @@ describe("loadConfig", () => {
     expect(config.workerPollMs).toBe(250);
     expect(config.workerConcurrency).toBe(1);
     expect(config.memoryCompactionEnabled).toBe(true);
-    expect(config.memoryCompactionIntervalMs).toBe(3600000);
+    expect(config.memoryCompactionIntervalMs).toBe(86400000);
     expect(config.memoryCompactionMaxDaysPerRun).toBe(2);
     expect(config.memoryCompactionMinEventsPerDay).toBe(6);
     expect(config.memoryCompactionMaxEventsPerDay).toBe(600);

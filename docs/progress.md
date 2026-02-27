@@ -20,6 +20,9 @@
 
 ## Recent Task Updates
 
+- 2026-02-27: Upgraded agentic worker execution to a budget-aware loop (goal normalization, evidence-coverage fallback retrieval, ranking JSON repair, heuristic ranking fallback, and concise synthesis fallback) so research turns degrade gracefully instead of returning raw-link dumps or link-as-answer recommendations.
+- 2026-02-27: Hardened worker operations with retry/watchdog controls: retryable failures now auto-requeue within `maxRetries`, queue retries persist `retryAttempt`, stale running/cancelling jobs are recovered via watchdog timeouts, and worker progress notifications reduce duplicate rapid-fire updates while retaining phase transitions.
+- 2026-02-27: Updated approval and memory defaults for better day-to-day UX: approval copy now defaults to `yes/no` guidance with optional explicit token usage, and memory compaction default interval moved to daily (`86400000`) across config/service/env/test surfaces.
 - 2026-02-27: Implemented ToolSpec v1 + centralized tool policy engine (`apps/gateway-orchestrator/src/orchestrator/tool_policy_engine.ts`) and wired gateway command policy checks through typed tool decisions (`web.search`, `file.write`, `file.send`, `shell.exec`) with safety-tier metadata emitted in tool-usage observability events.
 - 2026-02-27: Normalized the turn loop with explicit phase handler modules (`runDirectivesPhase`, `runPlanPhase`, `runPolicyPhase`, `runRoutePhase`, `runPersistPhase`, `runDispatchPhase`) and rewired gateway orchestration paths to use those handlers for consistent phase markers and cleaner control-plane flow.
 - 2026-02-27: Unified shell/wasm execution governance under a shared sandbox policy surface (`apps/gateway-orchestrator/src/orchestrator/sandbox_policy.ts`) and wired gateway/config/tool-policy contracts to consume that single capability layer (`shellEnabled`, `wasmEnabled`) with dedicated unit coverage.

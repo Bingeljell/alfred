@@ -218,14 +218,17 @@ export function createWorkerProcessor(input: {
 
     if (taskType === "agentic_turn") {
       const goal = String(job.payload.query ?? job.payload.goal ?? job.payload.text ?? "").trim();
+      const searchGoal = buildSearchGoal(goal);
       const requestedProvider = normalizeWebSearchProvider(job.payload.provider) ?? input.config.alfredWebSearchProvider;
       const maxRetries = clampInt(job.payload.maxRetries, 0, 5, 1);
       const timeBudgetMs = clampInt(job.payload.timeBudgetMs, 5000, 10 * 60 * 1000, 120_000);
       const tokenBudget = clampInt(job.payload.tokenBudget, 128, 50_000, 8_000);
-      const rankingBudgetMs = Math.min(15_000, Math.max(8_000, Math.floor(timeBudgetMs * 0.18)));
-      const synthesisBudgetMs = Math.min(28_000, Math.max(10_000, Math.floor(timeBudgetMs * 0.3)));
       const progressPulseMs = 30_000;
       const runStartedAt = Date.now();
+      const deadlineAt = runStartedAt + timeBudgetMs;
+      const searchBudgetMs = Math.min(35_000, Math.max(8_000, Math.floor(timeBudgetMs * 0.35)));
+      const rankingBudgetMs = Math.min(18_000, Math.max(8_000, Math.floor(timeBudgetMs * 0.2)));
+      const synthesisBudgetMs = Math.min(42_000, Math.max(12_000, Math.floor(timeBudgetMs * 0.42)));
 
       if (!goal) {
         return {
@@ -237,10 +240,11 @@ export function createWorkerProcessor(input: {
       await context.reportProgress({
         step: "planning",
         phase: "plan",
-        message: "Task accepted. Planning recommendation workflow.",
+        message: `Task accepted. Search focus prepared: ${searchGoal.slice(0, 90)}${searchGoal.length > 90 ? "..." : ""}`,
         details: {
           requestedProvider,
-          tokenBudget
+          tokenBudget,
+          searchGoal
         }
       });
 
@@ -250,7 +254,11 @@ export function createWorkerProcessor(input: {
       let searchError: unknown = null;
       let retriesUsed = 0;
 
-      const runProviderSearch = async (provider: ResolvedProvider, retries: number): Promise<{ provider: ResolvedProvider; text: string; hits: SearchHit[] } | null> => {
+      const runProviderSearch = async (
+        provider: ResolvedProvider,
+        retries: number,
+        query: string
+      ): Promise<{ provider: ResolvedProvider; text: string; hits: SearchHit[] } | null> => {
         for (let attempt = 1; attempt <= retries + 1; attempt += 1) {
           await context.reportProgress({
             step: "searching",
@@ -259,19 +267,22 @@ export function createWorkerProcessor(input: {
             details: {
               provider,
               attempt,
-              maxAttempts: retries + 1
+              maxAttempts: retries + 1,
+              query
             }
           });
           try {
+            const remainingMs = msRemaining(deadlineAt, 3000);
+            const attemptBudgetMs = Math.max(3000, Math.min(searchBudgetMs, remainingMs));
             const result = await withProgressPulse(
               () =>
                 withTimeout(
-                  input.webSearchService.search(goal, {
+                  input.webSearchService.search(query, {
                     provider,
                     authSessionId,
                     authPreference
                   }),
-                  timeBudgetMs,
+                  attemptBudgetMs,
                   "agentic_turn_search_time_budget_exceeded"
                 ),
               {
@@ -283,7 +294,8 @@ export function createWorkerProcessor(input: {
                     message: `Still retrieving via ${provider} (${Math.floor(elapsedMs / 1000)}s elapsed)...`,
                     details: {
                       provider,
-                      elapsedSec: Math.floor(elapsedMs / 1000)
+                      elapsedSec: Math.floor(elapsedMs / 1000),
+                      query
                     }
                   });
                 }
@@ -294,7 +306,7 @@ export function createWorkerProcessor(input: {
             if (!text || !resolvedProvider) {
               continue;
             }
-            const hits = extractSearchHits(text, 18, resolvedProvider);
+            const hits = extractSearchHits(text, 24, resolvedProvider);
             if (hits.length === 0) {
               continue;
             }
@@ -312,7 +324,7 @@ export function createWorkerProcessor(input: {
             await context.reportProgress({
               step: "retrying",
               phase: "retrieve",
-              message: `Source retrieval slowed down on ${provider}; retrying (${attempt}/${retries})...`,
+              message: `Source retrieval stalled on ${provider}; retrying (${attempt}/${retries})...`,
               details: {
                 provider,
                 retry: attempt,
@@ -324,7 +336,7 @@ export function createWorkerProcessor(input: {
         return null;
       };
 
-      const primary = await runProviderSearch(primaryProvider, maxRetries);
+      const primary = await runProviderSearch(primaryProvider, maxRetries, searchGoal);
       if (!primary) {
         const reason = searchError instanceof Error ? searchError.message : "no_result";
         return {
@@ -334,8 +346,8 @@ export function createWorkerProcessor(input: {
       }
       providersUsed.push(primary.provider);
 
-      let mergedHits = primary.hits;
-      const primaryCoverage = evaluateCoverage(primary.hits);
+      let mergedHits = rankSearchHitsForGoal(primary.hits, goal);
+      const primaryCoverage = evaluateCoverage(mergedHits);
       await context.reportProgress({
         step: "searching",
         phase: "retrieve",
@@ -358,12 +370,12 @@ export function createWorkerProcessor(input: {
               fallbackProvider
             }
           });
-          const fallback = await runProviderSearch(fallbackProvider, 0);
+          const fallback = await runProviderSearch(fallbackProvider, 0, searchGoal);
           if (!fallback) {
             continue;
           }
           providersUsed.push(fallback.provider);
-          mergedHits = mergeSearchHits(mergedHits, fallback.hits, 24);
+          mergedHits = rankSearchHitsForGoal(mergeSearchHits(mergedHits, fallback.hits, 28), goal);
           const mergedCoverage = evaluateCoverage(mergedHits);
           await context.reportProgress({
             step: "searching",
@@ -381,7 +393,28 @@ export function createWorkerProcessor(input: {
         }
       }
 
-      const compactEvidence = compactSearchHitsForSynthesis(mergedHits, 12);
+      const supplementalQuery = buildSupplementalSearchGoal(goal, searchGoal, mergedHits);
+      if (
+        supplementalQuery &&
+        supplementalQuery !== searchGoal &&
+        msRemaining(deadlineAt, 0) > Math.max(5000, Math.floor(searchBudgetMs * 0.6))
+      ) {
+        await context.reportProgress({
+          step: "searching",
+          phase: "fallback_retrieve",
+          message: "Running one supplemental retrieval pass to improve evidence coverage.",
+          details: {
+            query: supplementalQuery
+          }
+        });
+        const supplemental = await runProviderSearch(primaryProvider, 0, supplementalQuery);
+        if (supplemental) {
+          providersUsed.push(supplemental.provider);
+          mergedHits = rankSearchHitsForGoal(mergeSearchHits(mergedHits, supplemental.hits, 30), goal);
+        }
+      }
+
+      const compactEvidence = compactSearchHitsForSynthesis(mergedHits, 14);
       await context.reportProgress({
         step: "ranking",
         phase: "rank",
@@ -394,15 +427,35 @@ export function createWorkerProcessor(input: {
 
       const rankPrompt = buildAgenticRankingPrompt(goal, compactEvidence);
       let ranking: RankingResult | null = null;
+      let rankingRaw = "";
       try {
         const ranked = await withTimeout(
           input.llmService.generateText(authSessionId || sessionId, rankPrompt, { authPreference }),
-          rankingBudgetMs,
+          Math.max(3000, Math.min(rankingBudgetMs, msRemaining(deadlineAt, 3000))),
           "agentic_turn_ranking_time_budget_exceeded"
         );
-        ranking = parseRankingResult(ranked?.text ?? "");
+        rankingRaw = String(ranked?.text ?? "");
+        ranking = parseRankingResult(rankingRaw);
       } catch {
         ranking = null;
+      }
+
+      if (!ranking && rankingRaw.trim()) {
+        try {
+          const repairPrompt = buildRankingRepairPrompt(goal, rankingRaw);
+          const repaired = await withTimeout(
+            input.llmService.generateText(authSessionId || sessionId, repairPrompt, { authPreference }),
+            Math.max(2500, Math.min(8000, msRemaining(deadlineAt, 2500))),
+            "agentic_turn_ranking_repair_time_budget_exceeded"
+          );
+          ranking = parseRankingResult(repaired?.text ?? "");
+        } catch {
+          ranking = null;
+        }
+      }
+
+      if (!ranking) {
+        ranking = buildHeuristicRanking(goal, compactEvidence);
       }
 
       if (!ranking) {
@@ -466,7 +519,7 @@ export function createWorkerProcessor(input: {
           () =>
             withTimeout(
               input.llmService.generateText(authSessionId || sessionId, synthesisPrompt, { authPreference }),
-              synthesisBudgetMs,
+              Math.max(4000, Math.min(synthesisBudgetMs, msRemaining(deadlineAt, 4000))),
               "agentic_turn_synthesis_time_budget_exceeded"
             ),
           {
@@ -488,6 +541,29 @@ export function createWorkerProcessor(input: {
         synthesisText = composed || null;
       } catch {
         synthesisText = null;
+      }
+
+      if (!synthesisText && msRemaining(deadlineAt, 0) > 2500) {
+        await context.reportProgress({
+          step: "synthesizing",
+          phase: "synth",
+          message: "Deep synthesis exceeded budget; producing concise recommendation.",
+          details: {
+            topPick: ranking.topPick
+          }
+        });
+        try {
+          const concisePrompt = buildConciseSynthesisPrompt(goal, ranking, compactEvidence);
+          const concise = await withTimeout(
+            input.llmService.generateText(authSessionId || sessionId, concisePrompt, { authPreference }),
+            Math.max(2500, Math.min(9000, msRemaining(deadlineAt, 2500))),
+            "agentic_turn_concise_synthesis_time_budget_exceeded"
+          );
+          const composed = typeof concise?.text === "string" ? concise.text.trim() : "";
+          synthesisText = composed || null;
+        } catch {
+          synthesisText = null;
+        }
       }
 
       const fullText = synthesisText || renderRankOnlyRecommendation(goal, ranking, mergedHits, providersUsed);
@@ -711,6 +787,65 @@ function parseRunSpec(raw: unknown): RunSpecV1 | null {
   };
 }
 
+function buildSearchGoal(goal: string): string {
+  const trimmed = goal.trim();
+  if (!trimmed) {
+    return "";
+  }
+  let normalized = trimmed
+    .replace(/^[\s,]*(hey|hi|hello)\s+alfred[,\s]*/i, "")
+    .replace(/^[\s,]*(hey|hi|hello)[,\s]*/i, "")
+    .replace(/\b(can you|could you|please|for me)\b/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  normalized = normalized.replace(/[?.!]+$/g, "").trim();
+  return normalized || trimmed;
+}
+
+function buildSupplementalSearchGoal(goal: string, primaryQuery: string, hits: SearchHit[]): string | null {
+  const coverage = evaluateCoverage(hits);
+  if (!coverage.weakCoverage) {
+    return null;
+  }
+  const hint = /recommend|best|compare|vs|versus/i.test(goal)
+    ? "official docs benchmarks pricing comparison"
+    : "official docs comparison";
+  const supplemental = `${primaryQuery} ${hint}`.replace(/\s+/g, " ").trim();
+  return supplemental.length > primaryQuery.length ? supplemental : null;
+}
+
+function rankSearchHitsForGoal(hits: SearchHit[], goal: string): SearchHit[] {
+  if (hits.length <= 1) {
+    return hits;
+  }
+  const tokens = new Set(
+    goal
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, " ")
+      .split(/\s+/)
+      .filter((item) => item.length >= 3)
+  );
+  const scored = hits.map((hit, index) => {
+    const text = `${hit.title} ${hit.snippet}`.toLowerCase();
+    let overlap = 0;
+    for (const token of tokens) {
+      if (text.includes(token)) {
+        overlap += 1;
+      }
+    }
+    const primaryBoost = looksLikePrimarySource(hit.url) ? 2 : 0;
+    const score = overlap + primaryBoost;
+    return { hit, score, index };
+  });
+  scored.sort((a, b) => {
+    if (a.score === b.score) {
+      return a.index - b.index;
+    }
+    return b.score - a.score;
+  });
+  return scored.map((item) => item.hit);
+}
+
 function buildAgenticRankingPrompt(goal: string, hits: SearchHit[]): string {
   const evidence = hits
     .map((hit, index) => `${index + 1}. ${hit.title} | ${hit.url} | ${hit.snippet} | provider=${hit.provider}`)
@@ -731,6 +866,22 @@ function buildAgenticRankingPrompt(goal: string, hits: SearchHit[]): string {
     `Goal: ${goal}`,
     "Evidence:",
     evidence
+  ].join("\n");
+}
+
+function buildRankingRepairPrompt(goal: string, rawRanking: string): string {
+  return [
+    "You are repairing malformed JSON ranking output.",
+    "Return STRICT JSON only with this shape:",
+    '{"confidence":"low|medium|high","topPick":"",\"summary\":\"\",\"ambiguityReasons\":[],\"followUpQuestions\":[],\"candidates\":[{\"name\":\"\",\"category\":\"\",\"score\":0,\"pros\":[],\"cons\":[],\"rationale\":\"\",\"evidenceUrls\":[]}]}',
+    "",
+    "Requirements:",
+    "- topPick and candidate names must be entities/tools/models, never URLs.",
+    "- Keep only evidence URLs in evidenceUrls.",
+    `Goal: ${goal}`,
+    "",
+    "Malformed or mixed output to repair:",
+    rawRanking
   ].join("\n");
 }
 
@@ -765,6 +916,29 @@ function buildAgenticSynthesisPrompt(
   ].join("\n");
 }
 
+function buildConciseSynthesisPrompt(goal: string, ranking: RankingResult, hits: SearchHit[]): string {
+  const evidence = hits
+    .slice(0, 8)
+    .map((hit, index) => `${index + 1}. ${hit.title} (${hit.url})`)
+    .join("\n");
+  return [
+    "You are Alfred. Produce a concise recommendation.",
+    "Output exactly:",
+    "1) Best option",
+    "2) Why (3 bullets)",
+    "3) Alternatives (2 items)",
+    "4) Confidence",
+    "5) Sources (URLs)",
+    "",
+    `Goal: ${goal}`,
+    "Ranking JSON:",
+    JSON.stringify(ranking, null, 2),
+    "",
+    "Evidence:",
+    evidence
+  ].join("\n");
+}
+
 function parseRankingResult(raw: string): RankingResult | null {
   const parsed = parseJsonObjectFromText(raw);
   if (!parsed) {
@@ -787,7 +961,7 @@ function parseRankingResult(raw: string): RankingResult | null {
         return null;
       }
       const record = candidate as Record<string, unknown>;
-      const name = String(record.name ?? "").trim();
+      const name = sanitizeCandidateName(String(record.name ?? "").trim());
       if (!name) {
         return null;
       }
@@ -823,7 +997,7 @@ function parseRankingResult(raw: string): RankingResult | null {
   }
   return {
     confidence,
-    topPick: topPick || candidates[0]?.name || "",
+    topPick: sanitizeTopPick(topPick || candidates[0]?.name || "", candidates),
     candidates,
     ambiguityReasons,
     followUpQuestions,
@@ -905,6 +1079,12 @@ function evaluateRecommendationQuality(
   if (!ranking.topPick.trim()) {
     reasons.push("missing_top_pick");
   }
+  if (looksLikeUrl(ranking.topPick)) {
+    reasons.push("top_pick_is_url");
+  }
+  if (looksLikeSourceTitle(ranking.topPick, hits)) {
+    reasons.push("top_pick_is_source_title");
+  }
   if (ranking.candidates.length < 2) {
     reasons.push("insufficient_ranked_candidates");
   }
@@ -928,8 +1108,8 @@ function renderNoRankingFallback(goal: string, hits: SearchHit[], providersUsed:
     `Goal: ${goal}`,
     `Providers used: ${providersUsed.join(", ")}`,
     "",
-    "Top sources collected:",
-    shortlist.map((item, index) => `${index + 1}. ${item.title} (${item.url})`).join("\n"),
+    "Strongest collected options so far:",
+    shortlist.map((item, index) => `${index + 1}. ${extractOptionName(item.title)} — ${item.url}`).join("\n"),
     "",
     "If you share your top priority (cost, quality, speed, or ecosystem), I can finalize a recommendation."
   ].join("\n");
@@ -957,7 +1137,7 @@ function renderQualityGateFallback(
     "I can give you a provisional shortlist, but confidence is not high enough for a final recommendation yet.",
     `Why: ${quality.reasons.join(", ")}`,
     "",
-    "Current top options:",
+    "Current top options (needs one more pass before hard recommendation):",
     ...top.map((item, index) => `${index + 1}. ${item.name} (score ${item.score})`),
     "",
     "Top sources:",
@@ -976,8 +1156,9 @@ function renderRankOnlyRecommendation(
   const top = ranking.candidates[0];
   const alternatives = ranking.candidates.slice(1, 3);
   const sourceUrls = Array.from(new Set(hits.map((item) => item.url))).slice(0, 6);
+  const bestOption = sanitizeTopPick(top?.name || ranking.topPick, ranking.candidates) || "Top-ranked option";
   return [
-    `Recommendation: ${top?.name || ranking.topPick}`,
+    `Recommendation: ${bestOption}`,
     "",
     `Why this pick: ${top?.rationale || ranking.summary || "Best overall tradeoff from current evidence."}`,
     "",
@@ -1008,6 +1189,42 @@ function mergeSearchHits(primary: SearchHit[], fallback: SearchHit[], limit: num
     }
   }
   return merged;
+}
+
+function buildHeuristicRanking(goal: string, hits: SearchHit[]): RankingResult | null {
+  if (hits.length === 0) {
+    return null;
+  }
+  const candidates = hits
+    .slice(0, 6)
+    .map((hit, index): RankingCandidate | null => {
+      const name = extractOptionName(hit.title);
+      if (!name || looksLikeUrl(name)) {
+        return null;
+      }
+      const score = Math.max(40, 90 - index * 7 + (looksLikePrimarySource(hit.url) ? 4 : 0));
+      return {
+        name,
+        category: "option",
+        score,
+        pros: [hit.snippet || "Strong relevance to the goal"],
+        cons: [] as string[],
+        rationale: `Derived from retrieved evidence (${hit.domain}).`,
+        evidenceUrls: [hit.url]
+      };
+    })
+    .filter((item): item is RankingCandidate => item !== null);
+  if (candidates.length === 0) {
+    return null;
+  }
+  return {
+    confidence: candidates.length >= 3 ? "medium" : "low",
+    topPick: candidates[0]!.name,
+    candidates,
+    ambiguityReasons: [],
+    followUpQuestions: [],
+    summary: `Heuristic ranking generated from ${Math.min(6, hits.length)} evidence hits for: ${goal}`
+  };
 }
 
 function compactSearchHitsForSynthesis(hits: SearchHit[], limit: number): SearchHit[] {
@@ -1110,7 +1327,7 @@ async function finalizePagedAgenticResponse(input: {
   sourceStats?: { hits: number; distinctDomains: number };
   elapsedSec?: number;
 }) {
-  const pages = paginateResponse(input.fullText, 1600, 8);
+  const pages = paginateResponse(input.fullText, 2800, 4);
   const firstPage = pages[0] ?? input.fullText;
   if (input.sessionId && pages.length > 1) {
     await input.pagedResponseStore.setPages(input.sessionId, pages.slice(1));
@@ -1131,6 +1348,70 @@ async function finalizePagedAgenticResponse(input: {
     sourceStats: input.sourceStats,
     elapsedSec: input.elapsedSec
   };
+}
+
+function extractOptionName(title: string): string {
+  const cleaned = title
+    .replace(/^[\d.\s-]+/, "")
+    .replace(/\s*\|\s*.*/, "")
+    .replace(/\s*-\s*https?:\/\/\S+$/i, "")
+    .replace(/\s*\((https?:\/\/[^)]+)\)\s*$/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!cleaned) {
+    return "";
+  }
+  const short = cleaned.split(":")[0]?.trim() || cleaned;
+  return short.slice(0, 120);
+}
+
+function sanitizeTopPick(value: string, candidates: RankingCandidate[]): string {
+  const cleaned = value.trim();
+  if (!cleaned || looksLikeUrl(cleaned)) {
+    return candidates[0]?.name ?? "";
+  }
+  const matched = candidates.find((item) => item.name.toLowerCase() === cleaned.toLowerCase());
+  if (matched) {
+    return matched.name;
+  }
+  return cleaned.slice(0, 120);
+}
+
+function sanitizeCandidateName(value: string): string {
+  const cleaned = value
+    .replace(/\s+/g, " ")
+    .replace(/^\d+\.\s*/, "")
+    .trim();
+  if (!cleaned || looksLikeUrl(cleaned)) {
+    return "";
+  }
+  return cleaned.slice(0, 120);
+}
+
+function looksLikeUrl(value: string): boolean {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return true;
+  }
+  return /^[a-z0-9.-]+\.[a-z]{2,}(?:\/|$)/i.test(trimmed);
+}
+
+function looksLikeSourceTitle(value: string, hits: SearchHit[]): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  const wordCount = normalized.split(/\s+/).filter((item) => item.length > 0).length;
+  if (wordCount <= 4) {
+    return false;
+  }
+  return hits.some((hit) => {
+    const title = hit.title.trim().toLowerCase();
+    return title === normalized || normalized.includes(title);
+  });
 }
 
 function buildLegacyWebToFileRunSpec(input: {
@@ -1289,6 +1570,10 @@ function clampInt(raw: unknown, min: number, max: number, fallback: number): num
     return max;
   }
   return value;
+}
+
+function msRemaining(deadlineAt: number, floorMs: number): number {
+  return Math.max(floorMs, deadlineAt - Date.now());
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {

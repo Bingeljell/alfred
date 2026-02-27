@@ -64,10 +64,22 @@ export class FileBackedQueueStore {
     }
 
     const now = new Date().toISOString();
+    const nextPayload =
+      original.payload && typeof original.payload === "object"
+        ? {
+            ...original.payload,
+            retryAttempt: clampInt((original.payload as Record<string, unknown>).retryAttempt, 0, 100, 0) + 1,
+            retryRootJobId:
+              typeof (original.payload as Record<string, unknown>).retryRootJobId === "string"
+                ? String((original.payload as Record<string, unknown>).retryRootJobId)
+                : original.retryOf ?? original.id
+          }
+        : original.payload;
+
     const retried: Job = {
       id: randomUUID(),
       type: original.type,
-      payload: original.payload,
+      payload: nextPayload,
       priority: original.priority,
       status: "queued",
       createdAt: now,
@@ -85,6 +97,43 @@ export class FileBackedQueueStore {
     });
 
     return retried;
+  }
+
+  async recoverStuckJobs(input?: {
+    runningTimeoutMs?: number;
+    cancellingTimeoutMs?: number;
+  }): Promise<Job[]> {
+    const runningTimeoutMs = clampInt(input?.runningTimeoutMs, 30_000, 24 * 60 * 60 * 1000, 10 * 60 * 1000);
+    const cancellingTimeoutMs = clampInt(input?.cancellingTimeoutMs, 10_000, 24 * 60 * 60 * 1000, 90_000);
+    const now = Date.now();
+    const jobs = await this.listJobs();
+    const recovered: Job[] = [];
+
+    for (const job of jobs) {
+      if (job.status !== "running" && job.status !== "cancelling") {
+        continue;
+      }
+      const lastTouchedAt = Date.parse(job.updatedAt || job.startedAt || job.createdAt);
+      if (!Number.isFinite(lastTouchedAt)) {
+        continue;
+      }
+      const elapsed = now - lastTouchedAt;
+      const threshold = job.status === "running" ? runningTimeoutMs : cancellingTimeoutMs;
+      if (elapsed < threshold) {
+        continue;
+      }
+      const failed = await this.failJob(job.id, {
+        code: "watchdog_timeout",
+        message: `Job exceeded ${Math.floor(threshold / 1000)}s without heartbeat`,
+        retryable: false
+      });
+      if (failed) {
+        recovered.push(failed);
+      }
+      await this.releaseClaim(job.id);
+    }
+
+    return recovered;
   }
 
   async getJob(jobId: string): Promise<Job | null> {
@@ -403,4 +452,19 @@ export class FileBackedQueueStore {
     const line = `${JSON.stringify(event)}\n`;
     await fs.appendFile(this.eventsPath, line, "utf8");
   }
+}
+
+function clampInt(raw: unknown, min: number, max: number, fallback: number): number {
+  const numeric = typeof raw === "number" ? raw : Number.NaN;
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+  const value = Math.floor(numeric);
+  if (value < min) {
+    return min;
+  }
+  if (value > max) {
+    return max;
+  }
+  return value;
 }

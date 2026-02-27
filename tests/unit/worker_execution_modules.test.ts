@@ -96,14 +96,14 @@ describe("worker execution modules", () => {
     expect(result.summary).toBe("agentic_turn_searxng");
     expect(result.mode).toBe("agentic_turn");
     expect(String(result.responseText)).toContain("Recommendation: Option A");
-    expect(search).toHaveBeenCalledTimes(1);
-    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(search.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(generateText.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(clearPages).toHaveBeenCalledTimes(1);
     expect(setPages).not.toHaveBeenCalled();
 
     const progressCalls = reportProgress.mock.calls as unknown as Array<Array<Record<string, unknown> | undefined>>;
     const progressMessages = progressCalls.map((call) => String(call[0]?.message ?? ""));
-    expect(progressMessages).toContain("Task accepted. Planning recommendation workflow.");
+    expect(progressMessages.some((item) => String(item).includes("Task accepted. Search focus prepared:"))).toBe(true);
     expect(progressMessages.some((item) => String(item).includes("Retrieving sources via"))).toBe(true);
     expect(progressMessages).toContain("Composing final recommendation from ranked evidence.");
   });
@@ -199,8 +199,8 @@ describe("worker execution modules", () => {
     expect(result.summary).toBe("agentic_turn_brave");
     expect(String(result.responseText)).toContain("Recommendation: Candidate One");
     expect(String(result.responseText)).toContain("Confidence: medium");
-    expect(search).toHaveBeenCalledTimes(1);
-    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(search.mock.calls.length).toBeGreaterThanOrEqual(1);
+    expect(generateText.mock.calls.length).toBeGreaterThanOrEqual(2);
     expect(clearPages).toHaveBeenCalledTimes(1);
     expect(setPages).not.toHaveBeenCalled();
   });

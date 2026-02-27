@@ -1378,7 +1378,7 @@ export class GatewayService {
         return [
           `Pending approvals (${pending.length}):`,
           ...lines,
-          "Reply yes/no for latest, or approve <token> / reject <token> for explicit resolution."
+          "Reply yes/no for the latest request. Use approve <token> or reject <token> to resolve a specific pending request."
         ].join("\n");
       }
 
@@ -1488,7 +1488,7 @@ export class GatewayService {
             text: command.text,
             authSessionId
           });
-          return `Approval required for file write. Reply yes/no, or approve ${approval.token}`;
+          return `Approval required for file write. Reply yes or no. Optional explicit token: approve ${approval.token}`;
         }
 
         return this.executeFileWrite(resolved.absolutePath, command.text);
@@ -1518,7 +1518,7 @@ export class GatewayService {
             caption: command.caption,
             authSessionId
           });
-          return `Approval required for file send. Reply yes/no, or approve ${approval.token}`;
+          return `Approval required for file send. Reply yes or no. Optional explicit token: approve ${approval.token}`;
         }
 
         return this.executeFileSend(sessionId, resolved.absolutePath, command.caption);
@@ -1558,7 +1558,7 @@ export class GatewayService {
         }
 
         const approval = await this.approvalStore.create(sessionId, "send_text", { text: command.text });
-        return `Approval required for side-effect action. Reply yes/no, or approve ${approval.token}`;
+        return `Approval required for side-effect action. Reply yes or no. Optional explicit token: approve ${approval.token}`;
       }
 
       case "approve": {
@@ -2086,7 +2086,7 @@ export class GatewayService {
       });
     }
 
-    return `Approval required for step '${nextStep?.name ?? nextStepId}'. Reply yes/no, or approve ${approval.token}`;
+    return `Approval required for step '${nextStep?.name ?? nextStepId}'. Reply yes or no. Optional explicit token: approve ${approval.token}`;
   }
 
   private async executeApprovedAction(

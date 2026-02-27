@@ -35,7 +35,7 @@ const EnvSchema = z.object({
   MEMORY_COMPACTION_INTERVAL_MS: z
     .string()
     .optional()
-    .transform((v) => (v ? Number(v) : 60 * 60 * 1000))
+    .transform((v) => (v ? Number(v) : 24 * 60 * 60 * 1000))
     .pipe(z.number().int().min(60_000).max(24 * 60 * 60 * 1000)),
   MEMORY_COMPACTION_MAX_DAYS_PER_RUN: z
     .string()

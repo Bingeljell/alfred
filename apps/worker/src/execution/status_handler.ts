@@ -39,7 +39,7 @@ export function createWorkerStatusHandler(input: {
 }): (event: WorkerStatusEvent) => Promise<void> {
   const jobNotificationState = new Map<
     string,
-    { lastProgressAt: number; lastProgressText: string; progressCount: number }
+    { lastProgressAt: number; lastProgressText: string; lastProgressPhase: string; progressCount: number }
   >();
 
   return async (event: WorkerStatusEvent): Promise<void> => {
@@ -50,7 +50,12 @@ export function createWorkerStatusHandler(input: {
     const summary = event.summary ? ` (${event.summary})` : "";
     const status = event.status === "progress" ? "running" : event.status;
     const now = Date.now();
-    const notifyState = jobNotificationState.get(event.jobId) ?? { lastProgressAt: 0, lastProgressText: "", progressCount: 0 };
+    const notifyState = jobNotificationState.get(event.jobId) ?? {
+      lastProgressAt: 0,
+      lastProgressText: "",
+      lastProgressPhase: "",
+      progressCount: 0
+    };
 
     let text: string | null = null;
     if (event.status === "running") {
@@ -60,14 +65,18 @@ export function createWorkerStatusHandler(input: {
       const nextText = normalizeProgressText(String(event.summary ?? "still working"), event);
       const changed = nextText.trim() && nextText !== notifyState.lastProgressText;
       const sinceLast = now - notifyState.lastProgressAt;
+      const phase = typeof event.phase === "string" ? event.phase : "";
+      const phaseChanged = Boolean(phase) && phase !== notifyState.lastProgressPhase;
       const shouldSend =
-        (notifyState.progressCount < 2 && changed) ||
+        (notifyState.progressCount === 0 && changed) ||
+        (phaseChanged && changed) ||
         (changed && sinceLast >= 15_000) ||
         (!changed && sinceLast >= 30_000);
       if (shouldSend) {
         text = nextText;
         notifyState.lastProgressAt = now;
         notifyState.lastProgressText = nextText;
+        notifyState.lastProgressPhase = phase;
         notifyState.progressCount += 1;
         jobNotificationState.set(event.jobId, notifyState);
       }
