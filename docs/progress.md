@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-27: Extracted identity/inbound/WhatsApp live/jobs APIs into `registerChannelRoutes` (`apps/gateway-orchestrator/src/routes/channel_routes.ts`), preserving existing Baileys inbound authorization, QR status rendering, and async job response semantics while reducing route density in `createGatewayApp`.
 - 2026-02-27: Extracted memory endpoints into `registerMemoryRoutes` (`apps/gateway-orchestrator/src/routes/memory_routes.ts`) so compaction/checkpoint and memory retrieval/write handlers are maintained separately from gateway app bootstrap wiring.
 - 2026-02-27: Extracted OpenAI/Codex auth HTTP surface into `registerAuthRoutes` (`apps/gateway-orchestrator/src/routes/auth_routes.ts`) and rewired `createGatewayApp` to compose auth dependencies separately from core message/job routes.
 - 2026-02-27: Extracted stream/run/supervisor/approval routes from `createGatewayApp` into `registerObservabilityRoutes` (`apps/gateway-orchestrator/src/routes/observability_routes.ts`), reducing app-level route clutter while preserving existing API response/validation behavior.
