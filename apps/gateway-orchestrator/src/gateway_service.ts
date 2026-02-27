@@ -27,6 +27,14 @@ import { runNormalizePhase } from "./orchestrator/normalize_phase";
 import { runSessionPhase } from "./orchestrator/session_phase";
 import type { LlmAuthPreference, PlannerDecision } from "./orchestrator/types";
 import {
+  runDirectivesPhase,
+  runDispatchPhase,
+  runPersistPhase,
+  runPlanPhase,
+  runPolicyPhase,
+  runRoutePhase
+} from "./orchestrator/turn_phase_handlers";
+import {
   TOOL_SPECS_V1,
   evaluateToolPolicy,
   type ExternalCapability,
@@ -345,7 +353,7 @@ export class GatewayService {
 
     let runFailure: string | null = null;
     try {
-      await markPhase("directives", "Resolving directives and command surface");
+      await runDirectivesPhase({ markPhase });
 
       if (inbound.requestJob) {
         return await this.handleExplicitJobRequest({
@@ -371,7 +379,7 @@ export class GatewayService {
           return prePlannerResponse;
         }
 
-        await markPhase("plan", "Planning intent");
+        await runPlanPhase({ markPhase });
         const activeJob = await this.findLatestActiveJob(inbound.sessionId);
         const plan = await this.intentPlanner?.plan(authSessionId, inbound.text, {
           authPreference,
@@ -409,7 +417,7 @@ export class GatewayService {
           });
         };
 
-        await markPhase("policy", "Evaluating policy and approvals");
+        await runPolicyPhase({ markPhase });
         const primaryPlannerRoute = await this.handlePlannerPrimaryRoutes({
           inbound: {
             sessionId: inbound.sessionId,
@@ -441,7 +449,7 @@ export class GatewayService {
         });
       }
 
-      await markPhase("persist", "No inbound chat text received");
+      await runPersistPhase({ markPhase }, "No inbound chat text received");
       return {
         accepted: true,
         mode: "chat",
@@ -486,7 +494,7 @@ export class GatewayService {
       return null;
     }
 
-    await input.markPhase("dispatch", "Session is currently busy", {
+    await runDispatchPhase({ markPhase: input.markPhase }, "Session is currently busy", {
       activeRunId: runStart.activeRunId
     });
 
@@ -538,7 +546,7 @@ export class GatewayService {
     ) => Promise<void>;
     markRunNote: (message: string, details?: Record<string, unknown>) => Promise<void>;
   }): Promise<InboundHandleResult> {
-    await input.markPhase("route", "Inbound requested async job");
+    await runRoutePhase({ markPhase: input.markPhase }, "Inbound requested async job");
     const job = await this.store.createJob({
       type: "stub_task",
       payload: {
@@ -551,7 +559,7 @@ export class GatewayService {
 
     await this.queueJobNotification(input.inbound.sessionId, job.id, "queued", `Job ${job.id} is queued`);
     await input.markRunNote("Async job queued from inbound request", { jobId: job.id });
-    await input.markPhase("persist", "Persisting async job acknowledgement", { jobId: job.id });
+    await runPersistPhase({ markPhase: input.markPhase }, "Persisting async job acknowledgement", { jobId: job.id });
     await this.recordConversation(input.inbound.sessionId, "outbound", `Job ${job.id} queued`, {
       source: "gateway",
       channel: "internal",
@@ -579,7 +587,7 @@ export class GatewayService {
   }): Promise<InboundHandleResult | null> {
     const paging = await this.handlePagingRequest(input.inbound.sessionId, input.inbound.text);
     if (paging) {
-      await input.markPhase("persist", "Serving paged response");
+      await runPersistPhase({ markPhase: input.markPhase }, "Serving paged response");
       await this.recordConversation(input.inbound.sessionId, "outbound", paging, {
         source: "gateway",
         channel: "internal",
@@ -595,9 +603,11 @@ export class GatewayService {
 
     const directiveCommand = parseCommand(input.inbound.text);
     if (directiveCommand) {
-      await input.markPhase("route", "Routing directive command execution", { command: directiveCommand.kind });
+      await runRoutePhase({ markPhase: input.markPhase }, "Routing directive command execution", { command: directiveCommand.kind });
       const response = await this.executeCommand(input.inbound.sessionId, directiveCommand, input.authSessionId, input.authPreference);
-      await input.markPhase("persist", "Persisting directive command response", { command: directiveCommand.kind });
+      await runPersistPhase({ markPhase: input.markPhase }, "Persisting directive command response", {
+        command: directiveCommand.kind
+      });
       await this.recordConversation(input.inbound.sessionId, "outbound", response, {
         source: "gateway",
         channel: "internal",
@@ -623,8 +633,10 @@ export class GatewayService {
         input.authPreference
       );
       if (decisionResult.handled) {
-        await input.markPhase("route", "Routing implicit approval decision", { decision: implicitApprovalDecision });
-        await input.markPhase("persist", "Persisting implicit approval response");
+        await runRoutePhase({ markPhase: input.markPhase }, "Routing implicit approval decision", {
+          decision: implicitApprovalDecision
+        });
+        await runPersistPhase({ markPhase: input.markPhase }, "Persisting implicit approval response");
         await this.recordConversation(input.inbound.sessionId, "outbound", decisionResult.response, {
           source: "gateway",
           channel: "internal",
@@ -644,8 +656,8 @@ export class GatewayService {
 
     const directProgressStatus = await this.answerProgressQuery(input.inbound.sessionId, input.inbound.text);
     if (directProgressStatus) {
-      await input.markPhase("route", "Routing progress-query directive");
-      await input.markPhase("persist", "Persisting progress-query response");
+      await runRoutePhase({ markPhase: input.markPhase }, "Routing progress-query directive");
+      await runPersistPhase({ markPhase: input.markPhase }, "Persisting progress-query response");
       await this.recordConversation(input.inbound.sessionId, "outbound", directProgressStatus, {
         source: "gateway",
         channel: "internal",
@@ -688,7 +700,7 @@ export class GatewayService {
     if (plan.intent === "clarify") {
       await input.recordPlannerTrace("ask_clarification");
       const question = plan.question?.trim() || "Can you clarify what output you want first?";
-      await input.markPhase("persist", "Persisting clarification");
+      await runPersistPhase({ markPhase: input.markPhase }, "Persisting clarification");
       await this.recordConversation(input.inbound.sessionId, "outbound", question, {
         source: "gateway",
         channel: "internal",
@@ -712,7 +724,7 @@ export class GatewayService {
       const progressStatus = await this.answerProgressQuery(input.inbound.sessionId, input.inbound.text);
       if (progressStatus) {
         await input.recordPlannerTrace("reply_progress_status");
-        await input.markPhase("persist", "Persisting status-query response");
+        await runPersistPhase({ markPhase: input.markPhase }, "Persisting status-query response");
         await this.recordConversation(input.inbound.sessionId, "outbound", progressStatus, {
           source: "gateway",
           channel: "internal",
@@ -760,7 +772,7 @@ export class GatewayService {
             approvalResponse ??
             "Approval flow is configured but no approval checkpoint was found for this run.";
           await input.recordPlannerTrace("request_approval_web_to_file_send");
-          await input.markPhase("persist", "Persisting planner approval request");
+          await runPersistPhase({ markPhase: input.markPhase }, "Persisting planner approval request");
           await this.recordConversation(input.inbound.sessionId, "outbound", response, {
             source: "gateway",
             channel: "internal",
@@ -780,7 +792,7 @@ export class GatewayService {
           };
         }
 
-        await input.markPhase("route", "Routing planner research-to-file task to worker queue");
+        await runRoutePhase({ markPhase: input.markPhase }, "Routing planner research-to-file task to worker queue");
         const job = await this.enqueueLongTaskJob(input.inbound.sessionId, {
           taskType: "web_to_file",
           query: plan.query.trim(),
@@ -795,7 +807,7 @@ export class GatewayService {
         await input.recordPlannerTrace("enqueue_worker_web_to_file", { jobId: job.id, taskType: "web_to_file" });
         await input.markRunNote("Planner delegated research-to-file to worker", { jobId: job.id, reason: plan.reason });
         const response = `Queued research + document delivery as job ${job.id}. I will share progress and send the file when ready.`;
-        await input.markPhase("persist", "Persisting worker delegation response");
+        await runPersistPhase({ markPhase: input.markPhase }, "Persisting worker delegation response");
         await this.recordConversation(input.inbound.sessionId, "outbound", response, {
           source: "gateway",
           channel: "internal",
@@ -817,7 +829,7 @@ export class GatewayService {
         };
       }
 
-      await input.markPhase("route", "Routing planner research to worker queue");
+      await runRoutePhase({ markPhase: input.markPhase }, "Routing planner research to worker queue");
       const job = await this.enqueueLongTaskJob(input.inbound.sessionId, {
         taskType: "agentic_turn",
         query: plan.query.trim(),
@@ -829,7 +841,7 @@ export class GatewayService {
       await input.recordPlannerTrace("enqueue_worker_agentic_turn", { jobId: job.id, taskType: "agentic_turn" });
       await input.markRunNote("Planner delegated to worker", { jobId: job.id, reason: plan.reason });
       const response = `Queued research as job ${job.id}. I will share concise progress and final results here.`;
-      await input.markPhase("persist", "Persisting worker delegation response");
+      await runPersistPhase({ markPhase: input.markPhase }, "Persisting worker delegation response");
       await this.recordConversation(input.inbound.sessionId, "outbound", response, {
         source: "gateway",
         channel: "internal",
@@ -869,10 +881,12 @@ export class GatewayService {
   }): Promise<InboundHandleResult> {
     const command = parseCommand(input.inbound.text);
     if (command) {
-      await input.markPhase("route", "Routing command execution", { command: command.kind });
+      await runRoutePhase({ markPhase: input.markPhase }, "Routing command execution", { command: command.kind });
       await input.recordPlannerTrace("execute_command", { command: command.kind });
       const response = await this.executeCommand(input.inbound.sessionId, command, input.authSessionId, input.authPreference);
-      await input.markPhase("persist", "Persisting command response", { command: command.kind });
+      await runPersistPhase({ markPhase: input.markPhase }, "Persisting command response", {
+        command: command.kind
+      });
       await this.recordConversation(input.inbound.sessionId, "outbound", response, {
         source: "gateway",
         channel: "internal",
@@ -898,9 +912,11 @@ export class GatewayService {
         input.authPreference
       );
       if (decisionResult.handled) {
-        await input.markPhase("route", "Routing implicit approval decision", { decision: implicitApproval });
+        await runRoutePhase({ markPhase: input.markPhase }, "Routing implicit approval decision", {
+          decision: implicitApproval
+        });
         await input.recordPlannerTrace("resolve_approval_decision", { decision: implicitApproval });
-        await input.markPhase("persist", "Persisting implicit approval response");
+        await runPersistPhase({ markPhase: input.markPhase }, "Persisting implicit approval response");
         await this.recordConversation(input.inbound.sessionId, "outbound", decisionResult.response, {
           source: "gateway",
           channel: "internal",
@@ -920,9 +936,9 @@ export class GatewayService {
 
     const progressStatus = await this.answerProgressQuery(input.inbound.sessionId, input.inbound.text);
     if (progressStatus) {
-      await input.markPhase("route", "Routing progress-query fallback");
+      await runRoutePhase({ markPhase: input.markPhase }, "Routing progress-query fallback");
       await input.recordPlannerTrace("reply_progress_status_fallback");
-      await input.markPhase("persist", "Persisting progress fallback response");
+      await runPersistPhase({ markPhase: input.markPhase }, "Persisting progress fallback response");
       await this.recordConversation(input.inbound.sessionId, "outbound", progressStatus, {
         source: "gateway",
         channel: "internal",
@@ -948,10 +964,14 @@ export class GatewayService {
     );
     if (routed) {
       const routedToWorker = Boolean(routed.jobId);
-      await input.markPhase("route", routedToWorker ? "Routing heuristic long task to worker" : "Routing heuristic approval request", {
-        taskType: routed.taskType,
-        reason: routed.reason
-      });
+      await runRoutePhase(
+        { markPhase: input.markPhase },
+        routedToWorker ? "Routing heuristic long task to worker" : "Routing heuristic approval request",
+        {
+          taskType: routed.taskType,
+          reason: routed.reason
+        }
+      );
       await input.recordPlannerTrace(routedToWorker ? "enqueue_heuristic_long_task" : "request_approval_heuristic_long_task", {
         jobId: routed.jobId || undefined,
         taskType: routed.taskType
@@ -960,7 +980,7 @@ export class GatewayService {
         jobId: routed.jobId || undefined,
         reason: routed.reason
       });
-      await input.markPhase("persist", "Persisting heuristic worker delegation response");
+      await runPersistPhase({ markPhase: input.markPhase }, "Persisting heuristic worker delegation response");
       await this.recordConversation(input.inbound.sessionId, "outbound", routed.response, {
         source: "gateway",
         channel: "internal",
@@ -981,10 +1001,10 @@ export class GatewayService {
       };
     }
 
-    await input.markPhase("route", "Running local chat turn");
+    await runRoutePhase({ markPhase: input.markPhase }, "Running local chat turn");
     await input.recordPlannerTrace("run_chat_turn");
     const response = await this.executeChatTurn(input.authSessionId, input.inbound.text, input.authPreference);
-    await input.markPhase("persist", "Persisting chat response");
+    await runPersistPhase({ markPhase: input.markPhase }, "Persisting chat response");
     await this.recordConversation(input.inbound.sessionId, "outbound", response, {
       source: "gateway",
       channel: "internal",
