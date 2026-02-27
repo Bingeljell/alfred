@@ -37,7 +37,10 @@ export function createWorkerStatusHandler(input: {
     summarize: (run: any) => string;
   };
 }): (event: WorkerStatusEvent) => Promise<void> {
-  const jobNotificationState = new Map<string, { lastProgressAt: number; lastProgressText: string }>();
+  const jobNotificationState = new Map<
+    string,
+    { lastProgressAt: number; lastProgressText: string; progressCount: number }
+  >();
 
   return async (event: WorkerStatusEvent): Promise<void> => {
     if (!event.sessionId) {
@@ -47,25 +50,31 @@ export function createWorkerStatusHandler(input: {
     const summary = event.summary ? ` (${event.summary})` : "";
     const status = event.status === "progress" ? "running" : event.status;
     const now = Date.now();
-    const notifyState = jobNotificationState.get(event.jobId) ?? { lastProgressAt: 0, lastProgressText: "" };
+    const notifyState = jobNotificationState.get(event.jobId) ?? { lastProgressAt: 0, lastProgressText: "", progressCount: 0 };
 
     let text: string | null = null;
     if (event.status === "running") {
-      text = `Working on job ${event.jobId}...`;
+      const workerSuffix = event.workerId ? ` on ${event.workerId}` : "";
+      text = `On it. I started this on the worker queue${workerSuffix}.`;
     } else if (event.status === "progress") {
-      const nextText = String(event.summary ?? "still working");
+      const nextText = normalizeProgressText(String(event.summary ?? "still working"));
+      const changed = nextText.trim() && nextText !== notifyState.lastProgressText;
+      const sinceLast = now - notifyState.lastProgressAt;
       const shouldSend =
-        now - notifyState.lastProgressAt >= 45_000 && nextText.trim() && nextText !== notifyState.lastProgressText;
+        (notifyState.progressCount < 2 && changed) ||
+        (changed && sinceLast >= 15_000) ||
+        (!changed && sinceLast >= 45_000);
       if (shouldSend) {
-        text = `Still working on job ${event.jobId}: ${nextText}`;
+        text = nextText;
         notifyState.lastProgressAt = now;
         notifyState.lastProgressText = nextText;
+        notifyState.progressCount += 1;
         jobNotificationState.set(event.jobId, notifyState);
       }
     } else if (event.status === "succeeded" && event.responseText) {
       text = event.responseText;
     } else {
-      text = `Job ${event.jobId} is ${event.status}${summary}`;
+      text = event.status === "failed" ? `I hit an error while running this task${summary}` : `Job ${event.jobId} is ${event.status}${summary}`;
     }
 
     if (text) {
@@ -111,4 +120,24 @@ export function createWorkerStatusHandler(input: {
       jobNotificationState.delete(event.jobId);
     }
   };
+}
+
+function normalizeProgressText(raw: string): string {
+  const text = raw.trim();
+  if (!text) {
+    return "Still working on it.";
+  }
+  if (/^planning\b/i.test(text)) {
+    return "Planning the approach...";
+  }
+  if (/^collecting context\b/i.test(text) || /^still gathering sources\b/i.test(text)) {
+    return "Gathering sources...";
+  }
+  if (/^retrying context collection\b/i.test(text) || /^retrying web search\b/i.test(text)) {
+    return "Source fetch is slow; retrying...";
+  }
+  if (/^comparing findings and drafting recommendation\b/i.test(text) || /^still analyzing sources\b/i.test(text)) {
+    return "Comparing findings and drafting a recommendation...";
+  }
+  return text;
 }

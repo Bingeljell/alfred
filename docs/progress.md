@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-27: Improved long-run UX and observability: agentic worker progress now emits human-readable in-flight updates more frequently (planning/source-gathering/retrying/analyzing), fallback responses after synthesis timeout now return a concise shortlist + provisional recommendation instead of raw provider dump, and `/health` now includes active job details (job id/status/worker/progress) surfaced in UI source cards.
 - 2026-02-27: Hardened web-search reliability for agentic turns by adding an explicit OpenAI provider timeout in `WebSearchService`; when `provider=auto` and OpenAI/Codex stalls, search now falls through to SearXNG instead of consuming the full agentic turn budget.
 - 2026-02-27: Implemented hybrid runtime path in code: planner/heuristic long research now queues `agentic_turn` by default (instead of deterministic `web_search`), worker executes search + synthesis loop with fallback + retries/time budgets, and new worker unit tests cover both synthesis-success and fallback behavior.
 - 2026-02-27: Updated architecture direction to explicitly lock hybrid execution behavior: agentic mode remains default for unknown tasks, while structured RunSpec mode is applied selectively for high-risk or repeatable workflows.

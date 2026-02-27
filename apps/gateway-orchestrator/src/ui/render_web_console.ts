@@ -987,6 +987,16 @@ export function renderWebConsoleHtml(): string {
         }
 
         const queue = response.data?.queue || {};
+        const activeJobs = Array.isArray(response.data?.activeJobs) ? response.data.activeJobs : [];
+        const activeTop = activeJobs[0];
+        const activeMeta = activeTop
+          ? " | active " +
+            String(activeTop.id || "").slice(0, 8) +
+            " " +
+            String(activeTop.status || "unknown") +
+            (activeTop.workerId ? "@" + String(activeTop.workerId) : "") +
+            (activeTop.progress ? " (" + String(activeTop.progress) + ")" : "")
+          : "";
         updateSourceSnapshot(
           "gateway",
           sourceGatewayCard,
@@ -1001,7 +1011,8 @@ export function renderWebConsoleHtml(): string {
               " | running " +
               String(queue.running ?? 0) +
               " | failed " +
-              String(queue.failed ?? 0)
+              String(queue.failed ?? 0) +
+              activeMeta
           },
           {
             ok: true,
@@ -1010,7 +1021,8 @@ export function renderWebConsoleHtml(): string {
               queued: queue.queued ?? 0,
               running: queue.running ?? 0,
               failed: queue.failed ?? 0
-            }
+            },
+            activeJobs: activeJobs
           }
         );
       }

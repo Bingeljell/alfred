@@ -71,7 +71,7 @@ describe("worker execution modules", () => {
     const progressMessages = progressCalls.map((call) => String(call[0]?.message ?? ""));
     expect(progressMessages).toContain("Planning the best approach...");
     expect(progressMessages.some((item) => String(item).includes("Collecting context via"))).toBe(true);
-    expect(progressMessages).toContain("Synthesizing findings into a concise answer...");
+    expect(progressMessages).toContain("Comparing findings and drafting recommendation...");
   });
 
   it("falls back to raw-context response when agentic synthesis fails", async () => {
@@ -131,8 +131,9 @@ describe("worker execution modules", () => {
     );
 
     expect(result.summary).toBe("agentic_turn_brave");
-    expect(String(result.responseText)).toContain("I gathered web context via brave, but synthesis failed.");
+    expect(String(result.responseText)).toContain("I couldn't finish deep synthesis in time, but I found strong sources via brave.");
     expect(String(result.responseText)).toContain("Candidate One");
+    expect(String(result.responseText)).toContain("Provisional recommendation");
     expect(search).toHaveBeenCalledTimes(1);
     expect(generateText).toHaveBeenCalledTimes(1);
     expect(clearPages).toHaveBeenCalledTimes(1);

@@ -191,12 +191,36 @@ export class GatewayService {
     service: "gateway-orchestrator";
     status: "ok";
     queue: Record<string, number>;
+    activeJobs: Array<{
+      id: string;
+      status: string;
+      workerId?: string;
+      taskType?: string;
+      sessionId?: string;
+      updatedAt: string;
+      progress?: string;
+    }>;
   }> {
     const queue = await this.store.statusCounts();
+    const jobs = await this.store.listJobs();
+    const activeJobs = jobs
+      .filter((job) => job.status === "queued" || job.status === "running" || job.status === "cancelling")
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1))
+      .slice(0, 5)
+      .map((job) => ({
+        id: job.id,
+        status: job.status,
+        workerId: job.workerId,
+        taskType: typeof job.payload.taskType === "string" ? job.payload.taskType : undefined,
+        sessionId: typeof job.payload.sessionId === "string" ? job.payload.sessionId : undefined,
+        updatedAt: job.updatedAt,
+        progress: typeof job.progress?.message === "string" ? job.progress.message : undefined
+      }));
     return {
       service: "gateway-orchestrator",
       status: "ok",
-      queue
+      queue,
+      activeJobs
     };
   }
 

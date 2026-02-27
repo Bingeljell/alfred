@@ -194,6 +194,7 @@ export function createWorkerProcessor(input: {
       const maxRetries = clampInt(job.payload.maxRetries, 0, 5, 1);
       const timeBudgetMs = clampInt(job.payload.timeBudgetMs, 5000, 10 * 60 * 1000, 120_000);
       const tokenBudget = clampInt(job.payload.tokenBudget, 128, 50_000, 8_000);
+      const synthesisBudgetMs = Math.min(35_000, Math.max(8_000, Math.floor(timeBudgetMs * 0.35)));
 
       if (!goal) {
         return {
@@ -218,14 +219,26 @@ export function createWorkerProcessor(input: {
           message: `Collecting context via ${provider} (attempt ${attempt}/${maxRetries + 1})...`
         });
         try {
-          const result = await withTimeout(
-            input.webSearchService.search(goal, {
-              provider,
-              authSessionId,
-              authPreference
-            }),
-            timeBudgetMs,
-            "agentic_turn_search_time_budget_exceeded"
+          const result = await withProgressPulse(
+            () =>
+              withTimeout(
+                input.webSearchService.search(goal, {
+                  provider,
+                  authSessionId,
+                  authPreference
+                }),
+                timeBudgetMs,
+                "agentic_turn_search_time_budget_exceeded"
+              ),
+            {
+              intervalMs: 20_000,
+              onPulse: async (elapsedMs) => {
+                await context.reportProgress({
+                  step: "searching",
+                  message: `Still gathering sources... (${Math.floor(elapsedMs / 1000)}s elapsed)`
+                });
+              }
+            }
           );
           if (result?.text?.trim()) {
             searchText = result.text.trim();
@@ -254,23 +267,35 @@ export function createWorkerProcessor(input: {
 
       await context.reportProgress({
         step: "synthesizing",
-        message: "Synthesizing findings into a concise answer..."
+        message: "Comparing findings and drafting recommendation..."
       });
 
-      const synthesisPrompt = buildAgenticSynthesisPrompt(goal, searchProvider, searchText);
+      const synthesisPrompt = buildAgenticSynthesisPrompt(goal, searchProvider, compactSearchContextForSynthesis(searchText, 5000));
       let synthesisText = "";
       try {
-        const generated = await withTimeout(
-          input.llmService.generateText(authSessionId || sessionId, synthesisPrompt, { authPreference }),
-          timeBudgetMs,
-          "agentic_turn_synthesis_time_budget_exceeded"
+        const generated = await withProgressPulse(
+          () =>
+            withTimeout(
+              input.llmService.generateText(authSessionId || sessionId, synthesisPrompt, { authPreference }),
+              synthesisBudgetMs,
+              "agentic_turn_synthesis_time_budget_exceeded"
+            ),
+          {
+            intervalMs: 15_000,
+            onPulse: async (elapsedMs) => {
+              await context.reportProgress({
+                step: "synthesizing",
+                message: `Still analyzing sources... (${Math.floor(elapsedMs / 1000)}s elapsed)`
+              });
+            }
+          }
         );
         synthesisText = typeof generated?.text === "string" ? generated.text.trim() : "";
       } catch {
         synthesisText = "";
       }
 
-      const fullText = synthesisText || renderFallbackSearchResponse(searchProvider, searchText, goal);
+      const fullText = synthesisText || renderFriendlyFallbackSearchResponse(searchProvider, searchText, goal);
       const pages = paginateResponse(fullText, 1600, 8);
       const firstPage = pages[0] ?? fullText;
       if (sessionId && pages.length > 1) {
@@ -518,16 +543,90 @@ function buildAgenticSynthesisPrompt(
   ].join("\n");
 }
 
-function renderFallbackSearchResponse(
+function renderFriendlyFallbackSearchResponse(
   provider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata",
   searchText: string,
   goal: string
 ): string {
+  const hits = extractSearchHits(searchText, 4);
+  if (hits.length === 0) {
+    const compact = searchText.replace(/\s+/g, " ").trim().slice(0, 900);
+    return [
+      `I couldn't finish the full analysis in time, but I did collect web context via ${provider}.`,
+      `Goal: ${goal}`,
+      "",
+      compact || "No usable snippets were returned."
+    ].join("\n");
+  }
+
+  const list = hits
+    .map((hit, index) => {
+      const snippet = hit.snippet ? ` — ${hit.snippet}` : "";
+      return `${index + 1}. ${hit.title} (${hit.url})${snippet}`;
+    })
+    .join("\n");
+  const provisional = hits[0];
+
   return [
-    `I gathered web context via ${provider}, but synthesis failed. Here's the raw result for: ${goal}`,
+    `I couldn't finish deep synthesis in time, but I found strong sources via ${provider}.`,
+    `Goal: ${goal}`,
     "",
-    searchText
+    "Quick shortlist:",
+    list,
+    "",
+    `Provisional recommendation: start with "${provisional.title}" and I can run a deeper side-by-side comparison next.`
   ].join("\n");
+}
+
+function compactSearchContextForSynthesis(searchText: string, maxChars: number): string {
+  const normalized = searchText.replace(/\r/g, "").trim();
+  if (normalized.length <= maxChars) {
+    return normalized;
+  }
+  const lines = normalized.split("\n");
+  const compactLines: string[] = [];
+  let total = 0;
+  for (const rawLine of lines) {
+    const line = rawLine.replace(/\s+/g, " ").trim();
+    if (!line) {
+      continue;
+    }
+    const clipped = line.length > 320 ? `${line.slice(0, 317)}...` : line;
+    const candidateSize = total + clipped.length + 1;
+    if (candidateSize > maxChars) {
+      break;
+    }
+    compactLines.push(clipped);
+    total = candidateSize;
+  }
+  if (compactLines.length === 0) {
+    return normalized.slice(0, maxChars);
+  }
+  return compactLines.join("\n");
+}
+
+function extractSearchHits(searchText: string, limit: number): Array<{ title: string; url: string; snippet: string }> {
+  const lines = searchText.split("\n");
+  const hits: Array<{ title: string; url: string; snippet: string }> = [];
+  for (const rawLine of lines) {
+    if (hits.length >= limit) {
+      break;
+    }
+    const line = rawLine.trim();
+    if (!line) {
+      continue;
+    }
+    const match = line.match(/^\d+\.\s+(.+?)\s+-\s+(https?:\/\/\S+?)(?:\s+\|\s+(.+?))?(?:\s+\[engines:.*\])?$/i);
+    if (!match) {
+      continue;
+    }
+    hits.push({
+      title: match[1]?.trim() || "Untitled",
+      url: match[2]?.trim() || "",
+      snippet: (match[3] ?? "").replace(/\s+/g, " ").trim().slice(0, 220)
+    });
+  }
+  return hits.filter((item) => item.url.length > 0);
 }
 
 function buildLegacyWebToFileRunSpec(input: {
@@ -702,6 +801,27 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
   } finally {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);
+    }
+  }
+}
+
+async function withProgressPulse<T>(
+  runner: () => Promise<T>,
+  options: {
+    intervalMs: number;
+    onPulse: (elapsedMs: number) => Promise<void>;
+  }
+): Promise<T> {
+  const startedAt = Date.now();
+  let timer: NodeJS.Timeout | null = null;
+  try {
+    timer = setInterval(() => {
+      void options.onPulse(Date.now() - startedAt);
+    }, Math.max(1000, options.intervalMs));
+    return await runner();
+  } finally {
+    if (timer) {
+      clearInterval(timer);
     }
   }
 }

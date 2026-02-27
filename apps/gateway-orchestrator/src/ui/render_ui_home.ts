@@ -235,7 +235,22 @@ export function renderUiHomeHtml(): string {
         const health = await api("GET", "/health");
         if (health.ok) {
           const q = health.data?.queue || {};
-          setCard("gateway", "ok", "ok", "queued:" + (q.queued || 0) + " running:" + (q.running || 0) + " failed:" + (q.failed || 0));
+          const active = Array.isArray(health.data?.activeJobs) ? health.data.activeJobs : [];
+          const activeTop = active[0];
+          const activeMeta = activeTop
+            ? " | active:" +
+              String(activeTop.id || "").slice(0, 8) +
+              " " +
+              String(activeTop.status || "unknown") +
+              (activeTop.workerId ? "@" + String(activeTop.workerId) : "") +
+              (activeTop.progress ? " (" + String(activeTop.progress) + ")" : "")
+            : "";
+          setCard(
+            "gateway",
+            "ok",
+            "ok",
+            "queued:" + (q.queued || 0) + " running:" + (q.running || 0) + " failed:" + (q.failed || 0) + activeMeta
+          );
         } else {
           setCard("gateway", "error", "error", "HTTP " + health.status);
         }

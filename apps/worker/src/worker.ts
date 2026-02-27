@@ -16,6 +16,7 @@ export type WorkerProcessor = (
 
 export type WorkerStatusEvent = {
   jobId: string;
+  workerId?: string;
   sessionId?: string;
   status: "running" | "progress" | "succeeded" | "failed" | "cancelled";
   summary?: string;
@@ -71,6 +72,7 @@ export function startWorker(options: {
           await store.updateJobProgress(claimed.job.id, progress);
           await onStatusChange?.({
             jobId: claimed.job.id,
+            workerId,
             sessionId: sessionFromJob(claimed.job),
             status: "progress",
             summary: progress.message,
@@ -81,6 +83,7 @@ export function startWorker(options: {
 
         await onStatusChange?.({
           jobId: claimed.job.id,
+          workerId,
           sessionId: sessionFromJob(claimed.job),
           status: "running"
         });
@@ -92,6 +95,7 @@ export function startWorker(options: {
           const cancelled = await store.markCancelledAfterRun(claimed.job.id, result);
           await onStatusChange?.({
             jobId: claimed.job.id,
+            workerId,
             sessionId: sessionFromJob(claimed.job),
             status: "cancelled",
             summary: typeof cancelled?.result?.summary === "string" ? cancelled.result.summary : undefined
@@ -100,6 +104,7 @@ export function startWorker(options: {
           const completed = await store.completeJob(claimed.job.id, result);
           await onStatusChange?.({
             jobId: claimed.job.id,
+            workerId,
             sessionId: sessionFromJob(claimed.job),
             status: "succeeded",
             summary: typeof completed?.result?.summary === "string" ? completed.result.summary : undefined,
@@ -114,6 +119,7 @@ export function startWorker(options: {
         });
         await onStatusChange?.({
           jobId: claimed.job.id,
+          workerId,
           sessionId: sessionFromJob(claimed.job),
           status: "failed",
           summary: error instanceof Error ? error.message : String(error)
