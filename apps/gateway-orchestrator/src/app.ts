@@ -20,6 +20,7 @@ import { SupervisorStore } from "./builtins/supervisor_store";
 import { RunSpecStore } from "./builtins/run_spec_store";
 import { registerAuthRoutes } from "./routes/auth_routes";
 import { registerChannelRoutes } from "./routes/channel_routes";
+import { registerCoreRoutes } from "./routes/core_routes";
 import { registerHeartbeatRoutes } from "./routes/heartbeat_routes";
 import { registerMemoryRoutes } from "./routes/memory_routes";
 import { registerObservabilityRoutes } from "./routes/observability_routes";
@@ -234,25 +235,11 @@ export function createGatewayApp(
   void dedupeStore.ensureReady();
   app.use(express.json());
 
-  app.get("/", (_req, res) => {
-    res.redirect(302, "/ui");
-  });
-
-  app.get("/ui", (_req, res) => {
-    res.status(200).type("html").send(renderUiHomeHtml());
-  });
-
-  app.get("/ui/transcripts", (_req, res) => {
-    res.status(200).type("html").send(renderUiTranscriptsHtml());
-  });
-
-  app.get("/ui/console", (_req, res) => {
-    res.status(200).type("html").send(renderWebConsoleHtml());
-  });
-
-  app.get("/health", async (_req, res) => {
-    const health = await service.health();
-    res.status(200).json(health);
+  registerCoreRoutes(app, {
+    health: () => service.health(),
+    renderUiHome: () => renderUiHomeHtml(),
+    renderUiTranscripts: () => renderUiTranscriptsHtml(),
+    renderUiConsole: () => renderWebConsoleHtml()
   });
 
   registerHeartbeatRoutes(app, { heartbeatService });
