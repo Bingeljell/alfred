@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { JobCreateSchema, RunSpecV1Schema } from "../../../packages/contracts/src";
 import type { RunSpecV1 } from "../../../packages/contracts/src";
 import { parseCommand, type ParsedCommand } from "./builtins/command_parser";
@@ -25,9 +26,15 @@ import type { RunSpecStore } from "./builtins/run_spec_store";
 import { runNormalizePhase } from "./orchestrator/normalize_phase";
 import { runSessionPhase } from "./orchestrator/session_phase";
 import type { LlmAuthPreference, PlannerDecision } from "./orchestrator/types";
+import {
+  TOOL_SPECS_V1,
+  evaluateToolPolicy,
+  type ExternalCapability,
+  type ToolId,
+  type ToolPolicyInput
+} from "./orchestrator/tool_policy_engine";
 
 type ImplicitApprovalDecision = "approve_latest" | "reject_latest";
-type ExternalCapability = "web_search" | "file_write";
 type RoutedLongTask = {
   taskType: "agentic_turn" | "web_search" | "web_to_file";
   query: string;
@@ -59,6 +66,11 @@ type CapabilityPolicy = {
   fileWriteRequireApproval: boolean;
   fileWriteNotesOnly: boolean;
   fileWriteNotesDir: string;
+  fileWriteApprovalMode: "per_action" | "session" | "always";
+  fileWriteApprovalScope: "auth" | "channel";
+  shellEnabled: boolean;
+  shellTimeoutMs: number;
+  shellMaxOutputChars: number;
 };
 
 const DEFAULT_CAPABILITY_POLICY: CapabilityPolicy = {
@@ -66,16 +78,33 @@ const DEFAULT_CAPABILITY_POLICY: CapabilityPolicy = {
   approvalMode: "balanced",
   approvalDefault: true,
   webSearchEnabled: true,
-  webSearchRequireApproval: true,
+  webSearchRequireApproval: false,
   webSearchProvider: "searxng",
   fileWriteEnabled: false,
   fileWriteRequireApproval: true,
   fileWriteNotesOnly: true,
-  fileWriteNotesDir: "notes"
+  fileWriteNotesDir: "notes",
+  fileWriteApprovalMode: "session",
+  fileWriteApprovalScope: "auth",
+  shellEnabled: false,
+  shellTimeoutMs: 20_000,
+  shellMaxOutputChars: 8_000
 };
+
+const DEFAULT_SHELL_BLOCK_RULES = [
+  { id: "dangerous_rm_root", pattern: /\brm\s+-rf\s+\/(\s|$)/i },
+  { id: "fork_bomb", pattern: /:\(\)\s*\{\s*:\|:\s*&\s*\};:/i },
+  { id: "privilege_escalation", pattern: /\b(sudo|su)\b/i },
+  { id: "disk_format", pattern: /\b(mkfs|fdisk|diskutil\s+eraseDisk)\b/i },
+  { id: "raw_device_write", pattern: /\bdd\s+if=.*\sof=\/dev\//i },
+  { id: "shutdown_reboot", pattern: /\b(shutdown|reboot|halt)\b/i },
+  { id: "curl_pipe_shell", pattern: /\bcurl\b[^|]*\|\s*(bash|sh)\b/i },
+  { id: "wget_pipe_shell", pattern: /\bwget\b[^|]*\|\s*(bash|sh)\b/i }
+];
 
 export class GatewayService {
   private readonly capabilityPolicy: CapabilityPolicy;
+  private readonly fileWriteApprovalLeases = new Set<string>();
   private readonly webSearchService?: {
     search: (
       query: string,
@@ -177,13 +206,29 @@ export class GatewayService {
     >
   ) {
     this.webSearchService = webSearchService;
+    const configuredShellTimeoutMs = Number(capabilityPolicy?.shellTimeoutMs);
+    const configuredShellMaxOutputChars = Number(capabilityPolicy?.shellMaxOutputChars);
     this.capabilityPolicy = {
       ...DEFAULT_CAPABILITY_POLICY,
       ...(capabilityPolicy ?? {}),
       workspaceDir: path.resolve(capabilityPolicy?.workspaceDir ?? DEFAULT_CAPABILITY_POLICY.workspaceDir),
       approvalMode: capabilityPolicy?.approvalMode ?? DEFAULT_CAPABILITY_POLICY.approvalMode,
       webSearchProvider: this.normalizeWebSearchProvider(capabilityPolicy?.webSearchProvider) ?? DEFAULT_CAPABILITY_POLICY.webSearchProvider,
-      fileWriteNotesDir: (capabilityPolicy?.fileWriteNotesDir ?? DEFAULT_CAPABILITY_POLICY.fileWriteNotesDir).trim() || "notes"
+      fileWriteNotesDir: (capabilityPolicy?.fileWriteNotesDir ?? DEFAULT_CAPABILITY_POLICY.fileWriteNotesDir).trim() || "notes",
+      fileWriteApprovalMode:
+        capabilityPolicy?.fileWriteApprovalMode ?? DEFAULT_CAPABILITY_POLICY.fileWriteApprovalMode,
+      fileWriteApprovalScope:
+        capabilityPolicy?.fileWriteApprovalScope ?? DEFAULT_CAPABILITY_POLICY.fileWriteApprovalScope,
+      shellEnabled:
+        typeof capabilityPolicy?.shellEnabled === "boolean"
+          ? capabilityPolicy.shellEnabled
+          : DEFAULT_CAPABILITY_POLICY.shellEnabled,
+      shellTimeoutMs: Number.isFinite(configuredShellTimeoutMs)
+        ? Math.max(1000, Math.min(120000, Math.floor(configuredShellTimeoutMs)))
+        : DEFAULT_CAPABILITY_POLICY.shellTimeoutMs,
+      shellMaxOutputChars: Number.isFinite(configuredShellMaxOutputChars)
+        ? Math.max(500, Math.min(50000, Math.floor(configuredShellMaxOutputChars)))
+        : DEFAULT_CAPABILITY_POLICY.shellMaxOutputChars
     };
   }
 
@@ -251,7 +296,10 @@ export class GatewayService {
         fileWriteEnabled: this.capabilityPolicy.fileWriteEnabled,
         fileWriteRequireApproval: this.capabilityPolicy.fileWriteRequireApproval,
         fileWriteNotesOnly: this.capabilityPolicy.fileWriteNotesOnly,
-        fileWriteNotesDir: this.capabilityPolicy.fileWriteNotesDir
+        fileWriteNotesDir: this.capabilityPolicy.fileWriteNotesDir,
+        fileWriteApprovalMode: this.capabilityPolicy.fileWriteApprovalMode,
+        fileWriteApprovalScope: this.capabilityPolicy.fileWriteApprovalScope,
+        shellEnabled: this.capabilityPolicy.shellEnabled
       },
       buildSkillsSnapshot: () => this.buildSkillsSnapshot()
     });
@@ -694,9 +742,11 @@ export class GatewayService {
           query: plan.query.trim(),
           provider: plan.provider ?? "auto",
           fileFormat: plan.fileFormat ?? "md",
-          fileName: plan.fileName
+          fileName: plan.fileName,
+          sessionId: input.inbound.sessionId,
+          authSessionId: input.authSessionId
         });
-        if (this.requiresApproval("file_write")) {
+        if (this.requiresApproval("file_write", { sessionId: input.inbound.sessionId, authSessionId: input.authSessionId })) {
           const approvalResponse = await this.requestNextRunSpecApprovalIfNeeded({
             sessionId: input.inbound.sessionId,
             runSpecRunId,
@@ -1287,7 +1337,8 @@ export class GatewayService {
           `- approvalMode: ${this.capabilityPolicy.approvalMode}`,
           `- approvalDefault: ${String(this.capabilityPolicy.approvalDefault)}`,
           `- webSearch: enabled=${String(this.capabilityPolicy.webSearchEnabled)}, requireApproval=${String(this.capabilityPolicy.webSearchRequireApproval)}, provider=${this.capabilityPolicy.webSearchProvider}`,
-          `- fileWrite: enabled=${String(this.capabilityPolicy.fileWriteEnabled)}, requireApproval=${String(this.capabilityPolicy.fileWriteRequireApproval)}, notesOnly=${String(this.capabilityPolicy.fileWriteNotesOnly)}, notesDir=${this.capabilityPolicy.fileWriteNotesDir}`
+          `- fileWrite: enabled=${String(this.capabilityPolicy.fileWriteEnabled)}, requireApproval=${String(this.capabilityPolicy.fileWriteRequireApproval)}, mode=${this.capabilityPolicy.fileWriteApprovalMode}, scope=${this.capabilityPolicy.fileWriteApprovalScope}, notesOnly=${String(this.capabilityPolicy.fileWriteNotesOnly)}, notesDir=${this.capabilityPolicy.fileWriteNotesDir}`,
+          `- shell: enabled=${String(this.capabilityPolicy.shellEnabled)}, timeoutMs=${this.capabilityPolicy.shellTimeoutMs}, maxOutputChars=${this.capabilityPolicy.shellMaxOutputChars}`
         ].join("\n");
       }
 
@@ -1378,22 +1429,11 @@ export class GatewayService {
       }
 
       case "web_search": {
-        if (!this.capabilityPolicy.webSearchEnabled) {
-          return "Web search is disabled by policy.";
+        const policy = this.evaluateToolPolicy("web.search", { sessionId, authSessionId });
+        if (!policy.allowed) {
+          return policy.reason ?? "Web search is disabled by policy.";
         }
 
-        if (this.requiresApproval("web_search")) {
-          if (!this.approvalStore) {
-            return "Approvals are not configured.";
-          }
-          const approval = await this.approvalStore.create(sessionId, "web_search", {
-            query: command.query,
-            provider: command.provider ?? this.capabilityPolicy.webSearchProvider,
-            authSessionId,
-            authPreference
-          });
-          return `Approval required for web search. Reply yes/no, or approve ${approval.token}`;
-        }
         const provider = command.provider ?? this.capabilityPolicy.webSearchProvider;
         const job = await this.enqueueLongTaskJob(sessionId, {
           taskType: "web_search",
@@ -1407,8 +1447,9 @@ export class GatewayService {
       }
 
       case "file_write": {
-        if (!this.capabilityPolicy.fileWriteEnabled) {
-          return "File write is disabled by policy. Use /note add for durable notes.";
+        const policy = this.evaluateToolPolicy("file.write", { sessionId, authSessionId });
+        if (!policy.allowed) {
+          return policy.reason ?? "File write is disabled by policy. Use /note add for durable notes.";
         }
 
         const resolved = this.resolveWorkspacePath(command.relativePath);
@@ -1416,14 +1457,15 @@ export class GatewayService {
           return resolved.error;
         }
 
-        if (this.requiresApproval("file_write")) {
+        if (policy.requiresApproval) {
           if (!this.approvalStore) {
             return "Approvals are not configured.";
           }
 
           const approval = await this.approvalStore.create(sessionId, "file_write", {
             relativePath: command.relativePath,
-            text: command.text
+            text: command.text,
+            authSessionId
           });
           return `Approval required for file write. Reply yes/no, or approve ${approval.token}`;
         }
@@ -1432,6 +1474,10 @@ export class GatewayService {
       }
 
       case "file_send": {
+        const policy = this.evaluateToolPolicy("file.send", { sessionId, authSessionId });
+        if (!policy.allowed) {
+          return policy.reason ?? "File send is disabled by policy.";
+        }
         const resolved = this.resolveWorkspacePath(command.relativePath);
         if (!resolved.ok) {
           return resolved.error;
@@ -1441,19 +1487,45 @@ export class GatewayService {
           return attachmentPolicy.error;
         }
 
-        if (this.requiresApproval("file_write")) {
+        if (policy.requiresApproval) {
           if (!this.approvalStore) {
             return "Approvals are not configured.";
           }
 
           const approval = await this.approvalStore.create(sessionId, "file_send", {
             relativePath: command.relativePath,
-            caption: command.caption
+            caption: command.caption,
+            authSessionId
           });
           return `Approval required for file send. Reply yes/no, or approve ${approval.token}`;
         }
 
         return this.executeFileSend(sessionId, resolved.absolutePath, command.caption);
+      }
+
+      case "shell_exec": {
+        const policy = this.evaluateToolPolicy("shell.exec", { sessionId, authSessionId });
+        if (!policy.allowed) {
+          return policy.reason ?? "Shell execution is disabled by policy.";
+        }
+        const shellPolicy = this.evaluateShellCommandPolicy(command.command);
+        if (shellPolicy.blocked) {
+          if (!this.approvalStore) {
+            return `Shell command blocked by policy (${shellPolicy.ruleId}). Approvals are not configured for override.`;
+          }
+          const approval = await this.approvalStore.create(sessionId, "shell_exec_override", {
+            command: command.command,
+            blockedRuleId: shellPolicy.ruleId,
+            authSessionId
+          });
+          return `Shell command blocked by policy (${shellPolicy.ruleId}). To override once, reply: approve shell ${approval.token}`;
+        }
+
+        await this.recordToolUsage(sessionId, "shell.exec", {
+          command: command.command,
+          override: false
+        });
+        return this.executeShellCommand(command.command);
       }
 
       case "side_effect_send": {
@@ -1592,7 +1664,7 @@ export class GatewayService {
       return null;
     }
 
-    if (routed.taskType === "web_to_file" && this.requiresApproval("file_write")) {
+    if (routed.taskType === "web_to_file" && this.requiresApproval("file_write", { sessionId, authSessionId })) {
       const runSpecRunId = randomUUID();
       const runSpec = this.buildWebToFileRunSpec({
         runSpecRunId,
@@ -1745,6 +1817,15 @@ export class GatewayService {
       await this.pagedResponseStore.clear(sessionId);
     }
 
+    if (input.taskType === "web_search" || input.taskType === "agentic_turn" || input.taskType === "web_to_file") {
+      await this.recordToolUsage(sessionId, "web.search", {
+        provider: input.provider ?? this.capabilityPolicy.webSearchProvider,
+        route: input.reason,
+        taskType: input.taskType,
+        query: input.query
+      });
+    }
+
     if (input.taskType === "web_to_file") {
       const runSpecRunId = input.runSpecRunId ?? randomUUID();
       const runSpec = this.buildWebToFileRunSpec({
@@ -1752,7 +1833,9 @@ export class GatewayService {
         query: input.query,
         provider: input.provider ?? "auto",
         fileFormat: input.fileFormat ?? "md",
-        fileName: input.fileName
+        fileName: input.fileName,
+        sessionId,
+        authSessionId: input.authSessionId
       });
       const approvedStepIds = (input.runSpecApprovedStepIds ?? []).map((item) => item.trim()).filter((item) => item.length > 0);
       return this.enqueueRunSpecJob(sessionId, {
@@ -1826,13 +1909,18 @@ export class GatewayService {
     provider: WebSearchProvider;
     fileFormat: "md" | "txt" | "doc";
     fileName?: string;
+    sessionId?: string;
+    authSessionId?: string;
   }): RunSpecV1 {
     const safeBaseName =
       this.normalizeAttachmentFileName(input.fileName) ??
       this.normalizeAttachmentFileName(input.query.toLowerCase().replace(/[^a-z0-9]+/g, "_")) ??
       `research_${new Date().toISOString().slice(0, 10)}`;
     const fileName = this.ensureAttachmentExtension(safeBaseName, input.fileFormat);
-    const requireWriteApproval = this.requiresApproval("file_write");
+    const requireWriteApproval = this.requiresApproval("file_write", {
+      sessionId: input.sessionId,
+      authSessionId: input.authSessionId
+    });
     const requireSendApproval = requireWriteApproval && this.capabilityPolicy.approvalMode === "strict";
     return {
       version: 1,
@@ -1917,7 +2005,25 @@ export class GatewayService {
     authPreference: LlmAuthPreference;
     reason: string;
   }): Promise<string | null> {
-    const nextStepId = this.findNextRequiredRunSpecStep(input.runSpec, input.approvedStepIds);
+    const approvedStepIds = Array.from(new Set(input.approvedStepIds.map((item) => item.trim()).filter((item) => item.length > 0)));
+    let nextStepId = this.findNextRequiredRunSpecStep(input.runSpec, approvedStepIds);
+    while (nextStepId) {
+      const nextStep = input.runSpec.steps.find((step) => step.id === nextStepId);
+      if (!nextStep) {
+        break;
+      }
+      if (nextStep.approval?.capability === "file_write" && this.hasFileWriteApprovalLease(input.sessionId, input.authSessionId)) {
+        if (!approvedStepIds.includes(nextStepId)) {
+          approvedStepIds.push(nextStepId);
+        }
+        if (this.runSpecStore) {
+          await this.runSpecStore.grantStepApproval(input.runSpecRunId, nextStepId);
+        }
+        nextStepId = this.findNextRequiredRunSpecStep(input.runSpec, approvedStepIds);
+        continue;
+      }
+      break;
+    }
     if (!nextStepId) {
       return null;
     }
@@ -1929,7 +2035,7 @@ export class GatewayService {
     const approval = await this.approvalStore.create(input.sessionId, "run_spec_step", {
       runSpecRunId: input.runSpecRunId,
       runSpec: input.runSpec,
-      approvedStepIds: input.approvedStepIds,
+      approvedStepIds,
       nextStepId,
       authSessionId: input.authSessionId,
       authPreference: input.authPreference,
@@ -1942,7 +2048,7 @@ export class GatewayService {
         sessionId: input.sessionId,
         spec: input.runSpec,
         status: "awaiting_approval",
-        approvedStepIds: input.approvedStepIds
+        approvedStepIds
       });
       await this.runSpecStore.appendEvent(input.runSpecRunId, {
         type: "approval_requested",
@@ -2003,6 +2109,20 @@ export class GatewayService {
         dedupeKey: `approval_execute:${channelSessionId}:web_search:${query.slice(0, 40)}`
       });
       return `Approved action executed: web_search (queued job ${job.id}).`;
+    }
+    if (approval.action === "shell_exec_override") {
+      const command = String(approval.payload.command ?? "").trim();
+      const blockedRuleId = String(approval.payload.blockedRuleId ?? "unknown_rule");
+      if (!command) {
+        return "Approved action failed: missing shell command.";
+      }
+      await this.recordToolUsage(channelSessionId, "shell.exec", {
+        command,
+        override: true,
+        blockedRuleId
+      });
+      const output = await this.executeShellCommand(command);
+      return `Approved risky shell override (${blockedRuleId}).\n${output}`;
     }
     if (approval.action === "web_to_file_send") {
       if (!this.capabilityPolicy.webSearchEnabled) {
@@ -2065,6 +2185,10 @@ export class GatewayService {
       if (this.runSpecStore) {
         await this.runSpecStore.grantStepApproval(runSpecRunId, nextStepId);
       }
+      const approvedStep = runSpec.steps.find((step) => step.id === nextStepId);
+      if (approvedStep?.approval?.capability === "file_write") {
+        this.grantFileWriteApprovalLease(channelSessionId, targetAuthSessionId);
+      }
 
       const pendingApproval = await this.requestNextRunSpecApprovalIfNeeded({
         sessionId: channelSessionId,
@@ -2107,6 +2231,8 @@ export class GatewayService {
         return `Approved action failed: ${resolved.error}`;
       }
       const output = await this.executeFileWrite(resolved.absolutePath, text);
+      const targetAuthSessionId = String(approval.payload.authSessionId ?? authSessionId).trim() || authSessionId;
+      this.grantFileWriteApprovalLease(channelSessionId, targetAuthSessionId);
       await this.recordMemoryCheckpoint(channelSessionId, {
         class: "decision",
         source: "approval_execute",
@@ -2128,6 +2254,8 @@ export class GatewayService {
         return `Approved action failed: ${attachmentPolicy.error}`;
       }
       const output = await this.executeFileSend(channelSessionId, resolved.absolutePath, caption);
+      const targetAuthSessionId = String(approval.payload.authSessionId ?? authSessionId).trim() || authSessionId;
+      this.grantFileWriteApprovalLease(channelSessionId, targetAuthSessionId);
       await this.recordMemoryCheckpoint(channelSessionId, {
         class: "decision",
         source: "approval_execute",
@@ -2312,7 +2440,8 @@ export class GatewayService {
       "tasks",
       "approval_gate",
       "file_write_policy",
-      "file_send_attachment"
+      "file_send_attachment",
+      "shell_exec_policy"
     ];
     const hash = content.join("|");
     return { hash, content };
@@ -2582,28 +2711,133 @@ export class GatewayService {
     }
   }
 
-  private requiresApproval(capability: ExternalCapability): boolean {
-    if (this.capabilityPolicy.approvalMode === "strict") {
-      return true;
+  private requiresApproval(
+    capability: ExternalCapability,
+    context?: {
+      sessionId?: string;
+      authSessionId?: string;
     }
-    if (this.capabilityPolicy.approvalMode === "balanced") {
-      if (capability === "web_search") {
-        return false;
-      }
-      if (capability === "file_write") {
-        return true;
-      }
+  ): boolean {
+    const decision = this.evaluateCapabilityPolicy(capability, context);
+    return decision.allowed && decision.requiresApproval;
+  }
+
+  private evaluateCapabilityPolicy(
+    capability: ExternalCapability,
+    context?: {
+      sessionId?: string;
+      authSessionId?: string;
     }
-    if (!this.capabilityPolicy.approvalDefault) {
+  ) {
+    const toolId: ToolId =
+      capability === "web_search" ? "web.search" : capability === "file_write" ? "file.write" : capability === "shell_exec" ? "shell.exec" : "wasm.exec";
+    return this.evaluateToolPolicy(toolId, context);
+  }
+
+  private evaluateToolPolicy(
+    toolId: ToolId,
+    context?: {
+      sessionId?: string;
+      authSessionId?: string;
+    }
+  ) {
+    const sessionId = context?.sessionId ?? "";
+    const authSessionId = context?.authSessionId ?? "";
+    return evaluateToolPolicy(toolId, this.buildToolPolicyInput(), {
+      hasFileWriteLease: sessionId ? this.hasFileWriteApprovalLease(sessionId, authSessionId) : false
+    });
+  }
+
+  private buildToolPolicyInput(): ToolPolicyInput {
+    return {
+      approvalMode: this.capabilityPolicy.approvalMode,
+      approvalDefault: this.capabilityPolicy.approvalDefault,
+      webSearchEnabled: this.capabilityPolicy.webSearchEnabled,
+      webSearchRequireApproval: this.capabilityPolicy.webSearchRequireApproval,
+      fileWriteEnabled: this.capabilityPolicy.fileWriteEnabled,
+      fileWriteRequireApproval: this.capabilityPolicy.fileWriteRequireApproval,
+      fileWriteApprovalMode: this.capabilityPolicy.fileWriteApprovalMode,
+      shellEnabled: this.capabilityPolicy.shellEnabled
+    };
+  }
+
+  private resolveFileWriteApprovalLeaseKey(channelSessionId: string, authSessionId: string): string {
+    const channel = channelSessionId.trim() || "unknown";
+    const auth = authSessionId.trim();
+    if (this.capabilityPolicy.fileWriteApprovalScope === "channel") {
+      return `channel:${channel}`;
+    }
+    return `auth:${auth || channel}`;
+  }
+
+  private hasFileWriteApprovalLease(channelSessionId: string, authSessionId: string): boolean {
+    if (this.capabilityPolicy.fileWriteApprovalMode !== "session") {
       return false;
     }
-    if (capability === "web_search") {
-      return this.capabilityPolicy.webSearchRequireApproval;
+    const key = this.resolveFileWriteApprovalLeaseKey(channelSessionId, authSessionId);
+    return this.fileWriteApprovalLeases.has(key);
+  }
+
+  private grantFileWriteApprovalLease(channelSessionId: string, authSessionId: string): void {
+    if (this.capabilityPolicy.fileWriteApprovalMode !== "session") {
+      return;
     }
-    if (capability === "file_write") {
-      return this.capabilityPolicy.fileWriteRequireApproval;
+    const key = this.resolveFileWriteApprovalLeaseKey(channelSessionId, authSessionId);
+    this.fileWriteApprovalLeases.add(key);
+  }
+
+  private async recordToolUsage(
+    sessionId: string,
+    toolName: string,
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    const typedSpec = (TOOL_SPECS_V1 as Record<string, (typeof TOOL_SPECS_V1)[keyof typeof TOOL_SPECS_V1]>)[toolName];
+    const provider = typeof payload.provider === "string" ? payload.provider : undefined;
+    const route = typeof payload.route === "string" ? payload.route : undefined;
+    const query = typeof payload.query === "string" ? payload.query : undefined;
+    const shortQuery = query ? query.slice(0, 140) : undefined;
+    const parts = [
+      `Tool used: ${toolName}`,
+      typedSpec ? `tier=${typedSpec.safetyTier}` : "",
+      provider ? `provider=${provider}` : "",
+      route ? `route=${route}` : "",
+      shortQuery ? `query=${shortQuery}` : ""
+    ]
+      .filter((part) => part.length > 0)
+      .join(" | ");
+    await this.recordConversation(sessionId, "system", parts, {
+      source: "gateway",
+      channel: "internal",
+      kind: "command",
+      metadata: {
+        toolUsage: true,
+        toolName,
+        ...(typedSpec
+          ? {
+              toolSpecVersion: typedSpec.version,
+              toolCapability: typedSpec.capability,
+              toolSafetyTier: typedSpec.safetyTier
+            }
+          : {}),
+        ...payload
+      }
+    });
+  }
+
+  private evaluateShellCommandPolicy(command: string): { blocked: false } | { blocked: true; ruleId: string } {
+    const trimmed = command.trim();
+    if (!trimmed) {
+      return { blocked: true, ruleId: "empty_command" };
     }
-    return true;
+    for (const rule of DEFAULT_SHELL_BLOCK_RULES) {
+      if (rule.pattern.test(trimmed)) {
+        return {
+          blocked: true,
+          ruleId: rule.id
+        };
+      }
+    }
+    return { blocked: false };
   }
 
   private resolveWorkspacePath(relativePath: string): { ok: true; absolutePath: string } | { ok: false; error: string } {
@@ -2697,6 +2931,71 @@ export class GatewayService {
 
     const relativePath = path.relative(this.capabilityPolicy.workspaceDir, absolutePath).replace(/\\/g, "/");
     return `Queued attachment send: workspace/${relativePath}`;
+  }
+
+  private async executeShellCommand(command: string): Promise<string> {
+    const trimmed = command.trim();
+    if (!trimmed) {
+      return "Shell command is empty.";
+    }
+
+    const maxOutputChars = this.capabilityPolicy.shellMaxOutputChars;
+    const timeoutMs = this.capabilityPolicy.shellTimeoutMs;
+    const cwd = this.capabilityPolicy.workspaceDir;
+
+    return await new Promise((resolve) => {
+      const child = spawn(trimmed, {
+        cwd,
+        shell: true,
+        env: process.env
+      });
+
+      let stdout = "";
+      let stderr = "";
+      let timedOut = false;
+      const timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, timeoutMs);
+
+      const appendBounded = (current: string, chunk: string) => {
+        if (!chunk) {
+          return current;
+        }
+        const combined = `${current}${chunk}`;
+        if (combined.length <= maxOutputChars) {
+          return combined;
+        }
+        return combined.slice(0, maxOutputChars);
+      };
+
+      child.stdout.on("data", (chunk: Buffer | string) => {
+        stdout = appendBounded(stdout, String(chunk));
+      });
+      child.stderr.on("data", (chunk: Buffer | string) => {
+        stderr = appendBounded(stderr, String(chunk));
+      });
+      child.on("error", (error) => {
+        clearTimeout(timer);
+        resolve(`Shell failed to start: ${error.message}`);
+      });
+      child.on("close", (code, signal) => {
+        clearTimeout(timer);
+        const lines = [`Shell run in workspace (${path.relative(process.cwd(), cwd) || "."})`];
+        if (timedOut) {
+          lines.push(`Result: timed_out_after_${timeoutMs}ms`);
+        } else {
+          lines.push(`Result: exit_code=${String(code ?? "null")}${signal ? ` signal=${signal}` : ""}`);
+        }
+        if (stdout.trim()) {
+          lines.push("", "stdout:", stdout.trimEnd());
+        }
+        if (stderr.trim()) {
+          lines.push("", "stderr:", stderr.trimEnd());
+        }
+        resolve(lines.join("\n"));
+      });
+    });
   }
 
   private async executeWebSearch(

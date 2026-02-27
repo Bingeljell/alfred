@@ -122,6 +122,11 @@ export type CreateGatewayAppOptions = {
     fileWriteRequireApproval?: boolean;
     fileWriteNotesOnly?: boolean;
     fileWriteNotesDir?: string;
+    fileWriteApprovalMode?: "per_action" | "session" | "always";
+    fileWriteApprovalScope?: "auth" | "channel";
+    shellEnabled?: boolean;
+    shellTimeoutMs?: number;
+    shellMaxOutputChars?: number;
   };
   baileysInboundToken?: string;
 };

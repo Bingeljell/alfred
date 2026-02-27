@@ -50,7 +50,10 @@ describe("orchestrator phases", () => {
         fileWriteEnabled: true,
         fileWriteRequireApproval: true,
         fileWriteNotesOnly: true,
-        fileWriteNotesDir: "notes"
+        fileWriteNotesDir: "notes",
+        fileWriteApprovalMode: "session",
+        fileWriteApprovalScope: "auth",
+        shellEnabled: false
       },
       buildSkillsSnapshot: () => ({ hash: "skills-v1", content: ["planner", "web"] })
     });
@@ -73,4 +76,3 @@ describe("orchestrator phases", () => {
     expect(completeRun).toHaveBeenCalledWith("run-1", "completed", undefined);
   });
 });
-

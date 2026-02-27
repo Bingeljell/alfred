@@ -28,6 +28,7 @@ export type ParsedCommand =
   | { kind: "supervisor_status"; id: string }
   | { kind: "file_write"; relativePath: string; text: string }
   | { kind: "file_send"; relativePath: string; caption?: string }
+  | { kind: "shell_exec"; command: string }
   | { kind: "policy_status" }
   | { kind: "approval_pending" }
   | { kind: "side_effect_send"; text: string }
@@ -275,8 +276,30 @@ export function parseCommand(text: string): ParsedCommand | null {
     }
   }
 
+  if (value.toLowerCase().startsWith("/shell ")) {
+    const command = value.slice("/shell ".length).trim();
+    if (command) {
+      return { kind: "shell_exec", command };
+    }
+  }
+
+  if (value.toLowerCase().startsWith("/exec ")) {
+    const command = value.slice("/exec ".length).trim();
+    if (command) {
+      return { kind: "shell_exec", command };
+    }
+  }
+
   if (value.toLowerCase().startsWith("send ")) {
     return { kind: "side_effect_send", text: value.slice(5).trim() };
+  }
+
+  if (value.toLowerCase().startsWith("approve shell ") || value.toLowerCase().startsWith("/approve shell ")) {
+    const offset = value.toLowerCase().startsWith("/approve shell ") ? 15 : 14;
+    const token = value.slice(offset).trim();
+    if (token) {
+      return { kind: "approve", token };
+    }
   }
 
   if (value.toLowerCase().startsWith("approve ") || value.toLowerCase().startsWith("/approve ")) {
@@ -284,6 +307,14 @@ export function parseCommand(text: string): ParsedCommand | null {
     const token = value.slice(offset).trim();
     if (token) {
       return { kind: "approve", token };
+    }
+  }
+
+  if (value.toLowerCase().startsWith("reject shell ") || value.toLowerCase().startsWith("/reject shell ")) {
+    const offset = value.toLowerCase().startsWith("/reject shell ") ? 14 : 13;
+    const token = value.slice(offset).trim();
+    if (token) {
+      return { kind: "reject", token };
     }
   }
 

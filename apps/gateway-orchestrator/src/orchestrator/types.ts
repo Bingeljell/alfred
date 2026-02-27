@@ -52,6 +52,9 @@ export type ToolPolicySnapshot = {
   fileWriteRequireApproval: boolean;
   fileWriteNotesOnly: boolean;
   fileWriteNotesDir: string;
+  fileWriteApprovalMode: "per_action" | "session" | "always";
+  fileWriteApprovalScope: "auth" | "channel";
+  shellEnabled: boolean;
 };
 
 export type PlannerDecision = {

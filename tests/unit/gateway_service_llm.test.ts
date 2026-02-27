@@ -39,10 +39,12 @@ describe("GatewayService llm path", () => {
     expect(llm.generateText).toHaveBeenCalledTimes(1);
   });
 
-  it("supports approval-gated web search command", async () => {
+  it("queues web search command without approval and records tool transparency", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-web-search-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);
     await queueStore.ensureReady();
+    const conversationStore = new ConversationStore(stateDir);
+    await conversationStore.ensureReady();
 
     const approvalStore = new ApprovalStore(stateDir);
     await approvalStore.ensureReady();
@@ -67,7 +69,7 @@ describe("GatewayService llm path", () => {
       undefined,
       "chatgpt",
       undefined,
-      undefined,
+      conversationStore,
       undefined,
       undefined,
       {
@@ -78,26 +80,22 @@ describe("GatewayService llm path", () => {
       }
     );
 
-    const gated = await service.handleInbound({
+    const queuedResponse = await service.handleInbound({
       sessionId: "owner@s.whatsapp.net",
       text: "/web latest OpenAI OAuth docs",
       requestJob: false
     });
-    expect(gated.response).toContain("Approval required for web search");
-
-    const token = String(gated.response?.split("approve ")[1] ?? "").trim();
-    const approved = await service.handleInbound({
-      sessionId: "owner@s.whatsapp.net",
-      text: `approve ${token}`,
-      requestJob: false
-    });
-    expect(approved.response).toContain("Approved action executed: web_search (queued job");
+    expect(queuedResponse.response).toContain("Queued web search as job");
     const jobs = await queueStore.listJobs();
     expect(jobs.length).toBe(1);
     const queued = jobs[0];
     expect(queued?.status).toBe("queued");
     expect(queued?.payload?.taskType).toBe("web_search");
     expect(queued?.payload?.query).toBe("latest OpenAI OAuth docs");
+    const conversationEvents = await conversationStore.listBySession("owner@s.whatsapp.net", 20);
+    const toolEvent = conversationEvents.find((event) => event.direction === "system" && event.text.includes("Tool used: web.search"));
+    expect(toolEvent).toBeTruthy();
+    expect(toolEvent?.metadata?.toolUsage).toBe(true);
 
     const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(calls.length).toBe(0);
@@ -1343,5 +1341,124 @@ describe("GatewayService llm path", () => {
     expect(String(calls[0]?.[1] ?? "")).toContain("Recent conversation context");
     expect(String(calls[0]?.[1] ?? "")).toContain("assistant: prior assistant detail");
     expect(calls[0]?.[2]).toEqual({ authPreference: "api_key" });
+  });
+
+  it("grants file-write approval once per auth session when configured", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-write-session-lease-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalDefault: true,
+        fileWriteEnabled: true,
+        fileWriteRequireApproval: true,
+        fileWriteNotesOnly: true,
+        fileWriteNotesDir: "notes",
+        fileWriteApprovalMode: "session",
+        fileWriteApprovalScope: "auth"
+      }
+    );
+
+    const first = await service.handleInbound({
+      sessionId: "channel-a@lid",
+      text: "/write notes/day.md first line",
+      requestJob: false,
+      metadata: {
+        authSessionId: "wa-user"
+      }
+    });
+    expect(first.response).toContain("Approval required for file write");
+
+    const token = String(first.response?.split("approve ")[1] ?? "").trim();
+    const approved = await service.handleInbound({
+      sessionId: "channel-a@lid",
+      text: `approve ${token}`,
+      requestJob: false,
+      metadata: {
+        authSessionId: "wa-user"
+      }
+    });
+    expect(approved.response).toContain("Approved action executed: file_write");
+
+    const second = await service.handleInbound({
+      sessionId: "channel-a@lid",
+      text: "/write notes/day.md second line",
+      requestJob: false,
+      metadata: {
+        authSessionId: "wa-user"
+      }
+    });
+    expect(second.response).toContain("Appended");
+    expect(second.response).not.toContain("Approval required");
+  });
+
+  it("blocks risky shell commands and supports explicit override token flow", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-shell-policy-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        shellEnabled: true,
+        shellTimeoutMs: 5000,
+        shellMaxOutputChars: 2000
+      }
+    );
+
+    const blocked = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "/shell sudo echo hi",
+      requestJob: false
+    });
+    expect(blocked.response).toContain("Shell command blocked by policy");
+    expect(blocked.response).toContain("approve shell");
+
+    const token = blocked.response?.match(/approve shell ([^\s]+)/i)?.[1] ?? "";
+    expect(token).toBeTruthy();
+
+    const overridden = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `approve shell ${token}`,
+      requestJob: false
+    });
+    expect(overridden.response).toContain("Approved risky shell override");
+    expect(String(overridden.response)).toMatch(/Shell run in workspace|Shell failed to start/);
   });
 });

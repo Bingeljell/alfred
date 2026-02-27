@@ -361,7 +361,12 @@ async function main(): Promise<void> {
       fileWriteEnabled: config.alfredFileWriteEnabled,
       fileWriteRequireApproval: config.alfredFileWriteRequireApproval,
       fileWriteNotesOnly: config.alfredFileWriteNotesOnly,
-      fileWriteNotesDir: config.alfredFileWriteNotesDir
+      fileWriteNotesDir: config.alfredFileWriteNotesDir,
+      fileWriteApprovalMode: config.alfredFileWriteApprovalMode,
+      fileWriteApprovalScope: config.alfredFileWriteApprovalScope,
+      shellEnabled: config.alfredShellEnabled,
+      shellTimeoutMs: config.alfredShellTimeoutMs,
+      shellMaxOutputChars: config.alfredShellMaxOutputChars
     },
     baileysInboundToken: config.whatsAppBaileysInboundToken
   });
