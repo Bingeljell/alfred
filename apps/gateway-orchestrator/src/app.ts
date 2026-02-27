@@ -19,6 +19,7 @@ import { IdentityProfileStore } from "./auth/identity_profile_store";
 import { RunLedgerStore } from "./builtins/run_ledger_store";
 import { SupervisorStore } from "./builtins/supervisor_store";
 import { RunSpecStore } from "./builtins/run_spec_store";
+import { registerObservabilityRoutes } from "./routes/observability_routes";
 import type { MemoryCheckpointClass } from "./builtins/memory_checkpoint_service";
 import type { LlmAuthPreference, PlannerDecision } from "./orchestrator/types";
 
@@ -66,33 +67,6 @@ const MemoryCompactionRunBodySchema = z.object({
   force: z.boolean().optional(),
   targetDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional()
 });
-
-const ApprovalResolveBodySchema = z.object({
-  sessionId: z.string().min(1),
-  decision: z.enum(["approve", "reject"]),
-  token: z.string().min(1).optional(),
-  authSessionId: z.string().min(1).optional(),
-  authPreference: z.enum(["auto", "oauth", "api_key"]).optional()
-});
-
-const DEFAULT_STREAM_KINDS = ["chat", "command", "job", "error"] as const;
-const ConversationSourceValues = ["gateway", "whatsapp", "auth", "memory", "worker", "system"] as const;
-const ConversationChannelValues = ["direct", "baileys", "api", "internal"] as const;
-const ConversationKindValues = ["chat", "command", "job", "status", "error", "dedupe"] as const;
-const ConversationDirectionValues = ["inbound", "outbound", "system"] as const;
-
-function parseCsvFilter<T extends string>(raw: unknown, allowed: readonly T[]): T[] | undefined {
-  if (typeof raw !== "string") {
-    return undefined;
-  }
-
-  const allowedSet = new Set<string>(allowed);
-  const values = raw
-    .split(",")
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0 && allowedSet.has(item)) as T[];
-  return values.length > 0 ? values : undefined;
-}
 
 const QRCode = require("qrcode") as {
   toDataURL: (
@@ -363,240 +337,19 @@ export function createGatewayApp(
     }
   });
 
-  app.get("/v1/stream/events", async (req, res) => {
-    if (!conversationStore) {
-      res.status(404).json({ error: "stream_not_configured" });
-      return;
-    }
-
-    const limitRaw = Number(req.query.limit ?? 100);
-    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, Math.floor(limitRaw))) : 100;
-    const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
-    const noisy =
-      typeof req.query.noisy === "string" &&
-      (req.query.noisy.toLowerCase() === "true" || req.query.noisy === "1");
-    const kinds = parseCsvFilter(req.query.kinds, ConversationKindValues) ?? (noisy ? undefined : [...DEFAULT_STREAM_KINDS]);
-    const sources = parseCsvFilter(req.query.sources, ConversationSourceValues);
-    const channels = parseCsvFilter(req.query.channels, ConversationChannelValues);
-    const directions = parseCsvFilter(req.query.directions, ConversationDirectionValues);
-    const text = typeof req.query.text === "string" ? req.query.text.trim() : "";
-    const since = typeof req.query.since === "string" ? req.query.since.trim() : "";
-    const until = typeof req.query.until === "string" ? req.query.until.trim() : "";
-
-    const events = await conversationStore.query({
-      sessionId: sessionId || undefined,
-      limit,
-      kinds,
-      sources,
-      channels,
-      directions,
-      text: text || undefined,
-      since: since || undefined,
-      until: until || undefined
-    });
-    res.status(200).json({ events });
-  });
-
-  app.get("/v1/runs", async (req, res) => {
-    if (!runLedger) {
-      res.status(404).json({ error: "run_ledger_not_configured" });
-      return;
-    }
-
-    const sessionKey = typeof req.query.sessionKey === "string" ? req.query.sessionKey.trim() : "";
-    const limitRaw = Number(req.query.limit ?? 50);
-    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, Math.floor(limitRaw))) : 50;
-    const runs = await runLedger.listRuns({
-      sessionKey: sessionKey || undefined,
-      limit
-    });
-    res.status(200).json({ runs });
-  });
-
-  app.get("/v1/runs/:runId", async (req, res) => {
-    if (!runLedger) {
-      res.status(404).json({ error: "run_ledger_not_configured" });
-      return;
-    }
-
-    const run = await runLedger.getRun(req.params.runId);
-    if (!run) {
-      res.status(404).json({ error: "run_not_found" });
-      return;
-    }
-    const runSpec = runSpecStore ? await runSpecStore.get(req.params.runId) : null;
-    res.status(200).json({
-      ...run,
-      runSpec
-    });
-  });
-
-  app.get("/v1/supervisors", async (req, res) => {
-    if (!supervisorStore) {
-      res.status(404).json({ error: "supervisor_not_configured" });
-      return;
-    }
-
-    const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
-    const limitRaw = Number(req.query.limit ?? 50);
-    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 50;
-    const runs = await supervisorStore.list({
-      sessionId: sessionId || undefined,
-      limit
-    });
-    res.status(200).json({ runs });
-  });
-
-  app.get("/v1/supervisors/:id", async (req, res) => {
-    if (!supervisorStore) {
-      res.status(404).json({ error: "supervisor_not_configured" });
-      return;
-    }
-    const run = await supervisorStore.get(req.params.id);
-    if (!run) {
-      res.status(404).json({ error: "supervisor_not_found" });
-      return;
-    }
-    res.status(200).json(run);
-  });
-
-  app.get("/v1/approvals/pending", async (req, res) => {
-    const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
-    if (!sessionId) {
-      res.status(400).json({ error: "sessionId_required" });
-      return;
-    }
-
-    const rawLimit = Number(req.query.limit ?? 10);
-    const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(100, Math.floor(rawLimit))) : 10;
-    const pending = await service.listPendingApprovals(sessionId, limit);
-    res.status(200).json({
-      sessionId,
-      count: pending.length,
-      pending
-    });
-  });
-
-  app.post("/v1/approvals/resolve", async (req, res) => {
-    const parsed = ApprovalResolveBodySchema.safeParse(req.body ?? {});
-    if (!parsed.success) {
-      res.status(400).json({ error: "invalid_approval_resolve_request", detail: parsed.error.flatten() });
-      return;
-    }
-
-    const payload = parsed.data;
-    const text =
-      payload.decision === "approve"
-        ? payload.token
-          ? `approve ${payload.token}`
-          : "yes"
-        : payload.token
-          ? `reject ${payload.token}`
-          : "no";
-
-    const result = await service.handleInbound({
-      sessionId: payload.sessionId,
-      text,
-      requestJob: false,
-      metadata: {
-        ...(payload.authSessionId ? { authSessionId: payload.authSessionId } : {}),
-        ...(payload.authPreference ? { authPreference: payload.authPreference } : {})
-      }
-    });
-    res.status(200).json(result);
-  });
-
-  app.get("/v1/stream/events/subscribe", async (req, res) => {
-    if (!conversationStore) {
-      res.status(404).json({ error: "stream_not_configured" });
-      return;
-    }
-
-    const limitRaw = Number(req.query.limit ?? 40);
-    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(200, Math.floor(limitRaw))) : 40;
-    const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
-    const noisy =
-      typeof req.query.noisy === "string" &&
-      (req.query.noisy.toLowerCase() === "true" || req.query.noisy === "1");
-    const kinds = parseCsvFilter(req.query.kinds, ConversationKindValues) ?? (noisy ? undefined : [...DEFAULT_STREAM_KINDS]);
-    const sources = parseCsvFilter(req.query.sources, ConversationSourceValues);
-    const channels = parseCsvFilter(req.query.channels, ConversationChannelValues);
-    const directions = parseCsvFilter(req.query.directions, ConversationDirectionValues);
-    const text = typeof req.query.text === "string" ? req.query.text.trim().toLowerCase() : "";
-    const since = typeof req.query.since === "string" ? req.query.since.trim() : "";
-    const until = typeof req.query.until === "string" ? req.query.until.trim() : "";
-    const sourceSet = sources ? new Set(sources) : null;
-    const channelSet = channels ? new Set(channels) : null;
-    const kindSet = kinds ? new Set(kinds) : null;
-    const directionSet = directions ? new Set(directions) : null;
-    const sinceUnixMs = since ? Date.parse(since) : Number.NaN;
-    const sinceEnabled = Number.isFinite(sinceUnixMs);
-    const untilUnixMs = until ? Date.parse(until) : Number.NaN;
-    const untilEnabled = Number.isFinite(untilUnixMs);
-
-    res.setHeader("content-type", "text/event-stream");
-    res.setHeader("cache-control", "no-cache");
-    res.setHeader("connection", "keep-alive");
-    res.setHeader("x-accel-buffering", "no");
-
-    const initialEvents = await conversationStore.query({
-      sessionId: sessionId || undefined,
-      limit,
-      kinds,
-      sources,
-      channels,
-      directions,
-      text: text || undefined,
-      since: since || undefined,
-      until: until || undefined
-    });
-    for (const event of initialEvents) {
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
-    }
-
-    const unsubscribe = conversationStore.subscribe((event) => {
-      if (sessionId && event.sessionId !== sessionId) {
-        return;
-      }
-      if (sourceSet && !sourceSet.has(event.source)) {
-        return;
-      }
-      if (channelSet && !channelSet.has(event.channel)) {
-        return;
-      }
-      if (kindSet && !kindSet.has(event.kind)) {
-        return;
-      }
-      if (directionSet && !directionSet.has(event.direction)) {
-        return;
-      }
-      if (text && !event.text.toLowerCase().includes(text)) {
-        return;
-      }
-      if (sinceEnabled) {
-        const eventUnixMs = Date.parse(event.createdAt);
-        if (Number.isFinite(eventUnixMs) && eventUnixMs < sinceUnixMs) {
-          return;
+  registerObservabilityRoutes(app, {
+    conversationStore,
+    runLedger,
+    runSpecStore: runSpecStore
+      ? {
+          get: (runId: string) => runSpecStore.get(runId)
         }
-      }
-      if (untilEnabled) {
-        const eventUnixMs = Date.parse(event.createdAt);
-        if (Number.isFinite(eventUnixMs) && eventUnixMs >= untilUnixMs) {
-          return;
-        }
-      }
-      res.write(`data: ${JSON.stringify(event)}\n\n`);
-    });
-
-    const keepalive = setInterval(() => {
-      res.write(":keepalive\n\n");
-    }, 15000);
-
-    req.on("close", () => {
-      clearInterval(keepalive);
-      unsubscribe();
-      res.end();
-    });
+      : undefined,
+    supervisorStore,
+    approvalService: {
+      listPendingApprovals: (sessionId: string, limit?: number) => service.listPendingApprovals(sessionId, limit),
+      handleInbound: (input) => service.handleInbound(input)
+    }
   });
 
   app.get("/v1/identity/mappings", async (_req, res) => {
