@@ -4,6 +4,14 @@
 
 Deliver a WhatsApp-first self-hosted personal agent that can complete practical tasks safely, with auditable execution and strong memory recall.
 
+Design constraint:
+- Alfred is agent-first and tool-mediated (`docs/agentic_vision.md`): natural-language goals should flow through planner + tool execution; command endpoints are secondary/operator-oriented.
+- Channel architecture is gateway-first (`docs/channel_control_plane_architecture.md`): WhatsApp/Web/TUI/future channels are transport lanes only; orchestration logic is centralized in gateway.
+- Core engineering principles are locked in `docs/architecture_principles.md` (minimal core, typed tools, provider-agnostic runtime, gateway control plane, worker execution plane).
+- Alfred uses hybrid execution:
+  - agentic mode by default for unknown tasks
+  - structured RunSpec mode for high-risk/repeatable workflows
+
 ## MVP Features (v1)
 
 ## 1) Persistent Gateway + Conversational Orchestration
@@ -97,10 +105,11 @@ Testing:
 ## 6) Built-in Daily Utility
 
 Description:
-- Core includes reminders and simple notes/tasks without heavy external tools.
+- Core includes reminders, calendar entries, and simple notes/tasks without heavy external tools.
 
 Acceptance criteria:
 - Reminder creation, listing, and trigger notifications work.
+- Calendar command path supports add/list/cancel with deterministic IDs and session scoping.
 - User timezone is respected.
 - Daily backup reminder appears when overdue.
 
@@ -190,14 +199,15 @@ Acceptance criteria:
 - SearXNG and BrightData providers support dedicated config (`SEARXNG_SEARCH_*`, `BRIGHTDATA_*`), with BrightData using API key + zone; Brave and Perplexity remain optional API providers (`BRAVE_SEARCH_*`, `PERPLEXITY_*`) while OpenAI provider reuses current Codex/OpenAI chat path.
 - Long-running `/web` execution emits an in-flight `running` notification message so operators see progress before final output is returned.
 - `/write <relative-path> <text>` writes only inside workspace, is disabled by default, and can be restricted to notes-only paths.
+- `/file send <relative-path> [caption]` queues WhatsApp attachment delivery for workspace files and supports `.md`, `.txt`, and `.doc` payloads.
 - `/policy` command reports active capability policy state for manual verification.
 - Pending approvals can be resolved with natural yes/no replies (`yes` approves latest pending action, `no` rejects latest pending action) in both web chat and WhatsApp, while token-based `approve <token>` remains supported.
 - `/approval` / `/approval pending` reports pending approval state (action/token/expiry) for session-level operator visibility.
 - Approval state is queryable and resolvable via API (`GET /v1/approvals/pending`, `POST /v1/approvals/resolve`) for cross-channel control surfaces.
 
 Testing:
-- Automated: approval-store, command parser, app-route, and gateway-service unit tests for pending approval visibility, token/yes-no resolution, web-search approvals, and file-write policy enforcement.
-- Manual: run `/policy`, `/approval pending`, `/web ...`, `/write ...`, and approval API endpoints with different `ALFRED_*` env combinations and verify cross-channel approval/workspace behavior.
+- Automated: approval-store, command parser, app-route, and gateway-service unit tests for pending approval visibility, token/yes-no resolution, web-search approvals, file-write policy enforcement, and file-send queueing.
+- Manual: run `/policy`, `/approval pending`, `/web ...`, `/write ...`, `/calendar ...`, `/file send ...`, and approval API endpoints with different `ALFRED_*` env combinations and verify cross-channel approval/workspace behavior.
 
 ## 11) Daily Memory Compaction
 
@@ -223,13 +233,19 @@ Description:
 Acceptance criteria:
 - `/web ...` command queues a worker job instead of blocking the chat turn.
 - Research-like long requests are heuristically routed to worker with immediate “queued” acknowledgement.
+- Natural-language “research + send file/doc” requests can be routed as one worker run that writes a document and sends it as a WhatsApp attachment.
+- Structured RunSpec usage is selective (not universal); unknown tasks remain agentic unless policy/risk requires structured control.
+- Research-to-file runs execute through a versioned RunSpec contract (`version=1`) with explicit step types (`web.search`, `doc.compose`, `file.write`, `channel.send_attachment`).
+- Side-effect checkpoints can pause at required RunSpec steps and require per-step approvals before continuation.
 - Worker emits progress events (`progress`, `running`, `succeeded`, `failed`) and gateway surfaces those updates in stream/chat channels.
 - User can ask `status?`/`progress` and receive latest active job state + last progress message.
 - Long results can be delivered in pages using `#next`/`next` via session-scoped paged response state.
+- Attachment routing honors approval policy (file side effects require approval when configured).
+- Run details endpoint (`GET /v1/runs/:runId`) includes RunSpec step timeline/status so operators can audit execution path.
 
 Testing:
-- Automated: unit coverage for routed web-search command behavior, progress query handling, `#next` paging, paged store persistence, and worker progress event/reporting.
-- Manual: trigger long research request, confirm immediate queue acknowledgement + progress updates, then use `status?` and `#next` until pages are exhausted.
+- Automated: unit coverage for routed web-search command behavior, planner attachment-routing decisions, step-approval sequencing, RunSpec store/executor behavior, progress query handling, `#next` paging, and paged store persistence.
+- Manual: trigger long research request, confirm immediate queue acknowledgement + progress updates, then use `status?` and `#next` until pages are exhausted; validate one-message research-to-file flow sends an attachment on WhatsApp and inspect RunSpec steps via `/v1/runs/:runId`.
 
 ## 13) Planner-first Orchestration + System Prompt Stack
 
@@ -271,6 +287,7 @@ Testing:
 - Skill execution network is deny-by-default with allowlist exceptions.
 - Cancellation and retries are auditable.
 - OAuth-first auth with API key fallback if entitlement is unavailable.
+- WASM sandbox execution is intentionally deferred until post-refactor; current phase only locks interface/policy direction.
 
 ## Deferred to v2/v3
 

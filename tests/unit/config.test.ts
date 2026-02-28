@@ -8,7 +8,7 @@ describe("loadConfig", () => {
     expect(config.workerPollMs).toBe(250);
     expect(config.workerConcurrency).toBe(1);
     expect(config.memoryCompactionEnabled).toBe(true);
-    expect(config.memoryCompactionIntervalMs).toBe(3600000);
+    expect(config.memoryCompactionIntervalMs).toBe(86400000);
     expect(config.memoryCompactionMaxDaysPerRun).toBe(2);
     expect(config.memoryCompactionMinEventsPerDay).toBe(6);
     expect(config.memoryCompactionMaxEventsPerDay).toBe(600);
@@ -43,12 +43,18 @@ describe("loadConfig", () => {
       "docs/alfred_policies.md"
     ]);
     expect(config.alfredWebSearchEnabled).toBe(true);
-    expect(config.alfredWebSearchRequireApproval).toBe(true);
+    expect(config.alfredWebSearchRequireApproval).toBe(false);
     expect(config.alfredWebSearchProvider).toBe("searxng");
     expect(config.alfredFileWriteEnabled).toBe(false);
     expect(config.alfredFileWriteRequireApproval).toBe(true);
     expect(config.alfredFileWriteNotesOnly).toBe(true);
     expect(config.alfredFileWriteNotesDir).toBe("notes");
+    expect(config.alfredFileWriteApprovalMode).toBe("session");
+    expect(config.alfredFileWriteApprovalScope).toBe("auth");
+    expect(config.alfredShellEnabled).toBe(false);
+    expect(config.alfredShellTimeoutMs).toBe(20000);
+    expect(config.alfredShellMaxOutputChars).toBe(8000);
+    expect(config.alfredWasmEnabled).toBe(false);
     expect(config.braveSearchApiKey).toBeUndefined();
     expect(config.braveSearchUrl).toBe("https://api.search.brave.com/res/v1/web/search");
     expect(config.braveSearchTimeoutMs).toBe(12000);
@@ -127,6 +133,12 @@ describe("loadConfig", () => {
       ALFRED_FILE_WRITE_REQUIRE_APPROVAL: "false",
       ALFRED_FILE_WRITE_NOTES_ONLY: "false",
       ALFRED_FILE_WRITE_NOTES_DIR: "scratch",
+      ALFRED_FILE_WRITE_APPROVAL_MODE: "always",
+      ALFRED_FILE_WRITE_APPROVAL_SCOPE: "channel",
+      ALFRED_SHELL_ENABLED: "true",
+      ALFRED_SHELL_TIMEOUT_MS: "30000",
+      ALFRED_SHELL_MAX_OUTPUT_CHARS: "16000",
+      ALFRED_WASM_ENABLED: "true",
       BRAVE_SEARCH_API_KEY: "brave-key",
       BRAVE_SEARCH_URL: "https://brave.example/search",
       BRAVE_SEARCH_TIMEOUT_MS: "9000",
@@ -209,6 +221,12 @@ describe("loadConfig", () => {
     expect(config.alfredFileWriteRequireApproval).toBe(false);
     expect(config.alfredFileWriteNotesOnly).toBe(false);
     expect(config.alfredFileWriteNotesDir).toBe("scratch");
+    expect(config.alfredFileWriteApprovalMode).toBe("always");
+    expect(config.alfredFileWriteApprovalScope).toBe("channel");
+    expect(config.alfredShellEnabled).toBe(true);
+    expect(config.alfredShellTimeoutMs).toBe(30000);
+    expect(config.alfredShellMaxOutputChars).toBe(16000);
+    expect(config.alfredWasmEnabled).toBe(true);
     expect(config.braveSearchApiKey).toBe("brave-key");
     expect(config.braveSearchUrl).toBe("https://brave.example/search");
     expect(config.braveSearchTimeoutMs).toBe(9000);

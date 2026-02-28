@@ -5,7 +5,12 @@ import { randomUUID } from "node:crypto";
 export type OutboundNotification = {
   id: string;
   sessionId: string;
-  text: string;
+  kind?: "text" | "file";
+  text?: string;
+  filePath?: string;
+  fileName?: string;
+  mimeType?: string;
+  caption?: string;
   jobId?: string;
   status?: string;
   createdAt: string;
@@ -25,6 +30,14 @@ export class OutboundNotificationStore {
 
   async enqueue(notification: Omit<OutboundNotification, "id" | "createdAt">): Promise<OutboundNotification> {
     await this.ensureReady();
+    if (notification.kind === "file") {
+      if (!notification.filePath || !notification.filePath.trim()) {
+        throw new Error("notification_file_path_required");
+      }
+    } else if (!notification.text || !notification.text.trim()) {
+      throw new Error("notification_text_required");
+    }
+
     const full: OutboundNotification = {
       id: randomUUID(),
       createdAt: new Date().toISOString(),
@@ -47,6 +60,9 @@ export class OutboundNotificationStore {
 
       const raw = await fs.readFile(path.join(this.notificationsDir, file), "utf8");
       const parsed = JSON.parse(raw) as OutboundNotification;
+      if (parsed.kind !== "file" && parsed.kind !== "text") {
+        parsed.kind = "text";
+      }
       if (!parsed.deliveredAt) {
         items.push(parsed);
       }

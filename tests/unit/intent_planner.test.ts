@@ -24,7 +24,7 @@ describe("IntentPlanner", () => {
   it("uses llm json decision when available", async () => {
     const llm = {
       generateText: vi.fn().mockResolvedValue({
-        text: '{"intent":"web_research","confidence":0.92,"needsWorker":true,"query":"best stable diffusion models","provider":"brave","reason":"research_task"}'
+        text: '{"intent":"web_research","confidence":0.92,"needsWorker":true,"query":"best stable diffusion models","provider":"searxng","sendAttachment":true,"fileFormat":"md","fileName":"stable_diffusion_report","reason":"research_task"}'
       })
     };
     const catalog = new SystemPromptCatalog(process.cwd(), []);
@@ -36,8 +36,11 @@ describe("IntentPlanner", () => {
     const result = await planner.plan("s1", "research best stable diffusion models");
     expect(result.intent).toBe("web_research");
     expect(result.needsWorker).toBe(true);
-    expect(result.provider).toBe("brave");
+    expect(result.provider).toBe("searxng");
     expect(result.query).toBe("best stable diffusion models");
+    expect(result.sendAttachment).toBe(true);
+    expect(result.fileFormat).toBe("md");
+    expect(result.fileName).toBe("stable_diffusion_report");
   });
 
   it("falls back to heuristic when llm output is invalid json", async () => {
@@ -56,6 +59,20 @@ describe("IntentPlanner", () => {
     expect(result.intent).toBe("web_research");
     expect(result.needsWorker).toBe(true);
     expect(result.reason).toContain("heuristic");
+  });
+
+  it("detects attachment intent heuristically for research send-doc asks", async () => {
+    const catalog = new SystemPromptCatalog(process.cwd(), []);
+    const planner = new IntentPlanner({
+      systemPromptCatalog: catalog,
+      enabled: false
+    });
+
+    const result = await planner.plan("s1", "research best SD models and send me a markdown doc");
+    expect(result.intent).toBe("web_research");
+    expect(result.sendAttachment).toBe(true);
+    expect(result.fileFormat).toBe("md");
+    expect(result.needsWorker).toBe(true);
   });
 
   it("loads system prompt docs from configured files", async () => {

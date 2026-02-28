@@ -5,7 +5,7 @@ type Listener = (payload: unknown) => void;
 
 function createFakeSocket() {
   const listeners = new Map<string, Listener[]>();
-  const sent: Array<{ jid: string; text: string }> = [];
+  const sent: Array<{ jid: string; payload: Record<string, unknown> }> = [];
   const counters = {
     logoutCalls: 0,
     endCalls: 0
@@ -19,8 +19,8 @@ function createFakeSocket() {
         listeners.set(event, existing);
       }
     },
-    sendMessage: async (jid: string, payload: { text: string }) => {
-      sent.push({ jid, text: payload.text });
+    sendMessage: async (jid: string, payload: Record<string, unknown>) => {
+      sent.push({ jid, payload });
     },
     end: () => {
       counters.endCalls += 1;
@@ -61,7 +61,35 @@ describe("BaileysRuntime", () => {
 
     expect(fake.sent).toHaveLength(1);
     expect(fake.sent[0]?.jid).toBe("12345@s.whatsapp.net");
-    expect(fake.sent[0]?.text).toBe("hello");
+    expect(fake.sent[0]?.payload.text).toBe("hello");
+  });
+
+  it("sends file attachments with metadata", async () => {
+    const fake = createFakeSocket();
+    const runtime = new BaileysRuntime({
+      authDir: "/tmp/baileys-auth",
+      onInbound: async () => undefined,
+      moduleLoader: async () => ({
+        default: () => fake.socket,
+        fetchLatestBaileysVersion: async () => ({ version: [1, 0, 0] as [number, number, number] }),
+        useMultiFileAuthState: async () => ({ state: {}, saveCreds: async () => undefined })
+      })
+    });
+
+    await runtime.connect();
+    fake.emit("connection.update", { connection: "open" });
+
+    await runtime.sendFile("12345@s.whatsapp.net", __filename, {
+      fileName: "runtime.test.ts",
+      mimeType: "text/plain",
+      caption: "test file"
+    });
+
+    expect(fake.sent).toHaveLength(1);
+    expect(fake.sent[0]?.payload.fileName).toBe("runtime.test.ts");
+    expect(fake.sent[0]?.payload.mimetype).toBe("text/plain");
+    expect(fake.sent[0]?.payload.caption).toBe("test file");
+    expect(fake.sent[0]?.payload.document).toBeInstanceOf(Buffer);
   });
 
   it("forwards only allowed inbound messages and truncates text", async () => {
@@ -328,6 +356,41 @@ describe("BaileysRuntime", () => {
 
     expect(fake.counters.logoutCalls).toBe(0);
     expect(fake.counters.endCalls).toBeGreaterThan(0);
+  });
+
+  it("restarts connection when stream restart is required (code 515) even without close event", async () => {
+    const fake = createFakeSocket();
+    let loadCount = 0;
+    const runtime = new BaileysRuntime({
+      authDir: "/tmp/baileys-auth",
+      reconnectDelayMs: 5,
+      onInbound: async () => undefined,
+      moduleLoader: async () => {
+        loadCount += 1;
+        return {
+          default: () => fake.socket,
+          fetchLatestBaileysVersion: async () => ({ version: [1, 0, 0] as [number, number, number] }),
+          useMultiFileAuthState: async () => ({ state: {}, saveCreds: async () => undefined })
+        };
+      }
+    });
+
+    await runtime.connect();
+    fake.emit("connection.update", {
+      lastDisconnect: {
+        error: {
+          message: "Stream Errored (restart required)",
+          data: { attrs: { code: "515" } }
+        }
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const status = runtime.status() as { state: string; lastDisconnectCode: number | null };
+    expect(fake.counters.endCalls).toBeGreaterThan(0);
+    expect(loadCount).toBeGreaterThanOrEqual(2);
+    expect(status.state).toBe("connecting");
+    expect(status.lastDisconnectCode).toBe(515);
   });
 
   it("accepts @lid inbound sender ids", async () => {

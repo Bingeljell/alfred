@@ -4,6 +4,11 @@
 
 Build a WhatsApp-first personal agent that runs on a single self-hosted machine (local dev, then low-cost VM/edge), executes real tasks through external skills, and provides auditable, secure behavior.
 
+Agentic direction is locked in `docs/agentic_vision.md`: Alfred should primarily execute via planner-selected tools from natural language goals, with command surfaces treated as operator/debug fallback.
+Channel-control-plane direction is locked in `docs/channel_control_plane_architecture.md`: channels are thin input lanes; gateway owns normalization/planning/policy/routing/persistence.
+Architecture decision record: `docs/adr/0001-gateway-control-plane-and-agentic-runtime.md`.
+Core architecture principles are locked in `docs/architecture_principles.md`.
+
 ## Architectural Decisions (Locked)
 
 - Runtime: TypeScript/Node for v1, Go review in v2/v3.
@@ -12,7 +17,14 @@ Build a WhatsApp-first personal agent that runs on a single self-hosted machine 
 - Orchestration model:
   - gateway is the control plane for every turn (session resolution, planning, policy, routing, persistence, delivery)
   - worker is the execution plane for long/background tasks
+  - hybrid planning handshake: worker may propose plans, but gateway remains authoritative and locks execution via run specs
   - do not collapse these roles in v1; evolve toward multi-worker/subagent fan-out under gateway supervision
+- Execution strategy:
+  - user intent is primarily natural language -> planner -> tool calls
+  - slash commands are retained for deterministic operator fallback and debugging, not as the primary end-user interaction mode
+  - execution is hybrid by design:
+    - agentic mode (default) for unknown/open-ended tasks with in-run tool iteration
+    - structured RunSpec mode (selective) for high-risk/repeatable workflows
 - Execution lanes:
   - chat lane: per-user serialized turns
   - job lane: async queued jobs for long-running work
@@ -37,6 +49,9 @@ Build a WhatsApp-first personal agent that runs on a single self-hosted machine 
 - LLM auth:
   - OAuth-first
   - fallback prompt for API key if entitlement is unavailable
+- Sandbox roadmap:
+  - WASM executor is deferred for now
+  - define contract/policy first, then implement after gateway/worker refactor stabilizes
 - Artifacts/logs:
   - local disk artifacts (7-day retention)
   - logs (14-day retention)
@@ -190,15 +205,21 @@ Deliverables:
 - Transcript operability hardening: add day-scoped transcript filtering in `/ui` with bounded `since`/`until` reads so long-running histories stay navigable.
 - Heartbeat reliability loop: add periodic heartbeat scheduler with active-hour and idle-queue gating, deduped alert delivery, explicit dependency checks (OpenAI auth disconnect, WhatsApp disconnect, long-running jobs), and operator controls (`/v1/heartbeat/status`, `/v1/heartbeat/configure`, `/v1/heartbeat/run`) exposed in `/ui`.
 - Capability policy baseline: enforce approval-by-default for external capabilities, route web research through `/web`, add workspace-scoped `/write` command with notes-only policy controls, and keep file-write disabled by default unless explicitly enabled in env.
+- Built-in calendar/file skill pass: add `/calendar add|list|cancel` command flow, `/file send` attachment queueing, and WhatsApp document delivery for `.md`/`.txt`/`.doc` artifacts from workspace-scoped paths.
 - Multi-provider web research runtime: support SearXNG (default), OpenAI/Codex, Brave Search API, Perplexity API, and BrightData providers with env-configured default selection and command-time provider override.
 - Approval UX hardening: support tokenless yes/no approval decisions scoped to latest pending action per session across web and WhatsApp channels, plus explicit pending/resolve control paths (`/approval pending`, `GET /v1/approvals/pending`, `POST /v1/approvals/resolve`).
 - Operator feedback hardening: emit in-flight progress notifications for slower command paths (starting with `/web`) so chat channels are not silent during long operations.
 - Long-task routing hardening: route `/web` and research-style long prompts into worker jobs with immediate acknowledgements, worker-side progress events, `status?` responses, and paged `#next` result delivery for large responses.
 - Planner-first routing: run an LLM intent planner for non-command chat turns with structured intent output, confidence-based clarification fallback, and deterministic policy enforcement.
+- Goal-runner path: planner can route a natural-language research-to-deliverable request into a single worker task (`web_to_file`) that executes search, synthesis, workspace write, and WhatsApp attachment delivery.
+- RunSpec v1 baseline: formalize selective structured execution as immutable run specs (schema + store), with generic worker step execution and explicit step timeline persistence.
+- Step approval checkpoints: side-effecting RunSpec steps require per-step approval tokens and can continue sequentially across channels without re-planning.
 - System-prompt stack: load Alfred identity/capability/policy markdown files and inject them into planner context so behavior remains auditable and easy to tune without code changes.
 - Approval-mode policy: support `strict`/`balanced`/`relaxed` capability approval modes with `balanced` as default for early autonomy with bounded risk.
 - Planner trace observability: emit a planner decision trace event (intent/confidence/reason/chosen action) to the unified stream so `/ui` operators can diagnose routing decisions quickly.
 - Turn state-machine + run ledger: persist per-turn orchestration phases and immutable run-spec metadata, with run inspection APIs (`/v1/runs`, `/v1/runs/:runId`).
+- Run timeline operator UX: expose run list/detail controls in `/ui` and include RunSpec step status in `/v1/runs/:runId` responses for fast debugging.
+- Hybrid orchestration guardrail: keep agentic mode as primary runtime path; use structured mode only where safety/reliability requirements justify precompiled execution.
 - Supervisor + fan-out baseline: support gateway-supervised parent/child web fan-out jobs, child budget controls, and supervisor status APIs (`/v1/supervisors`, `/v1/supervisors/:id`).
 - Worker concurrency baseline: allow configurable parallel workers (`WORKER_CONCURRENCY`) while keeping gateway as orchestration source of truth.
 - Memory V2 autonomy baseline: add checkpoint memory writes on decisions/task boundaries, class-aware retrieval (`fact`/`preference`/`todo`/`decision`), dedupe/day-cap guards, class-tagged compaction summaries, and checkpoint status API (`/v1/memory/checkpoints/status`).

@@ -10,6 +10,7 @@ import { ConversationStore } from "../../apps/gateway-orchestrator/src/builtins/
 import { ApprovalStore } from "../../apps/gateway-orchestrator/src/builtins/approval_store";
 import { RunLedgerStore } from "../../apps/gateway-orchestrator/src/builtins/run_ledger_store";
 import { SupervisorStore } from "../../apps/gateway-orchestrator/src/builtins/supervisor_store";
+import { OutboundNotificationStore } from "../../apps/gateway-orchestrator/src/notification_store";
 
 describe("GatewayService llm path", () => {
   it("treats yes/no as normal chat when no pending approval exists", async () => {
@@ -38,10 +39,12 @@ describe("GatewayService llm path", () => {
     expect(llm.generateText).toHaveBeenCalledTimes(1);
   });
 
-  it("supports approval-gated web search command", async () => {
+  it("queues web search command without approval and records tool transparency", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-web-search-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);
     await queueStore.ensureReady();
+    const conversationStore = new ConversationStore(stateDir);
+    await conversationStore.ensureReady();
 
     const approvalStore = new ApprovalStore(stateDir);
     await approvalStore.ensureReady();
@@ -66,7 +69,7 @@ describe("GatewayService llm path", () => {
       undefined,
       "chatgpt",
       undefined,
-      undefined,
+      conversationStore,
       undefined,
       undefined,
       {
@@ -77,26 +80,22 @@ describe("GatewayService llm path", () => {
       }
     );
 
-    const gated = await service.handleInbound({
+    const queuedResponse = await service.handleInbound({
       sessionId: "owner@s.whatsapp.net",
       text: "/web latest OpenAI OAuth docs",
       requestJob: false
     });
-    expect(gated.response).toContain("Approval required for web search");
-
-    const token = String(gated.response?.split("approve ")[1] ?? "").trim();
-    const approved = await service.handleInbound({
-      sessionId: "owner@s.whatsapp.net",
-      text: `approve ${token}`,
-      requestJob: false
-    });
-    expect(approved.response).toContain("Approved action executed: web_search (queued job");
+    expect(queuedResponse.response).toContain("Queued web search as job");
     const jobs = await queueStore.listJobs();
     expect(jobs.length).toBe(1);
     const queued = jobs[0];
     expect(queued?.status).toBe("queued");
     expect(queued?.payload?.taskType).toBe("web_search");
     expect(queued?.payload?.query).toBe("latest OpenAI OAuth docs");
+    const conversationEvents = await conversationStore.listBySession("owner@s.whatsapp.net", 20);
+    const toolEvent = conversationEvents.find((event) => event.direction === "system" && event.text.includes("Tool used: web.search"));
+    expect(toolEvent).toBeTruthy();
+    expect(toolEvent?.metadata?.toolUsage).toBe(true);
 
     const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(calls.length).toBe(0);
@@ -281,7 +280,7 @@ describe("GatewayService llm path", () => {
     const jobs = await queueStore.listJobs();
     expect(jobs.length).toBe(1);
     const job = jobs[0];
-    expect(job?.payload?.taskType).toBe("web_search");
+    expect(job?.payload?.taskType).toBe("agentic_turn");
 
     const status = await service.handleInbound({
       sessionId: "owner@s.whatsapp.net",
@@ -289,6 +288,51 @@ describe("GatewayService llm path", () => {
       requestJob: false
     });
     expect(status.response).toContain(`Latest job ${job?.id} is queued`);
+  });
+
+  it("requests approval for heuristic research-to-file routing when side effects are required", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-heuristic-web-to-file-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        approvalDefault: true,
+        webSearchEnabled: true,
+        fileWriteEnabled: true,
+        fileWriteRequireApproval: true
+      },
+      undefined,
+      undefined,
+      undefined
+    );
+
+    const routed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "research best stable diffusion models and send me a markdown document",
+      requestJob: false
+    });
+
+    expect(routed.mode).toBe("chat");
+    expect(routed.response).toContain("Approval required for step 'Write File'");
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(0);
   });
 
   it("emits a planner trace event with chosen action metadata", async () => {
@@ -352,9 +396,264 @@ describe("GatewayService llm path", () => {
     const trace = traces[0];
     expect(trace?.text).toContain("Planner selected web_research");
     expect(trace?.metadata?.plannerIntent).toBe("web_research");
-    expect(trace?.metadata?.plannerChosenAction).toBe("enqueue_worker_web_search");
+    expect(trace?.metadata?.plannerChosenAction).toBe("enqueue_worker_agentic_turn");
     expect(trace?.metadata?.plannerReason).toBe("unit_test_planner");
     expect(trace?.metadata?.plannerNeedsWorker).toBe(true);
+  });
+
+  it("routes planner attachment requests through approval then queues web_to_file job", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-attachment-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const notificationStore = new OutboundNotificationStore(stateDir);
+    await notificationStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const planner = {
+      plan: vi.fn().mockImplementation(async (_sessionId: string, message: string) => {
+        if (message.toLowerCase().startsWith("approve ") || message.toLowerCase().startsWith("/approve ")) {
+          return {
+            intent: "command",
+            confidence: 1,
+            needsWorker: false,
+            reason: "explicit_command"
+          };
+        }
+        return {
+          intent: "web_research",
+          confidence: 0.91,
+          needsWorker: true,
+          query: "best stable diffusion models",
+          provider: "searxng",
+          sendAttachment: true,
+          fileFormat: "md",
+          fileName: "sd_models_report",
+          reason: "attachment_requested"
+        };
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      notificationStore,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        approvalDefault: true,
+        webSearchEnabled: true,
+        fileWriteEnabled: true,
+        fileWriteRequireApproval: true
+      },
+      undefined,
+      undefined,
+      planner as never
+    );
+
+    const gated = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Please research best stable diffusion models and send me a markdown file",
+      requestJob: false
+    });
+    expect(gated.response).toContain("Approval required for step 'Write File'");
+
+    const firstToken = String(gated.response?.split("approve ")[1] ?? "").trim();
+    const firstApproval = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `approve ${firstToken}`,
+      requestJob: false
+    });
+    expect(firstApproval.response).toContain("Step 'write' approved. Run queued as job");
+
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(1);
+    expect(jobs[0]?.payload?.taskType).toBe("run_spec");
+    const approvedRunSpec = jobs[0]?.payload?.runSpec as
+      | { steps?: Array<{ input?: { fileFormat?: string } }> }
+      | undefined;
+    expect(approvedRunSpec?.steps?.[2]?.input?.fileFormat).toBe("md");
+  });
+
+  it("resolves yes/no approvals before planner clarification", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-implicit-approval-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+    await approvalStore.create("owner@s.whatsapp.net", "send_text", { text: "hello world" });
+
+    const planner = {
+      plan: vi.fn().mockResolvedValue({
+        intent: "clarify",
+        confidence: 0.2,
+        needsWorker: false,
+        question: "Could you confirm what you want me to do next?",
+        reason: "forced_clarify_for_test"
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      planner as never
+    );
+
+    const response = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "yes",
+      requestJob: false
+    });
+    expect(response.response).toContain("Approved action executed: send 'hello world'");
+    expect(planner.plan).not.toHaveBeenCalled();
+  });
+
+  it("queues planner attachment request directly when approval is not required", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-attachment-direct-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const planner = {
+      plan: vi.fn().mockResolvedValue({
+        intent: "web_research",
+        confidence: 0.88,
+        needsWorker: true,
+        query: "compare note taking apps",
+        provider: "searxng",
+        sendAttachment: true,
+        fileFormat: "txt",
+        reason: "attachment_direct"
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        approvalMode: "relaxed",
+        approvalDefault: false,
+        webSearchEnabled: true,
+        fileWriteEnabled: true,
+        fileWriteRequireApproval: false
+      },
+      undefined,
+      undefined,
+      planner as never
+    );
+
+    const routed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Research note taking apps and send me a txt file",
+      requestJob: false
+    });
+    expect(routed.mode).toBe("async-job");
+    expect(routed.response).toContain("research + document delivery");
+
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(1);
+    expect(jobs[0]?.payload?.taskType).toBe("run_spec");
+    const directRunSpec = jobs[0]?.payload?.runSpec as
+      | { steps?: Array<{ input?: { fileFormat?: string } }> }
+      | undefined;
+    expect(directRunSpec?.steps?.[2]?.input?.fileFormat).toBe("txt");
+  });
+
+  it("delegates command-intent plans to worker when planner marks needsWorker", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-command-worker-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "fallback-chat"
+      })
+    };
+
+    const planner = {
+      plan: vi.fn().mockResolvedValue({
+        intent: "command",
+        confidence: 0.91,
+        needsWorker: true,
+        query: "Retry the previous web research comparison task using searxng.",
+        provider: "searxng",
+        sendAttachment: false,
+        reason: "retry_requested"
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      llm as never,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        approvalDefault: true,
+        webSearchEnabled: true
+      },
+      undefined,
+      undefined,
+      planner as never
+    );
+
+    const result = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Try again please",
+      requestJob: false
+    });
+
+    expect(result.mode).toBe("async-job");
+    expect(result.response).toContain("Queued research as job");
+
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(1);
+    expect(jobs[0]?.payload?.taskType).toBe("agentic_turn");
+    expect(llm.generateText).not.toHaveBeenCalled();
   });
 
   it("serves #next pages from paged response store", async () => {
@@ -481,6 +780,66 @@ describe("GatewayService llm path", () => {
 
     const written = await fs.readFile(path.join(workspaceDir, "notes", "day.md"), "utf8");
     expect(written).toContain("write this line");
+  });
+
+  it("queues approved file attachment sends for whatsapp delivery", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-file-send-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const notificationStore = new OutboundNotificationStore(stateDir);
+    await notificationStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    await fs.mkdir(path.join(workspaceDir, "notes"), { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "notes", "summary.md"), "# Summary\n", "utf8");
+
+    const service = new GatewayService(
+      queueStore,
+      notificationStore,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalDefault: true,
+        fileWriteEnabled: true,
+        fileWriteRequireApproval: true,
+        fileWriteNotesOnly: true,
+        fileWriteNotesDir: "notes"
+      }
+    );
+
+    const gated = await service.handleInbound({
+      sessionId: "919819874144@s.whatsapp.net",
+      text: "/file send notes/summary.md daily update",
+      requestJob: false
+    });
+    expect(gated.response).toContain("Approval required for file send");
+
+    const token = String(gated.response?.split("approve ")[1] ?? "").trim();
+    const approved = await service.handleInbound({
+      sessionId: "919819874144@s.whatsapp.net",
+      text: `approve ${token}`,
+      requestJob: false
+    });
+    expect(approved.response).toContain("Approved action executed: file_send");
+
+    const pending = await notificationStore.listPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.kind).toBe("file");
+    expect(pending[0]?.fileName).toBe("summary.md");
+    expect(pending[0]?.caption).toBe("daily update");
   });
 
   it("uses llm response for regular chat and preserves command routing", async () => {
@@ -1044,5 +1403,124 @@ describe("GatewayService llm path", () => {
     expect(String(calls[0]?.[1] ?? "")).toContain("Recent conversation context");
     expect(String(calls[0]?.[1] ?? "")).toContain("assistant: prior assistant detail");
     expect(calls[0]?.[2]).toEqual({ authPreference: "api_key" });
+  });
+
+  it("grants file-write approval once per auth session when configured", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-write-session-lease-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalDefault: true,
+        fileWriteEnabled: true,
+        fileWriteRequireApproval: true,
+        fileWriteNotesOnly: true,
+        fileWriteNotesDir: "notes",
+        fileWriteApprovalMode: "session",
+        fileWriteApprovalScope: "auth"
+      }
+    );
+
+    const first = await service.handleInbound({
+      sessionId: "channel-a@lid",
+      text: "/write notes/day.md first line",
+      requestJob: false,
+      metadata: {
+        authSessionId: "wa-user"
+      }
+    });
+    expect(first.response).toContain("Approval required for file write");
+
+    const token = String(first.response?.split("approve ")[1] ?? "").trim();
+    const approved = await service.handleInbound({
+      sessionId: "channel-a@lid",
+      text: `approve ${token}`,
+      requestJob: false,
+      metadata: {
+        authSessionId: "wa-user"
+      }
+    });
+    expect(approved.response).toContain("Approved action executed: file_write");
+
+    const second = await service.handleInbound({
+      sessionId: "channel-a@lid",
+      text: "/write notes/day.md second line",
+      requestJob: false,
+      metadata: {
+        authSessionId: "wa-user"
+      }
+    });
+    expect(second.response).toContain("Appended");
+    expect(second.response).not.toContain("Approval required");
+  });
+
+  it("blocks risky shell commands and supports explicit override token flow", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-shell-policy-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        shellEnabled: true,
+        shellTimeoutMs: 5000,
+        shellMaxOutputChars: 2000
+      }
+    );
+
+    const blocked = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "/shell sudo echo hi",
+      requestJob: false
+    });
+    expect(blocked.response).toContain("Shell command blocked by policy");
+    expect(blocked.response).toContain("approve shell");
+
+    const token = blocked.response?.match(/approve shell ([^\s]+)/i)?.[1] ?? "";
+    expect(token).toBeTruthy();
+
+    const overridden = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `approve shell ${token}`,
+      requestJob: false
+    });
+    expect(overridden.response).toContain("Approved risky shell override");
+    expect(String(overridden.response)).toMatch(/Shell run in workspace|Shell failed to start/);
   });
 });

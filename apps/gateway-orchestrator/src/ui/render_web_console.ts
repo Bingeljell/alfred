@@ -1,3 +1,5 @@
+import { renderUiHeader } from "./shared_shell";
+
 export function renderWebConsoleHtml(): string {
   return `<!doctype html>
 <html lang="en">
@@ -40,6 +42,22 @@ export function renderWebConsoleHtml(): string {
         margin-top: 6px;
         color: var(--muted);
         font-size: 13px;
+      }
+      .nav {
+        margin-top: 10px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .nav a {
+        text-decoration: none;
+        border: 1px solid var(--line);
+        background: #fff;
+        color: #1f2937;
+        border-radius: 8px;
+        padding: 6px 10px;
+        font-size: 12px;
+        font-weight: 600;
       }
       .layout {
         display: grid;
@@ -331,10 +349,11 @@ export function renderWebConsoleHtml(): string {
     </style>
   </head>
   <body>
-    <header>
-      <h1>Alfred Test Console</h1>
-      <div class="subtitle">Two test paths: web console now, WhatsApp/Baileys simulation now, real WhatsApp later.</div>
-    </header>
+    ${renderUiHeader({
+      title: "Alfred Test Console",
+      subtitle: "Two test paths: web console now, WhatsApp/Baileys simulation now, real WhatsApp later.",
+      current: "console"
+    })}
 
     <main class="layout">
       <section class="panel">
@@ -367,7 +386,7 @@ export function renderWebConsoleHtml(): string {
           <button class="secondary" id="sendJob">Send as Async Job</button>
           <button class="secondary" id="healthBtn">Health</button>
         </div>
-        <div class="hint">Quick commands: <span class="pill">/task add ...</span><span class="pill">/note add ...</span><span class="pill">/remind &lt;ISO&gt; ...</span><span class="pill">/web --provider=searxng ...</span><span class="pill">/web --provider=brightdata ...</span><span class="pill">/auth connect</span><span class="pill">/auth status</span><span class="pill">/auth limits</span><span class="pill">/approval pending</span><span class="pill">send ...</span><span class="pill">yes / no</span><span class="pill">approve &lt;token&gt;</span><span class="pill">reject &lt;token&gt;</span></div>
+        <div class="hint">Quick commands: <span class="pill">/task add ...</span><span class="pill">/note add ...</span><span class="pill">/remind &lt;ISO&gt; ...</span><span class="pill">/web --provider=searxng ...</span><span class="pill">/web --provider=brightdata ...</span><span class="pill">/shell pwd</span><span class="pill">/auth connect</span><span class="pill">/auth status</span><span class="pill">/auth limits</span><span class="pill">/approval pending</span><span class="pill">send ...</span><span class="pill">yes / no</span><span class="pill">approve &lt;token&gt;</span><span class="pill">approve shell &lt;token&gt;</span><span class="pill">reject &lt;token&gt;</span></div>
         <div class="status" id="statusLine"></div>
         <h2>Persisted Transcript</h2>
         <div class="actions">
@@ -401,6 +420,22 @@ export function renderWebConsoleHtml(): string {
               <button class="secondary" id="jobRetry">Retry</button>
             </div>
           </div>
+        </div>
+
+        <h2>Run Timeline</h2>
+        <div class="row">
+          <div>
+            <label for="runSessionKey">Run Session Key</label>
+            <input id="runSessionKey" placeholder="defaults to Session ID above" />
+          </div>
+          <div>
+            <label for="runId">Run ID</label>
+            <input id="runId" placeholder="paste run id" />
+          </div>
+        </div>
+        <div class="actions">
+          <button class="secondary" id="runList">List Runs</button>
+          <button class="secondary" id="runStatus">Run Status</button>
         </div>
 
         <h2>Memory</h2>
@@ -630,6 +665,8 @@ export function renderWebConsoleHtml(): string {
       const $ = (id) => document.getElementById(id);
       const log = $("log");
       const sessionTranscript = $("sessionTranscript");
+      const runSessionKeyInput = $("runSessionKey");
+      const runIdInput = $("runId");
       const transcriptDate = $("transcriptDate");
       const transcriptAllSessions = $("transcriptAllSessions");
       const statusLine = $("statusLine");
@@ -646,6 +683,8 @@ export function renderWebConsoleHtml(): string {
       const logSourceEvents = $("logSourceEvents");
       const logInteractionStream = $("logInteractionStream");
       const includeNoisyStream = $("includeNoisyStream");
+      const MAX_LOG_ENTRIES = 500;
+      const logEntries = [];
       const sourceGatewayCard = $("sourceGatewayCard");
       const sourceGatewayValue = $("sourceGatewayValue");
       const sourceGatewayMeta = $("sourceGatewayMeta");
@@ -703,12 +742,20 @@ export function renderWebConsoleHtml(): string {
       }
 
       function pushLog(label, payload) {
-        const line = "[" + stamp() + "] " + label + "\\n" + (typeof payload === "string" ? payload : JSON.stringify(payload, null, 2)) + "\\n";
+        const line = "[" + stamp() + "] " + label + "\\n" + (typeof payload === "string" ? payload : JSON.stringify(payload, null, 2));
+        logEntries.push(line);
+        if (logEntries.length > MAX_LOG_ENTRIES) {
+          logEntries.splice(0, logEntries.length - MAX_LOG_ENTRIES);
+        }
+        renderLog();
+      }
+
+      function renderLog() {
+        const ordered = logNewestFirst.checked ? [...logEntries].reverse() : [...logEntries];
+        log.textContent = ordered.join("\\n\\n");
         if (logNewestFirst.checked) {
-          log.textContent = line + "\\n" + log.textContent;
           log.scrollTop = 0;
         } else {
-          log.textContent += line + "\\n";
           log.scrollTop = log.scrollHeight;
         }
       }
@@ -940,6 +987,17 @@ export function renderWebConsoleHtml(): string {
         }
 
         const queue = response.data?.queue || {};
+        const activeJobs = Array.isArray(response.data?.activeJobs) ? response.data.activeJobs : [];
+        const activeTop = activeJobs[0];
+        const activeMeta = activeTop
+          ? " | active " +
+            String(activeTop.id || "").slice(0, 8) +
+            " " +
+            String(activeTop.status || "unknown") +
+            (activeTop.workerId ? "@" + String(activeTop.workerId) : "") +
+            (activeTop.progressPhase ? " [" + String(activeTop.progressPhase) + "]" : "") +
+            (activeTop.progress ? " (" + String(activeTop.progress) + ")" : "")
+          : "";
         updateSourceSnapshot(
           "gateway",
           sourceGatewayCard,
@@ -954,7 +1012,8 @@ export function renderWebConsoleHtml(): string {
               " | running " +
               String(queue.running ?? 0) +
               " | failed " +
-              String(queue.failed ?? 0)
+              String(queue.failed ?? 0) +
+              activeMeta
           },
           {
             ok: true,
@@ -963,7 +1022,8 @@ export function renderWebConsoleHtml(): string {
               queued: queue.queued ?? 0,
               running: queue.running ?? 0,
               failed: queue.failed ?? 0
-            }
+            },
+            activeJobs: activeJobs
           }
         );
       }
@@ -1736,6 +1796,69 @@ export function renderWebConsoleHtml(): string {
         }
       });
 
+      $("runList").addEventListener("click", async () => {
+        const sessionKey = runSessionKeyInput.value.trim() || $("sessionId").value.trim();
+        const query = sessionKey ? "?sessionKey=" + encodeURIComponent(sessionKey) + "&limit=20" : "?limit=20";
+        const response = await runButtonAction($("runList"), "RUNS_LIST", () => api("GET", "/v1/runs" + query));
+        if (response.ok) {
+          const runs = Array.isArray(response.data?.runs) ? response.data.runs : [];
+          const brief = runs.map((run) => ({
+            runId: run?.runId ?? "n/a",
+            sessionKey: run?.sessionKey ?? "n/a",
+            status: run?.status ?? "unknown",
+            phase: run?.phase ?? "n/a",
+            createdAt: run?.createdAt ?? "n/a",
+            updatedAt: run?.updatedAt ?? "n/a"
+          }));
+          if (!runIdInput.value.trim() && runs.length > 0 && runs[0]?.runId) {
+            runIdInput.value = String(runs[0].runId);
+          }
+          pushLog("RUNS_LIST", {
+            sessionKey: sessionKey || "all",
+            count: brief.length,
+            runs: brief
+          });
+        } else {
+          pushLog("RUNS_LIST", response);
+        }
+        setStatus("Last action: RUNS_LIST (" + response.status + ")", response.ok ? "success" : "error");
+      });
+
+      $("runStatus").addEventListener("click", async () => {
+        const runId = runIdInput.value.trim();
+        if (!runId) {
+          return setStatus("Run ID is required.", "error");
+        }
+        const response = await runButtonAction($("runStatus"), "RUN_STATUS", () => api("GET", "/v1/runs/" + encodeURIComponent(runId)));
+        if (response.ok) {
+          const run = response.data || {};
+          const runSpec = run.runSpec && typeof run.runSpec === "object" ? run.runSpec : null;
+          const specSteps = runSpec && runSpec.spec && Array.isArray(runSpec.spec.steps) ? runSpec.spec.steps : [];
+          const stepStates = runSpec && runSpec.stepStates && typeof runSpec.stepStates === "object" ? runSpec.stepStates : {};
+          const steps = specSteps.map((step) => {
+            const state = stepStates[step.id] && typeof stepStates[step.id] === "object" ? stepStates[step.id] : {};
+            return {
+              id: step.id,
+              name: step.name,
+              type: step.type,
+              status: state.status ?? "unknown",
+              message: state.message ?? null
+            };
+          });
+          pushLog("RUN_STATUS", {
+            runId: run.runId ?? runId,
+            status: run.status ?? "unknown",
+            phase: run.phase ?? "n/a",
+            runSpecStatus: runSpec?.status ?? "none",
+            stepCount: steps.length,
+            steps
+          });
+        } else {
+          pushLog("RUN_STATUS", response);
+        }
+        setStatus("Last action: RUN_STATUS (" + response.status + ")", response.ok ? "success" : "error");
+      });
+
       $("memorySearch").addEventListener("click", async () => {
         const q = encodeURIComponent($("memoryQuery").value.trim());
         const response = await runButtonAction($("memorySearch"), "MEMORY_SEARCH", () => api("GET", "/v1/memory/search?q=" + q));
@@ -2034,7 +2157,8 @@ export function renderWebConsoleHtml(): string {
 
       $("logClear").addEventListener("click", async () => {
         await runButtonAction($("logClear"), "CLEAR_LOG", async () => {
-          log.textContent = "";
+          logEntries.length = 0;
+          renderLog();
           return { ok: true, status: 200, data: { cleared: true } };
         });
         setStatus("Console cleared.", "success");
@@ -2045,6 +2169,9 @@ export function renderWebConsoleHtml(): string {
         mapWhatsAppJid.value = nextSession || "owner@s.whatsapp.net";
         if (!$("oauthSession").value.trim()) {
           mapAuthSessionId.value = nextSession;
+        }
+        if (!runSessionKeyInput.value.trim()) {
+          runSessionKeyInput.value = nextSession;
         }
         void pollTranscriptSilently();
       });
@@ -2067,6 +2194,7 @@ export function renderWebConsoleHtml(): string {
       }
       mapAuthSessionId.value = selectedOAuthSession();
       mapWhatsAppJid.value = $("sessionId").value.trim() || "owner@s.whatsapp.net";
+      runSessionKeyInput.value = $("sessionId").value.trim() || "owner@s.whatsapp.net";
       updateMapSummary("No mapping action yet.", "idle");
       void (async () => {
         const sessionId = selectedOAuthSession();

@@ -51,7 +51,7 @@ type MemoryCompactionDependencies = {
 
 const DEFAULT_MEMORY_COMPACTION_CONFIG: MemoryCompactionConfig = {
   enabled: true,
-  intervalMs: 60 * 60 * 1000,
+  intervalMs: 24 * 60 * 60 * 1000,
   maxDaysPerRun: 2,
   minEventsPerDay: 6,
   maxEventsPerDay: 600,

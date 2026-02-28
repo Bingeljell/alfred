@@ -12,7 +12,11 @@ import { CodexThreadStore } from "../../gateway-orchestrator/src/codex/thread_st
 import { CodexChatService } from "../../gateway-orchestrator/src/llm/codex_chat_service";
 import { PagedResponseStore } from "../../gateway-orchestrator/src/builtins/paged_response_store";
 import { SupervisorStore } from "../../gateway-orchestrator/src/builtins/supervisor_store";
+import { RunSpecStore } from "../../gateway-orchestrator/src/builtins/run_spec_store";
 import { startWorker } from "./worker";
+import { createWorkerProcessor } from "./execution/processor";
+import { createWorkerStatusHandler } from "./execution/status_handler";
+import { ensureWorkerCodexRuntime } from "./runtime/codex_runtime";
 
 async function main(): Promise<void> {
   loadDotEnvFile();
@@ -21,6 +25,7 @@ async function main(): Promise<void> {
   const notificationStore = new OutboundNotificationStore(config.stateDir);
   const pagedResponseStore = new PagedResponseStore(config.stateDir);
   const supervisorStore = new SupervisorStore(config.stateDir);
+  const runSpecStore = new RunSpecStore(config.stateDir);
   const oauthService = new OAuthService({
     stateDir: config.stateDir,
     publicBaseUrl: config.publicBaseUrl,
@@ -65,6 +70,19 @@ async function main(): Promise<void> {
     });
   }
 
+  await store.ensureReady();
+  await notificationStore.ensureReady();
+  await pagedResponseStore.ensureReady();
+  await supervisorStore.ensureReady();
+  await runSpecStore.ensureReady();
+  await oauthService.ensureReady();
+  const ensuredCodex = await ensureWorkerCodexRuntime({
+    auth: codexAuthService,
+    chat: codexChatService
+  });
+  codexAuthService = ensuredCodex.auth;
+  codexChatService = ensuredCodex.chat;
+
   const llmService = new HybridLlmService({
     codex: codexChatService,
     responses: responsesService
@@ -72,6 +90,9 @@ async function main(): Promise<void> {
   const webSearchService = new WebSearchService({
     defaultProvider: config.alfredWebSearchProvider,
     llmService,
+    openai: {
+      timeoutMs: config.openAiResponsesTimeoutMs
+    },
     brave: {
       apiKey: config.braveSearchApiKey,
       url: config.braveSearchUrl,
@@ -99,222 +120,22 @@ async function main(): Promise<void> {
       timeoutMs: config.perplexityTimeoutMs
     }
   });
-
-  await store.ensureReady();
-  await notificationStore.ensureReady();
-  await pagedResponseStore.ensureReady();
-  await supervisorStore.ensureReady();
-  await oauthService.ensureReady();
-  if (codexAuthService) {
-    try {
-      await codexAuthService.ensureReady();
-    } catch {
-      await codexAuthService.stop();
-      codexAuthService = undefined;
-      codexChatService = undefined;
-    }
-  }
-  const jobNotificationState = new Map<string, { lastProgressAt: number; lastProgressText: string }>();
-  const processor: Parameters<typeof startWorker>[0]["processor"] = async (job, context) => {
-    const taskType = String(job.payload.taskType ?? "").trim().toLowerCase();
-    const sessionId = typeof job.payload.sessionId === "string" ? job.payload.sessionId : "";
-    const authSessionId =
-      typeof job.payload.authSessionId === "string" && job.payload.authSessionId.trim()
-        ? job.payload.authSessionId.trim()
-        : sessionId;
-    const authPreference = normalizeAuthPreference(job.payload.authPreference);
-
-    if (taskType === "chat_turn") {
-      const input = String(job.payload.text ?? "").trim();
-      if (!input) {
-        return {
-          summary: "chat_turn_missing_input",
-          responseText: "Follow-up could not run: missing input text."
-        };
-      }
-      await context.reportProgress({
-        step: "planning",
-        message: "Running queued follow-up turn..."
-      });
-      const generated = await llmService.generateText(authSessionId || sessionId, input, { authPreference });
-      const text = generated?.text?.trim();
-      if (!text) {
-        return {
-          summary: "chat_turn_no_response",
-          responseText: "No model response is available for this follow-up turn."
-        };
-      }
-      return {
-        summary: "chat_turn_completed",
-        responseText: text
-      };
-    }
-
-    if (taskType !== "web_search") {
-      const action = String(job.payload.action ?? job.payload.text ?? job.type);
-      return {
-        summary: `processed:${action}`,
-        processedAt: new Date().toISOString()
-      };
-    }
-
-    const query = String(job.payload.query ?? "").trim();
-    const provider = normalizeWebSearchProvider(job.payload.provider) ?? config.alfredWebSearchProvider;
-    const maxRetries = clampInt(job.payload.maxRetries, 0, 5, 1);
-    const timeBudgetMs = clampInt(job.payload.timeBudgetMs, 5000, 10 * 60 * 1000, 120_000);
-    const tokenBudget = clampInt(job.payload.tokenBudget, 128, 50_000, 8_000);
-
-    if (!query) {
-      return {
-        summary: "web_search_missing_query",
-        responseText: "Web search task failed: missing query."
-      };
-    }
-
-    await context.reportProgress({
-      step: "queued",
-      message: `Starting web search for: ${query.slice(0, 140)}`
-    });
-
-    let attempt = 0;
-    let resultText = "";
-    let resultProvider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | null = null;
-    let lastError: unknown = null;
-
-    while (attempt <= maxRetries) {
-      attempt += 1;
-      await context.reportProgress({
-        step: "searching",
-        message: `Searching via ${provider} (attempt ${attempt}/${maxRetries + 1})...`
-      });
-      try {
-        const result = await withTimeout(
-          webSearchService.search(query, {
-            provider,
-            authSessionId,
-            authPreference
-          }),
-          timeBudgetMs,
-          "web_search_time_budget_exceeded"
-        );
-        if (result?.text?.trim()) {
-          resultText = result.text.trim();
-          resultProvider = result.provider;
-          break;
-        }
-      } catch (error) {
-        lastError = error;
-      }
-
-      if (attempt <= maxRetries) {
-        await context.reportProgress({
-          step: "retrying",
-          message: `Retrying web search (${attempt}/${maxRetries})...`
-        });
-      }
-    }
-
-    if (!resultText || !resultProvider) {
-      const reason = lastError instanceof Error ? lastError.message : "no_result";
-      return {
-        summary: "web_search_no_results",
-        responseText: `No web search result is available for this query. Reason: ${reason}`
-      };
-    }
-
-    await context.reportProgress({
-      step: "synthesizing",
-      message: "Formatting final response..."
-    });
-    const fullText = `Web search provider: ${resultProvider}\n${resultText}`;
-    const pages = paginateResponse(fullText, 1400, 8);
-    const firstPage = pages[0] ?? fullText;
-    if (sessionId && pages.length > 1) {
-      await pagedResponseStore.setPages(sessionId, pages.slice(1));
-    } else if (sessionId) {
-      await pagedResponseStore.clear(sessionId);
-    }
-
-    const responseText =
-      pages.length > 1 ? `${firstPage}\n\nReply #next for more (${pages.length - 1} remaining).` : firstPage;
-
-    return {
-      summary: `web_search_${resultProvider}`,
-      responseText,
-      provider: resultProvider,
-      pageCount: pages.length,
-      retriesUsed: Math.max(0, attempt - 1),
-      tokenBudget
-    };
-  };
-
-  const onStatusChange: Parameters<typeof startWorker>[0]["onStatusChange"] = async (event) => {
-    if (!event.sessionId) {
-      return;
-    }
-
-    const summary = event.summary ? ` (${event.summary})` : "";
-    const status = event.status === "progress" ? "running" : event.status;
-    const now = Date.now();
-    const notifyState = jobNotificationState.get(event.jobId) ?? { lastProgressAt: 0, lastProgressText: "" };
-
-    let text: string | null = null;
-    if (event.status === "running") {
-      text = `Working on job ${event.jobId}...`;
-    } else if (event.status === "progress") {
-      const nextText = String(event.summary ?? "still working");
-      const shouldSend =
-        now - notifyState.lastProgressAt >= 45_000 && nextText.trim() && nextText !== notifyState.lastProgressText;
-      if (shouldSend) {
-        text = `Still working on job ${event.jobId}: ${nextText}`;
-        notifyState.lastProgressAt = now;
-        notifyState.lastProgressText = nextText;
-        jobNotificationState.set(event.jobId, notifyState);
-      }
-    } else if (event.status === "succeeded" && event.responseText) {
-      text = event.responseText;
-    } else {
-      text = `Job ${event.jobId} is ${event.status}${summary}`;
-    }
-
-    if (text) {
-      await notificationStore.enqueue({
-        sessionId: event.sessionId,
-        jobId: event.jobId,
-        status,
-        text
-      });
-    }
-
-    const job = await store.getJob(event.jobId);
-    const supervisorId =
-      job && typeof job.payload.supervisorId === "string" && job.payload.supervisorId.trim()
-        ? job.payload.supervisorId.trim()
-        : "";
-    if (supervisorId) {
-      const update = await supervisorStore.updateChildByJob(event.jobId, {
-        status: event.status === "progress" ? "running" : event.status,
-        summary: event.summary,
-        error: event.status === "failed" ? event.summary : undefined,
-        retriesUsed:
-          job && typeof job.result?.retriesUsed === "number" && Number.isFinite(job.result?.retriesUsed)
-            ? Math.max(0, Math.floor(job.result.retriesUsed))
-            : undefined
-      });
-      if (update && update.transitionedToTerminal) {
-        await notificationStore.enqueue({
-          sessionId: update.run.sessionId,
-          status: update.run.status === "completed" ? "succeeded" : "failed",
-          jobId: event.jobId,
-          text: supervisorStore.summarize(update.run)
-        });
-      }
-    }
-
-    if (event.status === "succeeded" || event.status === "failed" || event.status === "cancelled") {
-      jobNotificationState.delete(event.jobId);
-    }
-  };
+  const processor = createWorkerProcessor({
+    config: {
+      alfredWorkspaceDir: config.alfredWorkspaceDir,
+      alfredWebSearchProvider: config.alfredWebSearchProvider
+    },
+    webSearchService,
+    llmService,
+    pagedResponseStore,
+    notificationStore,
+    runSpecStore
+  });
+  const onStatusChange = createWorkerStatusHandler({
+    notificationStore,
+    store,
+    supervisorStore
+  });
 
   const handles = Array.from({ length: config.workerConcurrency }, (_, index) =>
     startWorker({
@@ -347,118 +168,3 @@ async function main(): Promise<void> {
 }
 
 void main();
-
-function normalizeAuthPreference(raw: unknown): "auto" | "oauth" | "api_key" {
-  if (typeof raw !== "string") {
-    return "auto";
-  }
-  const value = raw.trim().toLowerCase();
-  if (value === "oauth") {
-    return "oauth";
-  }
-  if (value === "api_key") {
-    return "api_key";
-  }
-  return "auto";
-}
-
-function normalizeWebSearchProvider(
-  raw: unknown
-): "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto" | null {
-  if (typeof raw !== "string") {
-    return null;
-  }
-  const value = raw.trim().toLowerCase();
-  if (value === "searxng" || value === "openai" || value === "brave" || value === "perplexity" || value === "brightdata" || value === "auto") {
-    return value;
-  }
-  return null;
-}
-
-function paginateResponse(text: string, maxCharsPerPage: number, maxPages: number): string[] {
-  const compact = text.trim();
-  if (!compact) {
-    return [];
-  }
-  if (compact.length <= maxCharsPerPage) {
-    return [compact];
-  }
-
-  const paragraphs = compact
-    .split(/\n{2,}/)
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
-
-  const pages: string[] = [];
-  let current = "";
-
-  const pushCurrent = () => {
-    const value = current.trim();
-    if (!value) {
-      return;
-    }
-    pages.push(value);
-    current = "";
-  };
-
-  for (const paragraph of paragraphs) {
-    const candidate = current ? `${current}\n\n${paragraph}` : paragraph;
-    if (candidate.length <= maxCharsPerPage) {
-      current = candidate;
-      continue;
-    }
-
-    pushCurrent();
-    if (paragraph.length <= maxCharsPerPage) {
-      current = paragraph;
-      continue;
-    }
-
-    const chunks = paragraph.match(new RegExp(`.{1,${maxCharsPerPage}}`, "g")) ?? [paragraph];
-    for (const chunk of chunks) {
-      pages.push(chunk.trim());
-      if (pages.length >= maxPages) {
-        return pages;
-      }
-    }
-  }
-
-  pushCurrent();
-  if (pages.length === 0) {
-    return [compact.slice(0, maxCharsPerPage)];
-  }
-  return pages.slice(0, maxPages);
-}
-
-function clampInt(raw: unknown, min: number, max: number, fallback: number): number {
-  const numeric = typeof raw === "number" ? raw : Number.NaN;
-  if (!Number.isFinite(numeric)) {
-    return fallback;
-  }
-  const value = Math.floor(numeric);
-  if (value < min) {
-    return min;
-  }
-  if (value > max) {
-    return max;
-  }
-  return value;
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timeoutHandle: NodeJS.Timeout | null = null;
-  try {
-    return await Promise.race([
-      promise,
-      new Promise<T>((_resolve, reject) => {
-        timeoutHandle = setTimeout(() => {
-          reject(new Error(message));
-        }, timeoutMs);
-      })
-    ]);
-  } finally {
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
-    }
-  }
-}

@@ -1,4 +1,5 @@
 import { BaileysInboundMessageSchema, type InboundMessage } from "../../../../packages/contracts/src";
+import { withChannelOrigin } from "../orchestrator/channel_submission";
 
 export type NormalizedBaileysMessage = {
   dedupeKey: string;
@@ -33,7 +34,8 @@ export function normalizeBaileysInbound(payload: unknown): NormalizedBaileysMess
   return {
     dedupeKey: `baileys:${parsed.key.remoteJid}:${parsed.key.id}`,
     providerMessageId: parsed.key.id,
-    normalized: {
+    normalized: withChannelOrigin(
+      {
       sessionId: parsed.key.remoteJid,
       text: wantsJob ? text.slice(5).trim() : text,
       requestJob: wantsJob,
@@ -43,6 +45,16 @@ export function normalizeBaileysInbound(payload: unknown): NormalizedBaileysMess
         messageTimestamp: parsed.messageTimestamp,
         ...(authPreference ? { authPreference } : {})
       }
-    }
+    },
+      {
+        channelId: "whatsapp",
+        channelContextId: parsed.key.remoteJid,
+        provider: "baileys",
+        transport: "baileys",
+        messageId: parsed.key.id,
+        senderId: parsed.key.remoteJid,
+        senderName: parsed.pushName || undefined
+      }
+    )
   };
 }

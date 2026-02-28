@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { BaileysInboundMessage } from "../../../../packages/contracts/src";
 import type { BaileysTransport } from "../../../../packages/provider-adapters/src";
 
@@ -37,7 +38,7 @@ type BaileysSocket = {
   ev: {
     on: (event: string, listener: (payload: unknown) => void) => void;
   };
-  sendMessage: (jid: string, payload: { text: string }) => Promise<void>;
+  sendMessage: (jid: string, payload: Record<string, unknown>) => Promise<void>;
   end?: (error?: unknown) => void;
   logout?: () => Promise<void>;
   user?: {
@@ -113,12 +114,39 @@ function safeDisconnectCode(payload: unknown): number | null {
   }
 
   const output = "output" in error ? error.output : null;
-  if (!output || typeof output !== "object") {
-    return null;
+  if (output && typeof output === "object") {
+    const statusCode = "statusCode" in output ? output.statusCode : null;
+    if (typeof statusCode === "number") {
+      return statusCode;
+    }
+
+    const outputPayload = "payload" in output ? output.payload : null;
+    if (outputPayload && typeof outputPayload === "object") {
+      const payloadStatusCode = "statusCode" in outputPayload ? outputPayload.statusCode : null;
+      if (typeof payloadStatusCode === "number") {
+        return payloadStatusCode;
+      }
+    }
   }
 
-  const statusCode = "statusCode" in output ? output.statusCode : null;
-  return typeof statusCode === "number" ? statusCode : null;
+  const data = "data" in error ? error.data : null;
+  if (data && typeof data === "object") {
+    const attrs = "attrs" in data ? data.attrs : null;
+    if (attrs && typeof attrs === "object") {
+      const code = "code" in attrs ? attrs.code : null;
+      if (typeof code === "number" && Number.isFinite(code)) {
+        return Math.trunc(code);
+      }
+      if (typeof code === "string") {
+        const parsed = Number(code);
+        if (Number.isFinite(parsed)) {
+          return Math.trunc(parsed);
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 function safeDisconnectReason(payload: unknown): string | null {
@@ -321,6 +349,35 @@ export class BaileysRuntime implements BaileysTransport {
     await this.socket.sendMessage(jid, { text: normalizedText });
   }
 
+  async sendFile(
+    jid: string,
+    filePath: string,
+    options?: { fileName?: string; mimeType?: string; caption?: string }
+  ): Promise<void> {
+    if (!isAllowedRemoteJid(jid)) {
+      throw new Error("baileys_invalid_jid");
+    }
+    const trimmedPath = filePath.trim();
+    if (!trimmedPath) {
+      throw new Error("baileys_invalid_file_path");
+    }
+    if (!this.socket) {
+      throw new Error("baileys_not_connected");
+    }
+
+    const buffer = await fs.readFile(trimmedPath);
+    const fileName = (options?.fileName ?? trimmedPath.split(/[\\/]/).pop() ?? "attachment").trim() || "attachment";
+    const mimeType = options?.mimeType?.trim() || "application/octet-stream";
+    const caption = options?.caption?.trim();
+
+    await this.socket.sendMessage(jid, {
+      document: buffer,
+      fileName,
+      mimetype: mimeType,
+      caption
+    });
+  }
+
   private async connectInternal(): Promise<void> {
     this.liveSinceUnixSec = null;
     this.seenMessageKeys.clear();
@@ -388,6 +445,9 @@ export class BaileysRuntime implements BaileysTransport {
     const update = payload as Record<string, unknown>;
     const connection = typeof update.connection === "string" ? update.connection : null;
     const qr = typeof update.qr === "string" ? update.qr : null;
+    const code = safeDisconnectCode(update);
+    const reason = safeDisconnectReason(update);
+    const restartRequired = code === 515 || (typeof reason === "string" && reason.toLowerCase().includes("restart required"));
 
     if (qr) {
       const nextQrGenerationCount = this.statusValue.qrGenerationCount + 1;
@@ -437,12 +497,50 @@ export class BaileysRuntime implements BaileysTransport {
       return;
     }
 
+    if (restartRequired) {
+      this.updateStatus({
+        state: this.allowReconnect ? "connecting" : "disconnected",
+        connected: false,
+        qr: null,
+        qrUpdatedAt: null,
+        qrLocked: false,
+        meId: null,
+        lastDisconnectCode: code,
+        lastDisconnectReason: reason,
+        inboundSyncState: "bootstrapping",
+        inboundLiveAt: null
+      });
+      this.liveSinceUnixSec = null;
+      this.seenMessageKeys.clear();
+
+      const socket = this.socket;
+      this.socket = null;
+      if (socket?.end) {
+        socket.end();
+      }
+
+      if (!this.allowReconnect) {
+        this.updateStatus({ state: "disconnected" });
+        return;
+      }
+
+      this.clearReconnectTimer();
+      this.reconnectTimer = setTimeout(() => {
+        void this.connect().catch((error) => {
+          this.updateStatus({
+            state: "error",
+            connected: false,
+            lastError: error instanceof Error ? error.message : String(error)
+          });
+        });
+      }, Math.min(this.reconnectDelayMs, 1000));
+      return;
+    }
+
     if (connection !== "close") {
       return;
     }
 
-    const code = safeDisconnectCode(update);
-    const reason = safeDisconnectReason(update);
     this.updateStatus({
       state: this.allowReconnect ? "connecting" : "disconnected",
       connected: false,

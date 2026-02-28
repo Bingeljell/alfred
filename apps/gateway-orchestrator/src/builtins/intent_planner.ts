@@ -10,6 +10,9 @@ export type PlannerDecision = {
   query?: string;
   question?: string;
   provider?: WebSearchProvider;
+  sendAttachment?: boolean;
+  fileFormat?: "md" | "txt" | "doc";
+  fileName?: string;
   reason: string;
 };
 
@@ -78,11 +81,15 @@ export class IntentPlanner {
       "Classify user input and choose a safe next action.",
       "",
       "Return ONLY strict JSON with this exact shape:",
-      '{"intent":"chat|web_research|status_query|clarify|command","confidence":0.0,"needsWorker":true,"query":"","question":"","provider":"openai|brave|perplexity|auto","reason":""}',
+      '{"intent":"chat|web_research|status_query|clarify|command","confidence":0.0,"needsWorker":true,"query":"","question":"","provider":"searxng|openai|brave|perplexity|brightdata|auto","sendAttachment":false,"fileFormat":"md|txt|doc","fileName":"","reason":""}',
       "",
       "Rules:",
       "- Use intent=status_query when user asks progress/status/check-in.",
       "- Use intent=web_research for web research/comparison tasks.",
+      "- For recommendation asks, ask clarification ONLY if key constraints are missing (budget/platform/priorities).",
+      "- If recommendation request already includes constraints, do not clarify; proceed with web_research.",
+      "- Set sendAttachment=true only when user explicitly asks to create and send a file/doc back.",
+      "- Default fileFormat to md unless user clearly requests txt/doc.",
       "- Use intent=clarify when the request is ambiguous.",
       "- If confidence is low (<0.65), prefer clarify.",
       "- Keep reason short.",
@@ -111,6 +118,9 @@ export class IntentPlanner {
         query: typeof parsed.query === "string" ? parsed.query.trim() : undefined,
         question: typeof parsed.question === "string" ? parsed.question.trim() : undefined,
         provider: normalizeProvider(parsed.provider),
+        sendAttachment: Boolean(parsed.sendAttachment),
+        fileFormat: normalizeFileFormat(parsed.fileFormat),
+        fileName: normalizeFileName(parsed.fileName),
         reason: typeof parsed.reason === "string" && parsed.reason.trim() ? parsed.reason.trim() : "llm_planner"
       };
 
@@ -156,15 +166,30 @@ function heuristicPlan(message: string, hasActiveJob: boolean): PlannerDecision 
     normalized.includes("compare") ||
     normalized.includes("best ") ||
     normalized.includes("top ") ||
+    normalized.includes("recommend") ||
     normalized.includes("web search") ||
     normalized.includes("one at a time");
+
+  if (looksLikeRecommendationAsk(normalized) && !hasRecommendationConstraints(normalized)) {
+    return {
+      intent: "clarify",
+      confidence: 0.62,
+      needsWorker: false,
+      question: "Before I recommend one option, what matters most: cost, quality, speed, ecosystem, or privacy?",
+      reason: "heuristic_recommendation_missing_constraints"
+    };
+  }
+
   if (researchSignals && message.length >= 18) {
+    const sendAttachment = wantsAttachment(message);
     return {
       intent: "web_research",
       confidence: 0.75,
       needsWorker: true,
       query: message.trim(),
       provider: "auto",
+      sendAttachment,
+      fileFormat: detectFileFormat(message),
       reason: "heuristic_research_route"
     };
   }
@@ -189,6 +214,22 @@ function heuristicPlan(message: string, hasActiveJob: boolean): PlannerDecision 
 
 function buildClarifyQuestion(message: string): string {
   return `You asked: "${message.trim()}". Do you want a quick answer, deeper research, or an action plan?`;
+}
+
+function looksLikeRecommendationAsk(normalized: string): boolean {
+  return /\b(recommend|which\s+.*\bshould\s+i\s+use|what\s+should\s+i\s+use)\b/i.test(normalized);
+}
+
+function hasRecommendationConstraints(normalized: string): boolean {
+  const signals = [
+    /\b(budget|cost|price|\$|cheap|expensive)\b/i,
+    /\b(speed|latency|performance|throughput)\b/i,
+    /\b(quality|accuracy|fidelity)\b/i,
+    /\b(mac|windows|linux|ios|android|platform|desktop|mobile)\b/i,
+    /\b(open source|license|privacy|self[- ]?hosted|cloud)\b/i,
+    /\b(integration|workflow|team|enterprise|personal)\b/i
+  ];
+  return signals.some((pattern) => pattern.test(normalized));
 }
 
 function parsePlannerJson(raw: string): Record<string, unknown> | null {
@@ -246,10 +287,60 @@ function normalizeProvider(raw: unknown): WebSearchProvider | undefined {
     return undefined;
   }
   const value = raw.trim().toLowerCase();
-  if (value === "openai" || value === "brave" || value === "perplexity" || value === "auto") {
+  if (
+    value === "searxng" ||
+    value === "openai" ||
+    value === "brave" ||
+    value === "perplexity" ||
+    value === "brightdata" ||
+    value === "auto"
+  ) {
     return value;
   }
   return undefined;
+}
+
+function normalizeFileFormat(raw: unknown): "md" | "txt" | "doc" | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const value = raw.trim().toLowerCase();
+  if (value === "md" || value === "txt" || value === "doc") {
+    return value;
+  }
+  return undefined;
+}
+
+function normalizeFileName(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  return trimmed.slice(0, 80);
+}
+
+function wantsAttachment(message: string): boolean {
+  const normalized = message.toLowerCase();
+  const asksSend = /\b(send|share|deliver|attach)\b/.test(normalized);
+  const asksFile = /\b(file|doc|document|attachment|pdf|markdown|txt)\b/.test(normalized);
+  return asksSend && asksFile;
+}
+
+function detectFileFormat(message: string): "md" | "txt" | "doc" {
+  const normalized = message.toLowerCase();
+  if (/\bmarkdown|\.md\b/.test(normalized)) {
+    return "md";
+  }
+  if (/\btxt|text file\b/.test(normalized)) {
+    return "txt";
+  }
+  if (/\bdoc|word\b/.test(normalized)) {
+    return "doc";
+  }
+  return "md";
 }
 
 function clampConfidence(raw: unknown): number {

@@ -6,6 +6,9 @@ describe("renderWebConsoleHtml", () => {
     const html = renderWebConsoleHtml();
 
     expect(html).toContain("Alfred Test Console");
+    expect(html).toContain("href=\"/ui\"");
+    expect(html).toContain("href=\"/ui/transcripts\"");
+    expect(html).toContain("href=\"/ui/console\"");
     expect(html).toContain("/v1/messages/inbound");
     expect(html).toContain("/v1/whatsapp/baileys/inbound");
     expect(html).toContain("/v1/memory/search");
@@ -24,6 +27,13 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("/v1/identity/resolve");
     expect(html).toContain("/v1/stream/events/subscribe");
     expect(html).toContain("Job Controls");
+    expect(html).toContain("Run Timeline");
+    expect(html).toContain("id=\"runSessionKey\"");
+    expect(html).toContain("id=\"runId\"");
+    expect(html).toContain("id=\"runList\"");
+    expect(html).toContain("id=\"runStatus\"");
+    expect(html).toContain("RUNS_LIST");
+    expect(html).toContain("RUN_STATUS");
     expect(html).toContain("id=\"authPreference\"");
     expect(html).toContain("LLM Auth Mode");
     expect(html).toContain("OAuth (OpenAI)");
@@ -110,5 +120,7 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("id=\"authSummary\"");
     expect(html).toContain("id=\"waLiveSummary\"");
     expect(html).toContain("runButtonAction");
+    expect(html).toContain("MAX_LOG_ENTRIES = 500");
+    expect(html).toContain("renderLog()");
   });
 });

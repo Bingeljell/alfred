@@ -59,6 +59,35 @@ describe("parseCommand", () => {
       relativePath: "notes/today.md",
       text: "Remember to call mom"
     });
+    expect(parseCommand("/file write notes/today.txt Remember to call mom")).toEqual({
+      kind: "file_write",
+      relativePath: "notes/today.txt",
+      text: "Remember to call mom"
+    });
+    expect(parseCommand("/file send notes/today.md")).toEqual({
+      kind: "file_send",
+      relativePath: "notes/today.md"
+    });
+    expect(parseCommand("/file send notes/today.md daily recap")).toEqual({
+      kind: "file_send",
+      relativePath: "notes/today.md",
+      caption: "daily recap"
+    });
+    expect(parseCommand("/shell ls -la")).toEqual({
+      kind: "shell_exec",
+      command: "ls -la"
+    });
+    expect(parseCommand("/exec pwd")).toEqual({
+      kind: "shell_exec",
+      command: "pwd"
+    });
+    expect(parseCommand("/calendar add 2026-02-23T09:00:00Z team sync")).toEqual({
+      kind: "calendar_add",
+      startsAt: "2026-02-23T09:00:00Z",
+      title: "team sync"
+    });
+    expect(parseCommand("/calendar list")).toEqual({ kind: "calendar_list" });
+    expect(parseCommand("/calendar cancel cal-1")).toEqual({ kind: "calendar_cancel", id: "cal-1" });
     expect(parseCommand("/supervise web compare sd models")).toEqual({
       kind: "supervise_web",
       query: "compare sd models",
@@ -106,5 +135,9 @@ describe("parseCommand", () => {
     expect(parseCommand("reject abc123")).toEqual({ kind: "reject", token: "abc123" });
     expect(parseCommand("/approve abc123")).toEqual({ kind: "approve", token: "abc123" });
     expect(parseCommand("/reject abc123")).toEqual({ kind: "reject", token: "abc123" });
+    expect(parseCommand("approve shell tok_1")).toEqual({ kind: "approve", token: "tok_1" });
+    expect(parseCommand("/approve shell tok_2")).toEqual({ kind: "approve", token: "tok_2" });
+    expect(parseCommand("reject shell tok_3")).toEqual({ kind: "reject", token: "tok_3" });
+    expect(parseCommand("/reject shell tok_4")).toEqual({ kind: "reject", token: "tok_4" });
   });
 });

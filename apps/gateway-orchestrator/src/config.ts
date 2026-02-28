@@ -35,7 +35,7 @@ const EnvSchema = z.object({
   MEMORY_COMPACTION_INTERVAL_MS: z
     .string()
     .optional()
-    .transform((v) => (v ? Number(v) : 60 * 60 * 1000))
+    .transform((v) => (v ? Number(v) : 24 * 60 * 60 * 1000))
     .pipe(z.number().int().min(60_000).max(24 * 60 * 60 * 1000)),
   MEMORY_COMPACTION_MAX_DAYS_PER_RUN: z
     .string()
@@ -160,7 +160,7 @@ const EnvSchema = z.object({
   ALFRED_WEB_SEARCH_REQUIRE_APPROVAL: z
     .string()
     .optional()
-    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+    .transform((v) => (v ? v.toLowerCase() !== "false" : false)),
   ALFRED_WEB_SEARCH_PROVIDER: z.enum(["searxng", "openai", "brave", "perplexity", "brightdata", "auto"]).optional().default("searxng"),
   ALFRED_FILE_WRITE_ENABLED: z
     .string()
@@ -175,6 +175,26 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
   ALFRED_FILE_WRITE_NOTES_DIR: z.string().optional().default("notes"),
+  ALFRED_FILE_WRITE_APPROVAL_MODE: z.enum(["per_action", "session", "always"]).optional().default("session"),
+  ALFRED_FILE_WRITE_APPROVAL_SCOPE: z.enum(["auth", "channel"]).optional().default("auth"),
+  ALFRED_SHELL_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : false)),
+  ALFRED_SHELL_TIMEOUT_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 20000))
+    .pipe(z.number().int().min(1000).max(120000)),
+  ALFRED_SHELL_MAX_OUTPUT_CHARS: z
+    .string()
+    .optional()
+    .transform((v) => (v ? Number(v) : 8000))
+    .pipe(z.number().int().min(500).max(50000)),
+  ALFRED_WASM_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : false)),
   BRAVE_SEARCH_API_KEY: z.string().optional(),
   BRAVE_SEARCH_URL: z.string().optional().default("https://api.search.brave.com/res/v1/web/search"),
   BRAVE_SEARCH_TIMEOUT_MS: z
@@ -342,6 +362,12 @@ export type AppConfig = {
   alfredFileWriteRequireApproval: boolean;
   alfredFileWriteNotesOnly: boolean;
   alfredFileWriteNotesDir: string;
+  alfredFileWriteApprovalMode: "per_action" | "session" | "always";
+  alfredFileWriteApprovalScope: "auth" | "channel";
+  alfredShellEnabled: boolean;
+  alfredShellTimeoutMs: number;
+  alfredShellMaxOutputChars: number;
+  alfredWasmEnabled: boolean;
   braveSearchApiKey?: string;
   braveSearchUrl: string;
   braveSearchTimeoutMs: number;
@@ -454,6 +480,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     alfredFileWriteRequireApproval: parsed.ALFRED_FILE_WRITE_REQUIRE_APPROVAL,
     alfredFileWriteNotesOnly: parsed.ALFRED_FILE_WRITE_NOTES_ONLY,
     alfredFileWriteNotesDir: parsed.ALFRED_FILE_WRITE_NOTES_DIR.trim() || "notes",
+    alfredFileWriteApprovalMode: parsed.ALFRED_FILE_WRITE_APPROVAL_MODE,
+    alfredFileWriteApprovalScope: parsed.ALFRED_FILE_WRITE_APPROVAL_SCOPE,
+    alfredShellEnabled: parsed.ALFRED_SHELL_ENABLED,
+    alfredShellTimeoutMs: parsed.ALFRED_SHELL_TIMEOUT_MS,
+    alfredShellMaxOutputChars: parsed.ALFRED_SHELL_MAX_OUTPUT_CHARS,
+    alfredWasmEnabled: parsed.ALFRED_WASM_ENABLED,
     braveSearchApiKey: parsed.BRAVE_SEARCH_API_KEY,
     braveSearchUrl: parsed.BRAVE_SEARCH_URL,
     braveSearchTimeoutMs: parsed.BRAVE_SEARCH_TIMEOUT_MS,

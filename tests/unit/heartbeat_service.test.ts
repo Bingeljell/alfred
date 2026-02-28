@@ -75,6 +75,8 @@ describe("HeartbeatService", () => {
       defaultConfig: {
         enabled: true,
         requireIdleQueue: true,
+        activeHoursStart: 0,
+        activeHoursEnd: 0,
         sessionId: "owner@s.whatsapp.net"
       }
     });
