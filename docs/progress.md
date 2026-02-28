@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-02-28: Consolidated architecture direction into canonical docs by adding `docs/architecture_principles.md` and wiring cross-links from vision/plan/features/ADR so runtime guidance remains language-agnostic and durable (`minimal core`, `gateway control plane`, `typed safety-tier tools`, `hybrid execution`, `worker execution plane`, `policy-first security`, `observability-first`).
 - 2026-02-28: Fixed planner-to-router mismatch causing `needsWorker=true` tasks with `intent=command` to run in chat mode; gateway now delegates these plans to worker/run-spec paths, restoring attachment/retry execution behavior for WhatsApp task flows.
 - 2026-02-28: Added `docs/terminal_file_explorer_recommendations.md` with a concise macOS terminal file-tree recommendation brief: confirmed iTerm2 has no native file-tree explorer pane and documented built-in alternatives (Warp, Wave Terminal, Electerm) plus iTerm2-compatible TUI options (Yazi, Ranger) with source links.
 - 2026-02-27: Upgraded agentic worker execution to a budget-aware loop (goal normalization, evidence-coverage fallback retrieval, ranking JSON repair, heuristic ranking fallback, and concise synthesis fallback) so research turns degrade gracefully instead of returning raw-link dumps or link-as-answer recommendations.

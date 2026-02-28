@@ -71,5 +71,6 @@ Tradeoffs:
 
 - `docs/channel_control_plane_architecture.md`
 - `docs/agentic_vision.md`
+- `docs/architecture_principles.md`
 - `docs/detailed_project_plan.md`
 - `docs/features.md`
