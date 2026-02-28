@@ -20,6 +20,8 @@
 
 ## Recent Task Updates
 
+- 2026-02-28: Fixed planner-to-router mismatch causing `needsWorker=true` tasks with `intent=command` to run in chat mode; gateway now delegates these plans to worker/run-spec paths, restoring attachment/retry execution behavior for WhatsApp task flows.
+- 2026-02-28: Added `docs/terminal_file_explorer_recommendations.md` with a concise macOS terminal file-tree recommendation brief: confirmed iTerm2 has no native file-tree explorer pane and documented built-in alternatives (Warp, Wave Terminal, Electerm) plus iTerm2-compatible TUI options (Yazi, Ranger) with source links.
 - 2026-02-27: Upgraded agentic worker execution to a budget-aware loop (goal normalization, evidence-coverage fallback retrieval, ranking JSON repair, heuristic ranking fallback, and concise synthesis fallback) so research turns degrade gracefully instead of returning raw-link dumps or link-as-answer recommendations.
 - 2026-02-27: Hardened worker operations with retry/watchdog controls: retryable failures now auto-requeue within `maxRetries`, queue retries persist `retryAttempt`, stale running/cancelling jobs are recovered via watchdog timeouts, and worker progress notifications reduce duplicate rapid-fire updates while retaining phase transitions.
 - 2026-02-27: Updated approval and memory defaults for better day-to-day UX: approval copy now defaults to `yes/no` guidance with optional explicit token usage, and memory compaction default interval moved to daily (`86400000`) across config/service/env/test surfaces.

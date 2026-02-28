@@ -746,7 +746,7 @@ export class GatewayService {
       }
     }
 
-    if (plan.intent === "web_research" && plan.needsWorker && plan.query?.trim()) {
+    if (plan.needsWorker && plan.query?.trim() && plan.intent !== "status_query") {
       if (plan.sendAttachment) {
         const runSpecRunId = input.runId ?? randomUUID();
         const runSpec = this.buildWebToFileRunSpec({

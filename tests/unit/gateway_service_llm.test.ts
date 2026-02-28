@@ -594,6 +594,68 @@ describe("GatewayService llm path", () => {
     expect(directRunSpec?.steps?.[2]?.input?.fileFormat).toBe("txt");
   });
 
+  it("delegates command-intent plans to worker when planner marks needsWorker", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-command-worker-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "fallback-chat"
+      })
+    };
+
+    const planner = {
+      plan: vi.fn().mockResolvedValue({
+        intent: "command",
+        confidence: 0.91,
+        needsWorker: true,
+        query: "Retry the previous web research comparison task using searxng.",
+        provider: "searxng",
+        sendAttachment: false,
+        reason: "retry_requested"
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      llm as never,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        approvalDefault: true,
+        webSearchEnabled: true
+      },
+      undefined,
+      undefined,
+      planner as never
+    );
+
+    const result = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Try again please",
+      requestJob: false
+    });
+
+    expect(result.mode).toBe("async-job");
+    expect(result.response).toContain("Queued research as job");
+
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(1);
+    expect(jobs[0]?.payload?.taskType).toBe("agentic_turn");
+    expect(llm.generateText).not.toHaveBeenCalled();
+  });
+
   it("serves #next pages from paged response store", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-next-page-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);
