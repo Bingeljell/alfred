@@ -16,7 +16,9 @@ Engineering principles are locked in `docs/architecture_principles.md`.
 ## Architecture Intent
 
 1. **Planner/Orchestrator first**
-   - Gateway resolves session context, clarifies ambiguity, plans execution, applies policy, and supervises outcomes.
+   - Gateway resolves session context, applies policy, and supervises outcomes.
+   - Planner signals are advisory (trace/debug), not hard routing gates.
+   - Agent turn decides next action; gateway enforces deterministic execution constraints.
 2. **Tools as deterministic capabilities**
    - Tool interfaces are typed, auditable, and policy-gated.
    - Side effects are explicit and approval-aware.

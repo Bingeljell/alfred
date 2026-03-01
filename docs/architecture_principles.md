@@ -15,6 +15,7 @@ This document is framework-agnostic and applies to Alfred's current TypeScript s
    - All channels are ingress/egress lanes.
    - Orchestration truth lives in gateway phases:
      - normalize -> session -> directives -> plan -> policy -> route -> persist -> dispatch
+   - Planner output is advisory telemetry; final routing authority stays in the agent turn + policy layer.
 
 3. Provider-agnostic runtime contracts
    - Planner/runtime code should not depend on vendor-specific model APIs.
@@ -28,10 +29,12 @@ This document is framework-agnostic and applies to Alfred's current TypeScript s
    - Agentic mode is default for novel/ambiguous tasks.
    - Structured run specs are selective for high-risk/repeatable flows.
    - Repeated successful agentic patterns can be promoted to structured flows.
+   - Agent turn emits optional structured actions; deterministic execution contracts enforce safety.
 
 6. Worker as deterministic execution plane
    - Workers execute delegated actions and report state/events.
    - Workers do not own planning authority or policy truth.
+   - Local-ops side effects remain approval-gated and can resume prior failed goals after explicit approval.
 
 7. Memory is local-first and retrieval-driven
    - Human-readable memory remains canonical.

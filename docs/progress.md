@@ -20,6 +20,9 @@
 
 ## Recent Task Updates
 
+- 2026-03-01: Implemented agent-first gateway execution cutover while keeping planner traces as advisory telemetry: inbound turns now prefer agentic chat decisions with optional structured next actions (`web.search`, `shell.exec`, `worker.run`) enforced by policy/approval contracts instead of hard planner routing branches.
+- 2026-03-01: Improved approval/local-ops continuity for real chat flows by accepting natural approval phrases (`approve ...`, `go ahead`, `approved`), expanding local-ops detection verbs (`enable/configure/setup`), canonicalizing shell allowlist paths, and inferring cwd from user-provided absolute paths when model proposals are off.
+- 2026-03-01: Added recovery resume behavior for approved local shell actions: gateway now discovers the latest failed search query for a session and can automatically requeue that goal after successful local service recovery, with unit coverage validating rerun behavior.
 - 2026-03-01: Fixed planner local-ops precedence so command-like operational requests are checked against local-ops approval routing before worker research delegation, preventing SearXNG/service-control requests from being misrouted into `agentic_turn` web-search jobs.
 - 2026-03-01: Added temporary execution-routing debug surface: new endpoint `POST /v1/debug/execution-policy` returns command/approval detection, planner output, delegation policy (forced vs requested), and predicted route so we can inspect routing behavior without replaying full turns.
 - 2026-03-01: Expanded planner trace observability in conversation stream metadata with `plannerWillDelegateWorker`, `plannerForcedWorkerDelegation`, and `plannerDelegationReason` to make delegation decisions visible per turn.
