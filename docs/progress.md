@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-03-01: Added first-class process control actions in the agent loop: `process.list` (read-only inspection) and approval-gated `process.kill` (PID/pattern termination with verification summary), including tool-policy metadata and regression tests for routing/policy behavior.
 - 2026-03-01: Hardened shell/local-ops continuation semantics: shell follow-up reruns now require explicit current-turn rerun intent (instead of implicit stale-session fallback), and command outcomes now include semantic verification for process-control operations (`pkill -f` / `kill <pid>`) so false-positive exit-code success can trigger adaptive next-step replanning.
 - 2026-03-01: Upgraded worker research quality from snippet-only ranking to page-grounded synthesis by fetching and extracting top source pages before ranking/final answer generation, then injecting fetched excerpts into ranking/synthesis prompts for more direct answers and fewer link-title recommendations.
 - 2026-03-01: Added adaptive post-action reasoning for approved local shell recovery failures: after non-zero shell results, gateway now performs a follow-up LLM planning step from actual shell output and can either ask a focused user question or propose a new approval-gated shell command (instead of only static fallback messaging).
