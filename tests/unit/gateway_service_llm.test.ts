@@ -399,6 +399,9 @@ describe("GatewayService llm path", () => {
     expect(trace?.metadata?.plannerChosenAction).toBe("enqueue_worker_agentic_turn");
     expect(trace?.metadata?.plannerReason).toBe("unit_test_planner");
     expect(trace?.metadata?.plannerNeedsWorker).toBe(true);
+    expect(trace?.metadata?.plannerWillDelegateWorker).toBe(true);
+    expect(trace?.metadata?.plannerForcedWorkerDelegation).toBe(false);
+    expect(trace?.metadata?.plannerDelegationReason).toBe("planner_requested_worker");
   });
 
   it("routes planner attachment requests through approval then queues web_to_file job", async () => {
@@ -831,6 +834,55 @@ describe("GatewayService llm path", () => {
     expect(result.mode).toBe("chat");
     expect(result.response).toBe("No active long-running job for this session.");
     expect(llm.generateText).not.toHaveBeenCalled();
+  });
+
+  it("provides execution policy preview for debugging delegation decisions", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-exec-policy-preview-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const planner = {
+      plan: vi.fn().mockResolvedValue({
+        intent: "web_research",
+        confidence: 0.94,
+        needsWorker: false,
+        query: "latest middle east updates",
+        provider: "searxng",
+        sendAttachment: false,
+        reason: "unit_test_preview"
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      planner as never
+    );
+
+    const preview = await service.previewExecutionPolicy({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Hey Alfred, can you do a quick search of what's happening in the middle east right now"
+    });
+
+    expect(preview.plannerDecision?.intent).toBe("web_research");
+    expect(preview.delegation.willDelegateWorker).toBe(true);
+    expect(preview.delegation.forcedByPolicy).toBe(true);
+    expect(preview.predictedRoute).toBe("worker_agentic_turn");
   });
 
   it("serves #next pages from paged response store", async () => {

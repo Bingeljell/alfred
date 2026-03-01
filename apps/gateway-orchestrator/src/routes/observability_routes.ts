@@ -15,6 +15,13 @@ const ApprovalResolveBodySchema = z.object({
   authPreference: z.enum(["auto", "oauth", "api_key"]).optional()
 });
 
+const ExecutionPolicyPreviewBodySchema = z.object({
+  sessionId: z.string().min(1),
+  text: z.string().min(1),
+  authSessionId: z.string().min(1).optional(),
+  authPreference: z.enum(["auto", "oauth", "api_key"]).optional()
+});
+
 type ConversationEvent = {
   sessionId: string;
   source: (typeof ConversationSourceValues)[number];
@@ -64,6 +71,15 @@ type ApprovalServiceLike = {
   }) => Promise<unknown>;
 };
 
+type ExecutionPolicyServiceLike = {
+  previewExecutionPolicy: (input: {
+    sessionId: string;
+    text: string;
+    authSessionId?: string;
+    authPreference?: "auto" | "oauth" | "api_key";
+  }) => Promise<unknown>;
+};
+
 function parseCsvFilter<T extends string>(raw: unknown, allowed: readonly T[]): T[] | undefined {
   if (typeof raw !== "string") {
     return undefined;
@@ -93,6 +109,7 @@ export function registerObservabilityRoutes(
     runSpecStore?: RunSpecStoreLike;
     supervisorStore?: SupervisorStoreLike;
     approvalService: ApprovalServiceLike;
+    executionPolicyService?: ExecutionPolicyServiceLike;
   }
 ) {
   app.get("/v1/stream/events", async (req, res) => {
@@ -232,6 +249,20 @@ export function registerObservabilityRoutes(
       }
     });
     res.status(200).json(result);
+  });
+
+  app.post("/v1/debug/execution-policy", async (req, res) => {
+    if (!deps.executionPolicyService) {
+      res.status(404).json({ error: "execution_policy_debug_not_configured" });
+      return;
+    }
+    const parsed = ExecutionPolicyPreviewBodySchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "invalid_execution_policy_preview_request", detail: parsed.error.flatten() });
+      return;
+    }
+    const preview = await deps.executionPolicyService.previewExecutionPolicy(parsed.data);
+    res.status(200).json(preview);
   });
 
   app.get("/v1/stream/events/subscribe", async (req, res) => {

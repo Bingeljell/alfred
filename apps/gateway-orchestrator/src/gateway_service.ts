@@ -415,6 +415,7 @@ export class GatewayService {
             return;
           }
           plannerTraceLogged = true;
+          const delegation = this.describeWorkerDelegationDecision(plan);
           const confidence = Number.isFinite(plan.confidence) ? plan.confidence : 0;
           const message = `Planner selected ${plan.intent} (${Math.round(confidence * 100)}%) -> ${chosenAction}`;
           await this.recordConversation(inbound.sessionId, "system", message, {
@@ -435,6 +436,9 @@ export class GatewayService {
               plannerFileName: plan.fileName,
               plannerQuery: plan.query,
               plannerQuestion: plan.question,
+              plannerWillDelegateWorker: delegation.willDelegateWorker,
+              plannerForcedWorkerDelegation: delegation.forcedByPolicy,
+              plannerDelegationReason: delegation.reason,
               plannerChosenAction: chosenAction,
               ...(extra ?? {})
             }
@@ -497,6 +501,82 @@ export class GatewayService {
     }
 
     return { jobId: job.id, status: job.status };
+  }
+
+  async previewExecutionPolicy(input: {
+    sessionId: string;
+    text: string;
+    authSessionId?: string;
+    authPreference?: LlmAuthPreference;
+  }): Promise<{
+    sessionId: string;
+    authSessionId: string;
+    authPreference: LlmAuthPreference;
+    commandDetected: string | null;
+    implicitApprovalDetected: ImplicitApprovalDecision | null;
+    hasActiveJob: boolean;
+    plannerDecision: PlannerDecision | null;
+    delegation: {
+      willDelegateWorker: boolean;
+      forcedByPolicy: boolean;
+      reason: string;
+    };
+    predictedRoute:
+      | "command_surface"
+      | "approval_surface"
+      | "status_query"
+      | "clarify"
+      | "worker_run_spec"
+      | "worker_agentic_turn"
+      | "chat_turn";
+  }> {
+    const sessionId = input.sessionId.trim();
+    const text = input.text.trim();
+    const authPreference = this.normalizeAuthPreference(input.authPreference);
+    const authSessionId = input.authSessionId?.trim() || sessionId;
+    const command = parseCommand(text);
+    const implicitApproval = this.parseImplicitApprovalDecision(text);
+    const hasActiveJob = (await this.findLatestActiveJob(sessionId)) !== null;
+
+    const plannerDecision = this.intentPlanner
+      ? await this.intentPlanner.plan(authSessionId, text, { authPreference, hasActiveJob })
+      : null;
+    const delegation = plannerDecision
+      ? this.describeWorkerDelegationDecision(plannerDecision)
+      : { willDelegateWorker: false, forcedByPolicy: false, reason: "planner_not_configured" };
+
+    let predictedRoute:
+      | "command_surface"
+      | "approval_surface"
+      | "status_query"
+      | "clarify"
+      | "worker_run_spec"
+      | "worker_agentic_turn"
+      | "chat_turn" = "chat_turn";
+
+    if (command) {
+      predictedRoute = "command_surface";
+    } else if (implicitApproval) {
+      predictedRoute = "approval_surface";
+    } else if (plannerDecision?.intent === "status_query") {
+      predictedRoute = "status_query";
+    } else if (plannerDecision?.intent === "clarify") {
+      predictedRoute = "clarify";
+    } else if (plannerDecision && delegation.willDelegateWorker) {
+      predictedRoute = plannerDecision.sendAttachment ? "worker_run_spec" : "worker_agentic_turn";
+    }
+
+    return {
+      sessionId,
+      authSessionId,
+      authPreference,
+      commandDetected: command?.kind ?? null,
+      implicitApprovalDetected: implicitApproval,
+      hasActiveJob,
+      plannerDecision,
+      delegation,
+      predictedRoute
+    };
   }
 
   private async handleBusySession(input: {
@@ -906,6 +986,41 @@ export class GatewayService {
       return true;
     }
     return false;
+  }
+
+  private shouldDelegateToWorker(plan: PlannerDecision): boolean {
+    if (!plan.query?.trim()) {
+      return false;
+    }
+    if (plan.intent === "status_query") {
+      return false;
+    }
+    return plan.needsWorker || this.shouldForceWorkerDelegation(plan);
+  }
+
+  private describeWorkerDelegationDecision(plan: PlannerDecision): {
+    willDelegateWorker: boolean;
+    forcedByPolicy: boolean;
+    reason: string;
+  } {
+    const hasQuery = Boolean(plan.query?.trim());
+    const forcedByPolicy = this.shouldForceWorkerDelegation(plan) && !plan.needsWorker;
+    const willDelegateWorker = this.shouldDelegateToWorker(plan);
+
+    let reason = "chat_inline";
+    if (!hasQuery) {
+      reason = "no_query";
+    } else if (plan.intent === "status_query") {
+      reason = "status_query_inline";
+    } else if (forcedByPolicy && plan.intent === "web_research") {
+      reason = "forced_web_research";
+    } else if (forcedByPolicy && plan.sendAttachment) {
+      reason = "forced_attachment_side_effect";
+    } else if (plan.needsWorker) {
+      reason = "planner_requested_worker";
+    }
+
+    return { willDelegateWorker, forcedByPolicy, reason };
   }
 
   private async handlePlannerFallbackRoutes(input: {

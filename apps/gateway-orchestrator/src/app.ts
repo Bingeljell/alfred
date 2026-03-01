@@ -134,6 +134,9 @@ export function createGatewayApp(
     approvalService: {
       listPendingApprovals: (sessionId: string, limit?: number) => service.listPendingApprovals(sessionId, limit),
       handleInbound: (input) => service.handleInbound(input)
+    },
+    executionPolicyService: {
+      previewExecutionPolicy: (input) => service.previewExecutionPolicy(input)
     }
   });
 
