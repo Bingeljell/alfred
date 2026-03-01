@@ -337,6 +337,9 @@ export function renderWebConsoleHtml(): string {
         white-space: pre-wrap;
         overflow-wrap: anywhere;
         word-break: break-word;
+        user-select: text;
+        -webkit-user-select: text;
+        cursor: text;
       }
       @media (max-width: 1000px) {
         .layout { grid-template-columns: 1fr; }
@@ -733,6 +736,7 @@ export function renderWebConsoleHtml(): string {
       let streamUsingSse = false;
       let transcriptPollInFlight = false;
       let transcriptPollTimer = null;
+      let transcriptSelectionPauseUntil = 0;
       let heartbeatFormDirty = false;
       const sourceFingerprints = Object.create(null);
       const seenStreamEventIds = new Set();
@@ -1574,8 +1578,22 @@ export function renderWebConsoleHtml(): string {
           }
           return "[" + at + "] " + roleLabel + ": " + text;
         });
-        sessionTranscript.textContent = lines.join("\\n");
-        sessionTranscript.scrollTop = sessionTranscript.scrollHeight;
+        const nextText = lines.join("\\n");
+        if (sessionTranscript.textContent !== nextText) {
+          sessionTranscript.textContent = nextText;
+          sessionTranscript.scrollTop = sessionTranscript.scrollHeight;
+        }
+      }
+
+      function isSessionTranscriptSelectionActive() {
+        const selection = window.getSelection?.();
+        if (!selection || selection.isCollapsed) {
+          return false;
+        }
+        if (!selection.anchorNode || !selection.focusNode) {
+          return false;
+        }
+        return sessionTranscript.contains(selection.anchorNode) && sessionTranscript.contains(selection.focusNode);
       }
 
       async function pollTranscriptSilently() {
@@ -1607,6 +1625,9 @@ export function renderWebConsoleHtml(): string {
             withBounds
           );
           if (!response.ok) {
+            return;
+          }
+          if (Date.now() < transcriptSelectionPauseUntil || isSessionTranscriptSelectionActive()) {
             return;
           }
           const events = Array.isArray(response.data?.events) ? response.data.events : [];
@@ -2140,6 +2161,12 @@ export function renderWebConsoleHtml(): string {
             data: { day: transcriptDate.value || "all" }
           };
         });
+      });
+      sessionTranscript.addEventListener("mousedown", () => {
+        transcriptSelectionPauseUntil = Date.now() + 10_000;
+      });
+      document.addEventListener("mouseup", () => {
+        transcriptSelectionPauseUntil = Date.now() + 300;
       });
 
       $("includeNoisyStream").addEventListener("change", async () => {

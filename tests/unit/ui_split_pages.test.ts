@@ -28,10 +28,11 @@ describe("ui split pages", () => {
     expect(html).toContain("id=\"refreshBtn\"");
     expect(html).toContain("id=\"toggleAuto\"");
     expect(html).toContain("id=\"transcript\"");
+    expect(html).toContain("selectionPauseUntil");
+    expect(html).toContain("user-select: text;");
     expect(html).toContain("/v1/stream/events");
     expect(html).toContain("limit=500");
     expect(html).toContain("href=\"/ui\"");
     expect(html).toContain("href=\"/ui/console\"");
   });
 });
-

@@ -90,6 +90,9 @@ export function renderUiTranscriptsHtml(): string {
         overflow: auto;
         white-space: pre-wrap;
         overflow-wrap: anywhere;
+        user-select: text;
+        -webkit-user-select: text;
+        cursor: text;
       }
       #statusLine { margin-top: 8px; font-size: 12px; color: var(--muted); }
       #statusLine[data-state="error"] { color: #b42318; }
@@ -135,6 +138,7 @@ export function renderUiTranscriptsHtml(): string {
       const statusLine = $("statusLine");
       let autoEnabled = true;
       let pollTimer = null;
+      let selectionPauseUntil = 0;
 
       function localIsoDate(date) {
         const value = new Date(date.getTime() - date.getTimezoneOffset() * 60000);
@@ -195,7 +199,21 @@ export function renderUiTranscriptsHtml(): string {
           const text = String(event.text ?? "").replace(/\\s+/g, " ").trim();
           return "[" + at + "] [" + sid + "] " + direction + ": " + text;
         });
-        transcriptNode.textContent = lines.join("\\n");
+        const nextText = lines.join("\\n");
+        const selection = window.getSelection?.();
+        const isSelectingTranscript =
+          Boolean(selection) &&
+          Boolean(selection?.anchorNode) &&
+          Boolean(selection?.focusNode) &&
+          transcriptNode.contains(selection.anchorNode) &&
+          transcriptNode.contains(selection.focusNode) &&
+          !selection.isCollapsed;
+        if (Date.now() < selectionPauseUntil || isSelectingTranscript) {
+          return;
+        }
+        if (transcriptNode.textContent !== nextText) {
+          transcriptNode.textContent = nextText;
+        }
         setStatus("Loaded " + String(lines.length) + " transcript lines", "success");
       }
 
@@ -221,6 +239,12 @@ export function renderUiTranscriptsHtml(): string {
       $("allSessions").addEventListener("change", () => { void refreshTranscript(); });
       $("transcriptDate").addEventListener("change", () => { void refreshTranscript(); });
       $("sessionId").addEventListener("change", () => { void refreshTranscript(); });
+      transcriptNode.addEventListener("mousedown", () => {
+        selectionPauseUntil = Date.now() + 10_000;
+      });
+      document.addEventListener("mouseup", () => {
+        selectionPauseUntil = Date.now() + 300;
+      });
 
       $("transcriptDate").value = localIsoDate(new Date());
       setStatus("Transcripts ready", "success");

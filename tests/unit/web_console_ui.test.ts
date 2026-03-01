@@ -91,6 +91,8 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("Persisted Transcript");
     expect(html).toContain("id=\"sessionTranscript\"");
     expect(html).toContain("class=\"transcript-frame\"");
+    expect(html).toContain("transcriptSelectionPauseUntil");
+    expect(html).toContain("isSessionTranscriptSelectionActive");
     expect(html).toContain("id=\"transcriptRefresh\"");
     expect(html).toContain("id=\"transcriptDate\"");
     expect(html).toContain("id=\"transcriptAllSessions\"");
@@ -106,13 +108,14 @@ describe("renderWebConsoleHtml", () => {
     expect(html).toContain("width: 100%;");
     expect(html).toContain("overflow-wrap: anywhere;");
     expect(html).toContain("word-break: break-word;");
+    expect(html).toContain("user-select: text;");
     expect(html).toContain(".panel {");
     expect(html).toContain("min-width: 0;");
     expect(html).toContain("pollTranscriptSilently");
     expect(html).toContain("startTranscriptAutoPoll");
     expect(html).toContain("heartbeatFormDirty");
     expect(html).toContain("heartbeatEditableInputIds");
-    expect(html).toContain("sessionTranscript.textContent = lines.join(");
+    expect(html).toContain("const nextText = lines.join(");
     expect(html).toContain("replace(");
     expect(html).toContain(".status[data-state=\"busy\"]");
     expect(html).toContain("id=\"logNewestFirst\"");
