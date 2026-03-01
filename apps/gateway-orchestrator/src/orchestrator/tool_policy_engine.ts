@@ -1,5 +1,5 @@
-export type ExternalCapability = "web_search" | "file_write" | "shell_exec" | "wasm_exec";
-export type ToolId = "web.search" | "file.write" | "file.send" | "shell.exec" | "wasm.exec";
+export type ExternalCapability = "web_search" | "file_read" | "file_write" | "shell_exec" | "wasm_exec";
+export type ToolId = "web.search" | "file.read" | "file.write" | "file.edit" | "file.send" | "shell.exec" | "wasm.exec";
 export type ToolSafetyTier = "read_only" | "side_effecting" | "privileged";
 
 export type ToolSpecV1 = {
@@ -15,9 +15,12 @@ export type ToolPolicyInput = {
   approvalDefault: boolean;
   webSearchEnabled: boolean;
   webSearchRequireApproval: boolean;
+  fileReadEnabled: boolean;
   fileWriteEnabled: boolean;
   fileWriteRequireApproval: boolean;
   fileWriteApprovalMode: "per_action" | "session" | "always";
+  fileEditEnabled: boolean;
+  fileEditRequireApproval: boolean;
   shellEnabled: boolean;
   wasmEnabled: boolean;
 };
@@ -43,6 +46,20 @@ export const TOOL_SPECS_V1: Record<ToolId, ToolSpecV1> = {
     capability: "file_write",
     safetyTier: "side_effecting",
     description: "Appends text to workspace files within policy bounds."
+  },
+  "file.read": {
+    version: 1,
+    toolId: "file.read",
+    capability: "file_read",
+    safetyTier: "read_only",
+    description: "Reads file content within configured allowlisted roots."
+  },
+  "file.edit": {
+    version: 1,
+    toolId: "file.edit",
+    capability: "file_write",
+    safetyTier: "side_effecting",
+    description: "Edits existing files with optional hash guards."
   },
   "file.send": {
     version: 1,
@@ -113,7 +130,31 @@ export function evaluateToolPolicy(
     };
   }
 
+  if (spec.capability === "file_read") {
+    if (!policy.fileReadEnabled) {
+      return {
+        allowed: false,
+        requiresApproval: false,
+        reason: "File read is disabled by policy.",
+        spec
+      };
+    }
+    return {
+      allowed: true,
+      requiresApproval: false,
+      spec
+    };
+  }
+
   if (spec.capability === "file_write") {
+    if (toolId === "file.edit" && !policy.fileEditEnabled) {
+      return {
+        allowed: false,
+        requiresApproval: false,
+        reason: "File edit is disabled by policy.",
+        spec
+      };
+    }
     if (!policy.fileWriteEnabled) {
       return {
         allowed: false,
@@ -127,7 +168,8 @@ export function evaluateToolPolicy(
       capability: "file_write",
       policy
     });
-    if (!baseRequiresApproval) {
+    const modeRequiresApproval = toolId === "file.edit" ? policy.fileEditRequireApproval : baseRequiresApproval;
+    if (!modeRequiresApproval) {
       return {
         allowed: true,
         requiresApproval: false,

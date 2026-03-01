@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { JobCreateSchema, RunSpecV1Schema } from "../../../packages/contracts/src";
 import type { RunSpecV1 } from "../../../packages/contracts/src";
@@ -75,12 +75,17 @@ type CapabilityPolicy = {
   webSearchEnabled: boolean;
   webSearchRequireApproval: boolean;
   webSearchProvider: WebSearchProvider;
+  fileReadEnabled: boolean;
+  fileReadAllowedDirs: string[];
   fileWriteEnabled: boolean;
   fileWriteRequireApproval: boolean;
   fileWriteNotesOnly: boolean;
   fileWriteNotesDir: string;
   fileWriteApprovalMode: "per_action" | "session" | "always";
   fileWriteApprovalScope: "auth" | "channel";
+  fileEditEnabled: boolean;
+  fileEditRequireApproval: boolean;
+  fileEditAllowedDirs: string[];
   shellEnabled: boolean;
   shellAllowedDirs: string[];
   shellTimeoutMs: number;
@@ -95,12 +100,17 @@ const DEFAULT_CAPABILITY_POLICY: CapabilityPolicy = {
   webSearchEnabled: true,
   webSearchRequireApproval: false,
   webSearchProvider: "searxng",
+  fileReadEnabled: true,
+  fileReadAllowedDirs: [path.resolve(process.cwd(), "workspace", "alfred")],
   fileWriteEnabled: false,
   fileWriteRequireApproval: true,
   fileWriteNotesOnly: true,
   fileWriteNotesDir: "notes",
   fileWriteApprovalMode: "session",
   fileWriteApprovalScope: "auth",
+  fileEditEnabled: false,
+  fileEditRequireApproval: true,
+  fileEditAllowedDirs: [path.resolve(process.cwd(), "workspace", "alfred")],
   shellEnabled: false,
   shellAllowedDirs: [path.resolve(process.cwd(), "workspace", "alfred")],
   shellTimeoutMs: 20_000,
@@ -230,24 +240,39 @@ export class GatewayService {
     this.webSearchService = webSearchService;
     const configuredShellTimeoutMs = Number(capabilityPolicy?.shellTimeoutMs);
     const configuredShellMaxOutputChars = Number(capabilityPolicy?.shellMaxOutputChars);
+    const resolvedWorkspaceDir = path.resolve(capabilityPolicy?.workspaceDir ?? DEFAULT_CAPABILITY_POLICY.workspaceDir);
     this.capabilityPolicy = {
       ...DEFAULT_CAPABILITY_POLICY,
       ...(capabilityPolicy ?? {}),
-      workspaceDir: path.resolve(capabilityPolicy?.workspaceDir ?? DEFAULT_CAPABILITY_POLICY.workspaceDir),
+      workspaceDir: resolvedWorkspaceDir,
       approvalMode: capabilityPolicy?.approvalMode ?? DEFAULT_CAPABILITY_POLICY.approvalMode,
       webSearchProvider: this.normalizeWebSearchProvider(capabilityPolicy?.webSearchProvider) ?? DEFAULT_CAPABILITY_POLICY.webSearchProvider,
+      fileReadEnabled:
+        typeof capabilityPolicy?.fileReadEnabled === "boolean"
+          ? capabilityPolicy.fileReadEnabled
+          : DEFAULT_CAPABILITY_POLICY.fileReadEnabled,
+      fileReadAllowedDirs: this.normalizeAllowedDirs(capabilityPolicy?.fileReadAllowedDirs, resolvedWorkspaceDir),
       fileWriteNotesDir: (capabilityPolicy?.fileWriteNotesDir ?? DEFAULT_CAPABILITY_POLICY.fileWriteNotesDir).trim() || "notes",
       fileWriteApprovalMode:
         capabilityPolicy?.fileWriteApprovalMode ?? DEFAULT_CAPABILITY_POLICY.fileWriteApprovalMode,
       fileWriteApprovalScope:
         capabilityPolicy?.fileWriteApprovalScope ?? DEFAULT_CAPABILITY_POLICY.fileWriteApprovalScope,
+      fileEditEnabled:
+        typeof capabilityPolicy?.fileEditEnabled === "boolean"
+          ? capabilityPolicy.fileEditEnabled
+          : DEFAULT_CAPABILITY_POLICY.fileEditEnabled,
+      fileEditRequireApproval:
+        typeof capabilityPolicy?.fileEditRequireApproval === "boolean"
+          ? capabilityPolicy.fileEditRequireApproval
+          : DEFAULT_CAPABILITY_POLICY.fileEditRequireApproval,
+      fileEditAllowedDirs: this.normalizeAllowedDirs(capabilityPolicy?.fileEditAllowedDirs, resolvedWorkspaceDir),
       shellEnabled:
         typeof capabilityPolicy?.shellEnabled === "boolean"
           ? capabilityPolicy.shellEnabled
           : DEFAULT_CAPABILITY_POLICY.shellEnabled,
-      shellAllowedDirs: this.normalizeShellAllowedDirs(
+      shellAllowedDirs: this.normalizeAllowedDirs(
         capabilityPolicy?.shellAllowedDirs,
-        path.resolve(capabilityPolicy?.workspaceDir ?? DEFAULT_CAPABILITY_POLICY.workspaceDir)
+        resolvedWorkspaceDir
       ),
       shellTimeoutMs: Number.isFinite(configuredShellTimeoutMs)
         ? Math.max(1000, Math.min(120000, Math.floor(configuredShellTimeoutMs)))
@@ -323,12 +348,17 @@ export class GatewayService {
         webSearchEnabled: this.capabilityPolicy.webSearchEnabled,
         webSearchRequireApproval: this.capabilityPolicy.webSearchRequireApproval,
         webSearchProvider: this.capabilityPolicy.webSearchProvider,
+        fileReadEnabled: this.capabilityPolicy.fileReadEnabled,
+        fileReadAllowedDirs: this.capabilityPolicy.fileReadAllowedDirs,
         fileWriteEnabled: this.capabilityPolicy.fileWriteEnabled,
         fileWriteRequireApproval: this.capabilityPolicy.fileWriteRequireApproval,
         fileWriteNotesOnly: this.capabilityPolicy.fileWriteNotesOnly,
         fileWriteNotesDir: this.capabilityPolicy.fileWriteNotesDir,
         fileWriteApprovalMode: this.capabilityPolicy.fileWriteApprovalMode,
         fileWriteApprovalScope: this.capabilityPolicy.fileWriteApprovalScope,
+        fileEditEnabled: this.capabilityPolicy.fileEditEnabled,
+        fileEditRequireApproval: this.capabilityPolicy.fileEditRequireApproval,
+        fileEditAllowedDirs: this.capabilityPolicy.fileEditAllowedDirs,
         shellEnabled: this.capabilityPolicy.shellEnabled,
         shellRequireApproval: this.requiresApproval("shell_exec"),
         shellAllowedDirs: this.capabilityPolicy.shellAllowedDirs,
@@ -1584,7 +1614,9 @@ export class GatewayService {
           `- approvalMode: ${this.capabilityPolicy.approvalMode}`,
           `- approvalDefault: ${String(this.capabilityPolicy.approvalDefault)}`,
           `- webSearch: enabled=${String(this.capabilityPolicy.webSearchEnabled)}, requireApproval=${String(this.capabilityPolicy.webSearchRequireApproval)}, provider=${this.capabilityPolicy.webSearchProvider}`,
+          `- fileRead: enabled=${String(this.capabilityPolicy.fileReadEnabled)}, allowedDirs=${this.capabilityPolicy.fileReadAllowedDirs.join(", ")}`,
           `- fileWrite: enabled=${String(this.capabilityPolicy.fileWriteEnabled)}, requireApproval=${String(this.capabilityPolicy.fileWriteRequireApproval)}, mode=${this.capabilityPolicy.fileWriteApprovalMode}, scope=${this.capabilityPolicy.fileWriteApprovalScope}, notesOnly=${String(this.capabilityPolicy.fileWriteNotesOnly)}, notesDir=${this.capabilityPolicy.fileWriteNotesDir}`,
+          `- fileEdit: enabled=${String(this.capabilityPolicy.fileEditEnabled)}, requireApproval=${String(this.capabilityPolicy.fileEditRequireApproval)}, allowedDirs=${this.capabilityPolicy.fileEditAllowedDirs.join(", ")}`,
           `- shell: enabled=${String(this.capabilityPolicy.shellEnabled)}, timeoutMs=${this.capabilityPolicy.shellTimeoutMs}, maxOutputChars=${this.capabilityPolicy.shellMaxOutputChars}`,
           `- shellAllowedDirs: ${this.capabilityPolicy.shellAllowedDirs.join(", ")}`,
           `- wasm: enabled=${String(this.capabilityPolicy.wasmEnabled)}`
@@ -1693,6 +1725,65 @@ export class GatewayService {
           reason: "explicit_web_command"
         });
         return `Queued web search as job ${job.id}. I will post progress updates here.`;
+      }
+
+      case "file_read": {
+        const policy = this.evaluateToolPolicy("file.read", { sessionId, authSessionId });
+        if (!policy.allowed) {
+          return policy.reason ?? "File read is disabled by policy.";
+        }
+        const resolved = this.resolvePathWithinAllowedRoots(command.targetPath, this.capabilityPolicy.fileReadAllowedDirs, "read");
+        if (!resolved.ok) {
+          return resolved.error;
+        }
+        await this.recordToolUsage(sessionId, "file.read", {
+          route: "command",
+          targetPath: command.targetPath,
+          resolvedPath: resolved.absolutePath,
+          fromLine: command.fromLine,
+          lineCount: command.lineCount
+        });
+        return this.executeFileRead(resolved.absolutePath, command.fromLine, command.lineCount);
+      }
+
+      case "file_edit": {
+        const policy = this.evaluateToolPolicy("file.edit", { sessionId, authSessionId });
+        if (!policy.allowed) {
+          return policy.reason ?? "File edit is disabled by policy.";
+        }
+        const resolved = this.resolvePathWithinAllowedRoots(command.targetPath, this.capabilityPolicy.fileEditAllowedDirs, "edit");
+        if (!resolved.ok) {
+          return resolved.error;
+        }
+        if (policy.requiresApproval) {
+          if (!this.approvalStore) {
+            return "Approvals are not configured.";
+          }
+          const approval = await this.approvalStore.create(sessionId, "file_edit", {
+            targetPath: command.targetPath,
+            absolutePath: resolved.absolutePath,
+            find: command.find,
+            replace: command.replace,
+            expectedHash: command.expectedHash,
+            replaceAll: Boolean(command.replaceAll),
+            authSessionId
+          });
+          return `Approval required for file edit. Reply yes or no. Optional explicit token: approve ${approval.token}`;
+        }
+        await this.recordToolUsage(sessionId, "file.edit", {
+          route: "command",
+          targetPath: command.targetPath,
+          resolvedPath: resolved.absolutePath,
+          hashGuard: command.expectedHash ? "provided" : "none",
+          replaceAll: Boolean(command.replaceAll)
+        });
+        return this.executeFileEdit({
+          absolutePath: resolved.absolutePath,
+          find: command.find,
+          replace: command.replace,
+          expectedHash: command.expectedHash,
+          replaceAll: Boolean(command.replaceAll)
+        });
       }
 
       case "file_write": {
@@ -2779,6 +2870,44 @@ export class GatewayService {
       });
       return `Approved action executed: file_write\n${output}`;
     }
+    if (approval.action === "file_edit") {
+      const policy = this.evaluateToolPolicy("file.edit", { sessionId: channelSessionId, authSessionId });
+      if (!policy.allowed) {
+        return policy.reason ?? "File edit is disabled by policy.";
+      }
+      const absolutePath = String(approval.payload.absolutePath ?? "").trim();
+      if (!absolutePath) {
+        return "Approved action failed: missing file path for edit.";
+      }
+      const withinAllowed = this.capabilityPolicy.fileEditAllowedDirs.some((root) => this.isPathInsideRoot(absolutePath, root));
+      if (!withinAllowed) {
+        return `Approved action failed: file edit path is outside allowlisted roots: ${absolutePath}`;
+      }
+      const output = await this.executeFileEdit({
+        absolutePath,
+        find: String(approval.payload.find ?? ""),
+        replace: String(approval.payload.replace ?? ""),
+        expectedHash:
+          typeof approval.payload.expectedHash === "string" && /^[a-f0-9]{64}$/i.test(approval.payload.expectedHash)
+            ? approval.payload.expectedHash.toLowerCase()
+            : undefined,
+        replaceAll: Boolean(approval.payload.replaceAll)
+      });
+      await this.recordToolUsage(channelSessionId, "file.edit", {
+        route: "approval_execute",
+        resolvedPath: absolutePath,
+        hashGuard: typeof approval.payload.expectedHash === "string" ? "provided" : "none",
+        replaceAll: Boolean(approval.payload.replaceAll)
+      });
+      await this.recordMemoryCheckpoint(channelSessionId, {
+        class: "decision",
+        source: "approval_execute",
+        summary: "Approved file_edit action",
+        details: absolutePath,
+        dedupeKey: `approval_execute:${channelSessionId}:file_edit:${absolutePath}`
+      });
+      return `Approved action executed: file_edit\n${output}`;
+    }
     if (approval.action === "file_send") {
       const relativePath = String(approval.payload.relativePath ?? "").trim();
       const caption = typeof approval.payload.caption === "string" ? approval.payload.caption : undefined;
@@ -2825,6 +2954,16 @@ export class GatewayService {
     const relativePath = typeof payload.relativePath === "string" ? payload.relativePath.trim() : "";
     if (relativePath) {
       return relativePath.slice(0, 140);
+    }
+
+    const targetPath = typeof payload.targetPath === "string" ? payload.targetPath.trim() : "";
+    if (targetPath) {
+      return targetPath.slice(0, 140);
+    }
+
+    const absolutePath = typeof payload.absolutePath === "string" ? payload.absolutePath.trim() : "";
+    if (absolutePath) {
+      return absolutePath.slice(0, 140);
     }
 
     const text = typeof payload.text === "string" ? payload.text.trim() : "";
@@ -3035,7 +3174,7 @@ export class GatewayService {
     return normalized || undefined;
   }
 
-  private normalizeShellAllowedDirs(rawDirs: unknown, workspaceDir: string): string[] {
+  private normalizeAllowedDirs(rawDirs: unknown, workspaceDir: string): string[] {
     const defaults = [path.resolve(workspaceDir)];
     if (!Array.isArray(rawDirs)) {
       return defaults;
@@ -3308,7 +3447,15 @@ export class GatewayService {
     }
   ) {
     const toolId: ToolId =
-      capability === "web_search" ? "web.search" : capability === "file_write" ? "file.write" : capability === "shell_exec" ? "shell.exec" : "wasm.exec";
+      capability === "web_search"
+        ? "web.search"
+        : capability === "file_read"
+          ? "file.read"
+          : capability === "file_write"
+            ? "file.write"
+            : capability === "shell_exec"
+              ? "shell.exec"
+              : "wasm.exec";
     return this.evaluateToolPolicy(toolId, context);
   }
 
@@ -3332,9 +3479,12 @@ export class GatewayService {
       approvalDefault: this.capabilityPolicy.approvalDefault,
       webSearchEnabled: this.capabilityPolicy.webSearchEnabled,
       webSearchRequireApproval: this.capabilityPolicy.webSearchRequireApproval,
+      fileReadEnabled: this.capabilityPolicy.fileReadEnabled,
       fileWriteEnabled: this.capabilityPolicy.fileWriteEnabled,
       fileWriteRequireApproval: this.capabilityPolicy.fileWriteRequireApproval,
       fileWriteApprovalMode: this.capabilityPolicy.fileWriteApprovalMode,
+      fileEditEnabled: this.capabilityPolicy.fileEditEnabled,
+      fileEditRequireApproval: this.capabilityPolicy.fileEditRequireApproval,
       shellEnabled: this.capabilityPolicy.shellEnabled,
       wasmEnabled: this.capabilityPolicy.wasmEnabled
     };
@@ -3449,6 +3599,35 @@ export class GatewayService {
     return { ok: true, absolutePath };
   }
 
+  private resolvePathWithinAllowedRoots(
+    rawPath: string,
+    allowedRoots: string[],
+    action: "read" | "edit"
+  ): { ok: true; absolutePath: string } | { ok: false; error: string } {
+    const trimmed = rawPath.trim();
+    if (!trimmed) {
+      return {
+        ok: false,
+        error: `Missing file path for /file ${action}.`
+      };
+    }
+    const expanded = this.expandHomePath(trimmed);
+    const resolved = path.isAbsolute(expanded)
+      ? this.canonicalizePathForScope(expanded)
+      : this.canonicalizePathForScope(path.resolve(this.capabilityPolicy.workspaceDir, expanded));
+    const withinAllowed = allowedRoots.some((root) => this.isPathInsideRoot(resolved, root));
+    if (!withinAllowed) {
+      return {
+        ok: false,
+        error: `File path is outside allowlisted ${action} roots: ${resolved}. Allowed roots: ${allowedRoots.join(", ")}`
+      };
+    }
+    return {
+      ok: true,
+      absolutePath: resolved
+    };
+  }
+
   private validateAttachmentPath(absolutePath: string): { ok: true } | { ok: false; error: string } {
     const ext = path.extname(absolutePath).toLowerCase();
     const allowed = new Set([".md", ".txt", ".doc"]);
@@ -3479,6 +3658,60 @@ export class GatewayService {
 
     const relativePath = path.relative(this.capabilityPolicy.workspaceDir, absolutePath).replace(/\\/g, "/");
     return `Appended ${content.length} chars to workspace/${relativePath}`;
+  }
+
+  private async executeFileRead(absolutePath: string, fromLineRaw?: number, lineCountRaw?: number): Promise<string> {
+    const stats = await fs.stat(absolutePath).catch(() => null);
+    if (!stats || !stats.isFile()) {
+      return `File not found: ${absolutePath}`;
+    }
+    const raw = await fs.readFile(absolutePath, "utf8");
+    const lines = raw.split(/\r?\n/);
+    const fromLine = Number.isFinite(fromLineRaw) ? Math.max(1, Math.floor(fromLineRaw as number)) : 1;
+    const lineCount = Number.isFinite(lineCountRaw) ? Math.max(1, Math.min(400, Math.floor(lineCountRaw as number))) : 160;
+    const startIndex = Math.max(0, fromLine - 1);
+    const selected = lines.slice(startIndex, startIndex + lineCount);
+    const endLine = startIndex + selected.length;
+    const sha256 = createHash("sha256").update(raw).digest("hex");
+    const numbered = selected.map((line, index) => `${startIndex + index + 1}| ${line}`).join("\n");
+    const content = numbered || "(no content in requested range)";
+    return [
+      `File: ${absolutePath}`,
+      `SHA256: ${sha256}`,
+      `Range: lines ${startIndex + 1}-${endLine}`,
+      "",
+      content
+    ].join("\n");
+  }
+
+  private async executeFileEdit(input: {
+    absolutePath: string;
+    find: string;
+    replace: string;
+    expectedHash?: string;
+    replaceAll?: boolean;
+  }): Promise<string> {
+    const stats = await fs.stat(input.absolutePath).catch(() => null);
+    if (!stats || !stats.isFile()) {
+      return `File not found: ${input.absolutePath}`;
+    }
+    const current = await fs.readFile(input.absolutePath, "utf8");
+    const beforeHash = createHash("sha256").update(current).digest("hex");
+    if (input.expectedHash && beforeHash !== input.expectedHash) {
+      return `Hash guard mismatch for ${input.absolutePath}. expected=${input.expectedHash} actual=${beforeHash}`;
+    }
+    if (!input.find) {
+      return "Edit command requires a non-empty find pattern.";
+    }
+
+    const replacementCount = input.replaceAll ? current.split(input.find).length - 1 : current.includes(input.find) ? 1 : 0;
+    if (replacementCount <= 0) {
+      return `No changes made: pattern not found in ${input.absolutePath}.`;
+    }
+    const next = input.replaceAll ? current.split(input.find).join(input.replace) : current.replace(input.find, input.replace);
+    await fs.writeFile(input.absolutePath, next, "utf8");
+    const afterHash = createHash("sha256").update(next).digest("hex");
+    return `Edited ${input.absolutePath} (replacements=${replacementCount}, sha256_before=${beforeHash}, sha256_after=${afterHash}).`;
   }
 
   private async executeFileSend(sessionId: string, absolutePath: string, caption?: string): Promise<string> {

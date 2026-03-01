@@ -26,6 +26,8 @@ export type ParsedCommand =
       tokenBudget?: number;
     }
   | { kind: "supervisor_status"; id: string }
+  | { kind: "file_read"; targetPath: string; fromLine?: number; lineCount?: number }
+  | { kind: "file_edit"; targetPath: string; find: string; replace: string; expectedHash?: string; replaceAll?: boolean }
   | { kind: "file_write"; relativePath: string; text: string }
   | { kind: "file_send"; relativePath: string; caption?: string }
   | { kind: "shell_exec"; command: string; cwd?: string }
@@ -250,6 +252,55 @@ export function parseCommand(text: string): ParsedCommand | null {
     }
   }
 
+  if (value.toLowerCase().startsWith("/file read ")) {
+    const payload = value.slice("/file read ".length).trim();
+    const firstToken = payload.split(/\s+/, 1)[0]?.trim() ?? "";
+    if (firstToken) {
+      const targetPath = firstToken;
+      const fromMatch = payload.match(/(?:^|\s)--from=(\d+)/i);
+      const linesMatch = payload.match(/(?:^|\s)--lines=(\d+)/i);
+      const fromLine = fromMatch ? Number(fromMatch[1]) : undefined;
+      const lineCount = linesMatch ? Number(linesMatch[1]) : undefined;
+      return {
+        kind: "file_read",
+        targetPath,
+        ...(Number.isFinite(fromLine) ? { fromLine } : {}),
+        ...(Number.isFinite(lineCount) ? { lineCount } : {})
+      };
+    }
+  }
+
+  if (value.toLowerCase().startsWith("/file edit ")) {
+    const payload = value.slice("/file edit ".length).trim();
+    const firstSpace = payload.indexOf(" ");
+    if (firstSpace > 0) {
+      const targetPath = payload.slice(0, firstSpace).trim();
+      const options = payload.slice(firstSpace + 1);
+      const findRaw = extractOptionValue(options, "find");
+      const replaceRaw = extractOptionValue(options, "replace");
+      const expectedHash = extractOptionValue(options, "hash");
+      const replaceAll = /(?:^|\s)--all(?:=true)?(?:\s|$)/i.test(options);
+      const find = decodeOptionValue(findRaw);
+      const replace = decodeOptionValue(replaceRaw);
+      if (
+        targetPath &&
+        typeof find === "string" &&
+        find.length > 0 &&
+        typeof replace === "string" &&
+        (!expectedHash || /^[a-f0-9]{64}$/i.test(expectedHash))
+      ) {
+        return {
+          kind: "file_edit",
+          targetPath,
+          find,
+          replace,
+          ...(expectedHash ? { expectedHash: expectedHash.toLowerCase() } : {}),
+          ...(replaceAll ? { replaceAll: true } : {})
+        };
+      }
+    }
+  }
+
   if (value.toLowerCase().startsWith("/file write ")) {
     const payload = value.slice("/file write ".length).trim();
     const firstSpace = payload.indexOf(" ");
@@ -354,4 +405,28 @@ function isApprovalTokenCandidate(token: string): boolean {
     return true;
   }
   return /^(?=.*\d)[a-z0-9_-]{4,64}$/i.test(token);
+}
+
+function extractOptionValue(options: string, key: string): string | undefined {
+  const pattern = new RegExp(`(?:^|\\s)--${key}=((?:\"(?:\\\\.|[^\"])*\")|(?:\\S+))`, "i");
+  const match = options.match(pattern);
+  return match?.[1];
+}
+
+function decodeOptionValue(raw: string | undefined): string | undefined {
+  if (!raw) {
+    return undefined;
+  }
+  const value = raw.trim();
+  if (!value) {
+    return undefined;
+  }
+  if (value.startsWith("\"") && value.endsWith("\"") && value.length >= 2) {
+    try {
+      return JSON.parse(value) as string;
+    } catch {
+      return value.slice(1, -1);
+    }
+  }
+  return value;
 }

@@ -118,12 +118,17 @@ export type CreateGatewayAppOptions = {
     webSearchEnabled?: boolean;
     webSearchRequireApproval?: boolean;
     webSearchProvider?: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto";
+    fileReadEnabled?: boolean;
+    fileReadAllowedDirs?: string[];
     fileWriteEnabled?: boolean;
     fileWriteRequireApproval?: boolean;
     fileWriteNotesOnly?: boolean;
     fileWriteNotesDir?: string;
     fileWriteApprovalMode?: "per_action" | "session" | "always";
     fileWriteApprovalScope?: "auth" | "channel";
+    fileEditEnabled?: boolean;
+    fileEditRequireApproval?: boolean;
+    fileEditAllowedDirs?: string[];
     shellEnabled?: boolean;
     shellAllowedDirs?: string[];
     shellTimeoutMs?: number;

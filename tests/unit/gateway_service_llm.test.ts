@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayService } from "../../apps/gateway-orchestrator/src/gateway_service";
 import { FileBackedQueueStore } from "../../apps/gateway-orchestrator/src/local_queue_store";
@@ -1313,6 +1314,76 @@ describe("GatewayService llm path", () => {
     });
     expect(blocked.mode).toBe("chat");
     expect(blocked.response).toContain("outside allowed scope");
+  });
+
+  it("supports file read and hash-guarded file edit within allowlisted roots", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-file-read-edit-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const sharedDir = path.join(stateDir, "shared");
+    await fs.mkdir(sharedDir, { recursive: true });
+    const targetFile = path.join(sharedDir, "sample.txt");
+    await fs.writeFile(targetFile, "line one\nline two\nline three\n", "utf8");
+    const originalHash = createHash("sha256").update("line one\nline two\nline three\n").digest("hex");
+
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "relaxed",
+        approvalDefault: false,
+        fileReadEnabled: true,
+        fileReadAllowedDirs: [sharedDir],
+        fileWriteEnabled: true,
+        fileWriteRequireApproval: false,
+        fileWriteNotesOnly: false,
+        fileEditEnabled: true,
+        fileEditRequireApproval: false,
+        fileEditAllowedDirs: [sharedDir]
+      }
+    );
+
+    const read = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `/file read ${targetFile} --from=2 --lines=2`,
+      requestJob: false
+    });
+    expect(read.response).toContain("SHA256:");
+    expect(read.response).toContain("2| line two");
+    expect(read.response).toContain("3| line three");
+
+    const wrongHashEdit = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `/file edit ${targetFile} --find="line two" --replace="line 2" --hash=${"f".repeat(64)}`,
+      requestJob: false
+    });
+    expect(wrongHashEdit.response).toContain("Hash guard mismatch");
+
+    const okEdit = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `/file edit ${targetFile} --find="line two" --replace="line 2" --hash=${originalHash}`,
+      requestJob: false
+    });
+    expect(okEdit.response).toContain("Edited");
+    const next = await fs.readFile(targetFile, "utf8");
+    expect(next).toContain("line 2");
+    expect(next).not.toContain("line two");
   });
 
   it("uses llm response for regular chat and preserves command routing", async () => {

@@ -45,12 +45,19 @@ describe("loadConfig", () => {
     expect(config.alfredWebSearchEnabled).toBe(true);
     expect(config.alfredWebSearchRequireApproval).toBe(false);
     expect(config.alfredWebSearchProvider).toBe("searxng");
+    expect(config.alfredFileReadEnabled).toBe(true);
+    expect(config.alfredFileReadAllowedDirs.length).toBe(1);
+    expect(config.alfredFileReadAllowedDirs[0]?.endsWith("workspace/alfred")).toBe(true);
     expect(config.alfredFileWriteEnabled).toBe(false);
     expect(config.alfredFileWriteRequireApproval).toBe(true);
     expect(config.alfredFileWriteNotesOnly).toBe(true);
     expect(config.alfredFileWriteNotesDir).toBe("notes");
     expect(config.alfredFileWriteApprovalMode).toBe("session");
     expect(config.alfredFileWriteApprovalScope).toBe("auth");
+    expect(config.alfredFileEditEnabled).toBe(false);
+    expect(config.alfredFileEditRequireApproval).toBe(true);
+    expect(config.alfredFileEditAllowedDirs.length).toBe(1);
+    expect(config.alfredFileEditAllowedDirs[0]?.endsWith("workspace/alfred")).toBe(true);
     expect(config.alfredShellEnabled).toBe(false);
     expect(config.alfredShellAllowedDirs.length).toBe(1);
     expect(config.alfredShellAllowedDirs[0]?.endsWith("workspace/alfred")).toBe(true);
@@ -131,12 +138,17 @@ describe("loadConfig", () => {
       ALFRED_WEB_SEARCH_ENABLED: "false",
       ALFRED_WEB_SEARCH_REQUIRE_APPROVAL: "false",
       ALFRED_WEB_SEARCH_PROVIDER: "brave",
+      ALFRED_FILE_READ_ENABLED: "false",
+      ALFRED_FILE_READ_ALLOWED_DIRS: "./tmp/alfred-workspace,./tmp/shared-readonly",
       ALFRED_FILE_WRITE_ENABLED: "true",
       ALFRED_FILE_WRITE_REQUIRE_APPROVAL: "false",
       ALFRED_FILE_WRITE_NOTES_ONLY: "false",
       ALFRED_FILE_WRITE_NOTES_DIR: "scratch",
       ALFRED_FILE_WRITE_APPROVAL_MODE: "always",
       ALFRED_FILE_WRITE_APPROVAL_SCOPE: "channel",
+      ALFRED_FILE_EDIT_ENABLED: "true",
+      ALFRED_FILE_EDIT_REQUIRE_APPROVAL: "false",
+      ALFRED_FILE_EDIT_ALLOWED_DIRS: "./tmp/alfred-workspace,./tmp/shared-edit",
       ALFRED_SHELL_ENABLED: "true",
       ALFRED_SHELL_ALLOWED_DIRS: "./tmp/alfred-workspace,./tmp/searxng",
       ALFRED_SHELL_TIMEOUT_MS: "30000",
@@ -220,12 +232,21 @@ describe("loadConfig", () => {
     expect(config.alfredWebSearchEnabled).toBe(false);
     expect(config.alfredWebSearchRequireApproval).toBe(false);
     expect(config.alfredWebSearchProvider).toBe("brave");
+    expect(config.alfredFileReadEnabled).toBe(false);
+    expect(config.alfredFileReadAllowedDirs.length).toBe(2);
+    expect(config.alfredFileReadAllowedDirs[0]?.endsWith("tmp/alfred-workspace")).toBe(true);
+    expect(config.alfredFileReadAllowedDirs[1]?.endsWith("tmp/shared-readonly")).toBe(true);
     expect(config.alfredFileWriteEnabled).toBe(true);
     expect(config.alfredFileWriteRequireApproval).toBe(false);
     expect(config.alfredFileWriteNotesOnly).toBe(false);
     expect(config.alfredFileWriteNotesDir).toBe("scratch");
     expect(config.alfredFileWriteApprovalMode).toBe("always");
     expect(config.alfredFileWriteApprovalScope).toBe("channel");
+    expect(config.alfredFileEditEnabled).toBe(true);
+    expect(config.alfredFileEditRequireApproval).toBe(false);
+    expect(config.alfredFileEditAllowedDirs.length).toBe(2);
+    expect(config.alfredFileEditAllowedDirs[0]?.endsWith("tmp/alfred-workspace")).toBe(true);
+    expect(config.alfredFileEditAllowedDirs[1]?.endsWith("tmp/shared-edit")).toBe(true);
     expect(config.alfredShellEnabled).toBe(true);
     expect(config.alfredShellAllowedDirs.length).toBe(2);
     expect(config.alfredShellAllowedDirs[0]?.endsWith("tmp/alfred-workspace")).toBe(true);

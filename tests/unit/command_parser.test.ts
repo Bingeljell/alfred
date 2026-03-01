@@ -73,6 +73,34 @@ describe("parseCommand", () => {
       relativePath: "notes/today.md",
       caption: "daily recap"
     });
+    expect(parseCommand("/file read ./docs/README.md")).toEqual({
+      kind: "file_read",
+      targetPath: "./docs/README.md"
+    });
+    expect(parseCommand("/file read ./docs/README.md --from=10 --lines=25")).toEqual({
+      kind: "file_read",
+      targetPath: "./docs/README.md",
+      fromLine: 10,
+      lineCount: 25
+    });
+    expect(parseCommand('/file edit ./docs/README.md --find="Old text" --replace="New text"')).toEqual({
+      kind: "file_edit",
+      targetPath: "./docs/README.md",
+      find: "Old text",
+      replace: "New text"
+    });
+    expect(
+      parseCommand(
+        "/file edit ./docs/README.md --find=Old --replace=New --hash=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef --all"
+      )
+    ).toEqual({
+      kind: "file_edit",
+      targetPath: "./docs/README.md",
+      find: "Old",
+      replace: "New",
+      expectedHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      replaceAll: true
+    });
     expect(parseCommand("/shell ls -la")).toEqual({
       kind: "shell_exec",
       command: "ls -la"

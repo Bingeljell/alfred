@@ -162,6 +162,11 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v ? v.toLowerCase() !== "false" : false)),
   ALFRED_WEB_SEARCH_PROVIDER: z.enum(["searxng", "openai", "brave", "perplexity", "brightdata", "auto"]).optional().default("searxng"),
+  ALFRED_FILE_READ_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  ALFRED_FILE_READ_ALLOWED_DIRS: z.string().optional().default("./workspace/alfred"),
   ALFRED_FILE_WRITE_ENABLED: z
     .string()
     .optional()
@@ -177,6 +182,15 @@ const EnvSchema = z.object({
   ALFRED_FILE_WRITE_NOTES_DIR: z.string().optional().default("notes"),
   ALFRED_FILE_WRITE_APPROVAL_MODE: z.enum(["per_action", "session", "always"]).optional().default("session"),
   ALFRED_FILE_WRITE_APPROVAL_SCOPE: z.enum(["auth", "channel"]).optional().default("auth"),
+  ALFRED_FILE_EDIT_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : false)),
+  ALFRED_FILE_EDIT_REQUIRE_APPROVAL: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  ALFRED_FILE_EDIT_ALLOWED_DIRS: z.string().optional().default("./workspace/alfred"),
   ALFRED_SHELL_ENABLED: z
     .string()
     .optional()
@@ -359,12 +373,17 @@ export type AppConfig = {
   alfredWebSearchEnabled: boolean;
   alfredWebSearchRequireApproval: boolean;
   alfredWebSearchProvider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto";
+  alfredFileReadEnabled: boolean;
+  alfredFileReadAllowedDirs: string[];
   alfredFileWriteEnabled: boolean;
   alfredFileWriteRequireApproval: boolean;
   alfredFileWriteNotesOnly: boolean;
   alfredFileWriteNotesDir: string;
   alfredFileWriteApprovalMode: "per_action" | "session" | "always";
   alfredFileWriteApprovalScope: "auth" | "channel";
+  alfredFileEditEnabled: boolean;
+  alfredFileEditRequireApproval: boolean;
+  alfredFileEditAllowedDirs: string[];
   alfredShellEnabled: boolean;
   alfredShellAllowedDirs: string[];
   alfredShellTimeoutMs: number;
@@ -435,6 +454,16 @@ export function loadDotEnvFile(dotEnvPath = path.resolve(process.cwd(), ".env"))
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
   const parsed = EnvSchema.parse(env);
   const alfredWorkspaceDir = path.resolve(parsed.ALFRED_WORKSPACE_DIR);
+  const parseDirList = (raw: string): string[] => {
+    const configured = raw
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0)
+      .map((item) => path.resolve(item));
+    return configured.length > 0 ? configured : [alfredWorkspaceDir];
+  };
+  const alfredFileReadAllowedDirs = parseDirList(parsed.ALFRED_FILE_READ_ALLOWED_DIRS);
+  const alfredFileEditAllowedDirs = parseDirList(parsed.ALFRED_FILE_EDIT_ALLOWED_DIRS);
   const configuredShellAllowedDirs = parsed.ALFRED_SHELL_ALLOWED_DIRS.split(",")
     .map((item) => item.trim())
     .filter((item) => item.length > 0)
@@ -484,12 +513,17 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     alfredWebSearchEnabled: parsed.ALFRED_WEB_SEARCH_ENABLED,
     alfredWebSearchRequireApproval: parsed.ALFRED_WEB_SEARCH_REQUIRE_APPROVAL,
     alfredWebSearchProvider: parsed.ALFRED_WEB_SEARCH_PROVIDER,
+    alfredFileReadEnabled: parsed.ALFRED_FILE_READ_ENABLED,
+    alfredFileReadAllowedDirs,
     alfredFileWriteEnabled: parsed.ALFRED_FILE_WRITE_ENABLED,
     alfredFileWriteRequireApproval: parsed.ALFRED_FILE_WRITE_REQUIRE_APPROVAL,
     alfredFileWriteNotesOnly: parsed.ALFRED_FILE_WRITE_NOTES_ONLY,
     alfredFileWriteNotesDir: parsed.ALFRED_FILE_WRITE_NOTES_DIR.trim() || "notes",
     alfredFileWriteApprovalMode: parsed.ALFRED_FILE_WRITE_APPROVAL_MODE,
     alfredFileWriteApprovalScope: parsed.ALFRED_FILE_WRITE_APPROVAL_SCOPE,
+    alfredFileEditEnabled: parsed.ALFRED_FILE_EDIT_ENABLED,
+    alfredFileEditRequireApproval: parsed.ALFRED_FILE_EDIT_REQUIRE_APPROVAL,
+    alfredFileEditAllowedDirs,
     alfredShellEnabled: parsed.ALFRED_SHELL_ENABLED,
     alfredShellAllowedDirs,
     alfredShellTimeoutMs: parsed.ALFRED_SHELL_TIMEOUT_MS,

@@ -6,9 +6,12 @@ const BASE_POLICY = {
   approvalDefault: true,
   webSearchEnabled: true,
   webSearchRequireApproval: true,
+  fileReadEnabled: true,
   fileWriteEnabled: true,
   fileWriteRequireApproval: true,
   fileWriteApprovalMode: "session" as const,
+  fileEditEnabled: true,
+  fileEditRequireApproval: true,
   shellEnabled: true,
   wasmEnabled: false
 };
@@ -29,6 +32,18 @@ describe("tool_policy_engine", () => {
 
   it("requires file-write approval when no lease exists in session mode", () => {
     const decision = evaluateToolPolicy("file.write", BASE_POLICY, { hasFileWriteLease: false });
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresApproval).toBe(true);
+  });
+
+  it("allows file-read without approval when enabled", () => {
+    const decision = evaluateToolPolicy("file.read", BASE_POLICY);
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresApproval).toBe(false);
+  });
+
+  it("requires file-edit approval when configured", () => {
+    const decision = evaluateToolPolicy("file.edit", BASE_POLICY, { hasFileWriteLease: false });
     expect(decision.allowed).toBe(true);
     expect(decision.requiresApproval).toBe(true);
   });

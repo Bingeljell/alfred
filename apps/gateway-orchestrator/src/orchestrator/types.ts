@@ -49,12 +49,17 @@ export type ToolPolicySnapshot = {
   webSearchEnabled: boolean;
   webSearchRequireApproval: boolean;
   webSearchProvider: string;
+  fileReadEnabled: boolean;
+  fileReadAllowedDirs: string[];
   fileWriteEnabled: boolean;
   fileWriteRequireApproval: boolean;
   fileWriteNotesOnly: boolean;
   fileWriteNotesDir: string;
   fileWriteApprovalMode: "per_action" | "session" | "always";
   fileWriteApprovalScope: "auth" | "channel";
+  fileEditEnabled: boolean;
+  fileEditRequireApproval: boolean;
+  fileEditAllowedDirs: string[];
   shellEnabled: boolean;
   shellRequireApproval: boolean;
   shellAllowedDirs: string[];
