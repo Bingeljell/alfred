@@ -1325,6 +1325,198 @@ describe("GatewayService llm path", () => {
     expect(rerun.length).toBe(1);
   });
 
+  it("does not rerun search when approved shell recovery command exits non-zero", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-local-ops-rerun-fail-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const failed = await queueStore.createJob({
+      type: "stub_task",
+      payload: {
+        sessionId: "owner@s.whatsapp.net",
+        taskType: "agentic_turn",
+        query: "latest middle east headlines"
+      },
+      priority: 5
+    });
+    await queueStore.failJob(failed.id, {
+      code: "web_search_no_results",
+      message: "fetch failed"
+    });
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          assistant_response: "I can bring the search service back first.",
+          next_action: {
+            type: "shell.exec",
+            command: "exit 1",
+            cwd: workspaceDir,
+            reason: "recover_search"
+          }
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "balanced",
+        approvalDefault: true,
+        webSearchEnabled: true,
+        shellEnabled: true,
+        shellAllowedDirs: [workspaceDir]
+      }
+    );
+
+    const proposed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "search is down, restart local searxng",
+      requestJob: false
+    });
+    expect(proposed.response).toContain("Shell operation ready for approval.");
+
+    const approved = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "yes",
+      requestJob: false
+    });
+    expect(approved.response).toContain("Approved action executed: shell_exec");
+    expect(approved.response).toContain("exit_code=1");
+    expect(approved.response).toContain("Skipped rerun because shell command did not complete successfully.");
+
+    const jobs = await queueStore.listJobs();
+    const rerun = jobs.filter(
+      (job) =>
+        job.status === "queued" &&
+        String(job.payload.sessionId ?? "") === "owner@s.whatsapp.net" &&
+        String(job.payload.query ?? "") === "latest middle east headlines"
+    );
+    expect(rerun.length).toBe(0);
+  });
+
+  it("reruns the latest recoverable query when most recent search ended with no context", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-local-ops-rerun-latest-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const olderFailed = await queueStore.createJob({
+      type: "stub_task",
+      payload: {
+        sessionId: "owner@s.whatsapp.net",
+        taskType: "agentic_turn",
+        query: "research best stable diffusion models"
+      },
+      priority: 5
+    });
+    await queueStore.failJob(olderFailed.id, {
+      code: "web_search_no_results",
+      message: "fetch failed"
+    });
+
+    const latestNoContext = await queueStore.createJob({
+      type: "stub_task",
+      payload: {
+        sessionId: "owner@s.whatsapp.net",
+        taskType: "agentic_turn",
+        query: "current EPL top 10 standings"
+      },
+      priority: 5
+    });
+    await queueStore.completeJob(latestNoContext.id, {
+      summary: "agentic_turn_no_context",
+      responseText: "I couldn't gather web context for this request. Reason: fetch failed"
+    });
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          assistant_response: "I'll recover search and rerun your latest request.",
+          next_action: {
+            type: "shell.exec",
+            command: "echo searxng_started",
+            cwd: workspaceDir,
+            reason: "recover_search"
+          }
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "balanced",
+        approvalDefault: true,
+        webSearchEnabled: true,
+        shellEnabled: true,
+        shellAllowedDirs: [workspaceDir]
+      }
+    );
+
+    const proposed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "bring searxng back and rerun my last failed search",
+      requestJob: false
+    });
+    expect(proposed.response).toContain("Shell operation ready for approval.");
+
+    const approved = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "yes",
+      requestJob: false
+    });
+    expect(approved.response).toContain("Rerunning prior task as job");
+
+    const jobs = await queueStore.listJobs();
+    const rerun = jobs.filter(
+      (job) =>
+        job.status === "queued" &&
+        String(job.payload.sessionId ?? "") === "owner@s.whatsapp.net" &&
+        String(job.payload.query ?? "") === "current EPL top 10 standings"
+    );
+    expect(rerun.length).toBe(1);
+  });
+
   it("accepts local-ops cwd when allowlisted root is a symlink to the same directory", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-shell-symlink-scope-unit-"));
     const workspaceDir = path.join(stateDir, "workspace", "alfred");

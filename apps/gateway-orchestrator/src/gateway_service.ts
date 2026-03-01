@@ -2115,7 +2115,7 @@ export class GatewayService {
     }
 
     const shellPolicy = this.evaluateShellCommandPolicy(proposal.command);
-    const rerunQuery = await this.findLatestFailedSearchQuery(sessionId);
+    const rerunQuery = await this.findLatestRecoverableSearchQuery(sessionId);
     if (shellPolicy.blocked) {
       const approval = await this.approvalStore.create(sessionId, "shell_exec_override", {
         command: proposal.command,
@@ -2436,23 +2436,28 @@ export class GatewayService {
     return relevant[0] ?? null;
   }
 
-  private async findLatestFailedSearchQuery(sessionId: string): Promise<string | null> {
+  private async findLatestRecoverableSearchQuery(sessionId: string): Promise<string | null> {
     const jobs = await this.store.listJobs();
-    const failedSearch = jobs
+    const recoverableSearch = jobs
       .filter((job) => {
         const owner = typeof job.payload.sessionId === "string" ? job.payload.sessionId : "";
         const taskType = typeof job.payload.taskType === "string" ? job.payload.taskType : "";
         const query = typeof job.payload.query === "string" ? job.payload.query.trim() : "";
+        const resultSummary =
+          job.result && typeof job.result.summary === "string" ? job.result.summary.trim().toLowerCase() : "";
+        const unsatisfiedSucceededSummary =
+          resultSummary === "web_search_no_results" || resultSummary === "agentic_turn_no_context";
+        const isRecoverableFailure = job.status === "failed" || (job.status === "succeeded" && unsatisfiedSucceededSummary);
         return (
           owner === sessionId &&
-          job.status === "failed" &&
+          isRecoverableFailure &&
           query.length > 0 &&
           (taskType === "web_search" || taskType === "agentic_turn" || taskType === "web_to_file")
         );
       })
       .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
 
-    const latest = failedSearch[0];
+    const latest = recoverableSearch[0];
     if (!latest) {
       return null;
     }
@@ -2793,8 +2798,12 @@ export class GatewayService {
         blockedRuleId
       });
       const output = await this.executeShellCommand(command, resolvedCwd.cwd);
+      const shellSucceeded = this.didShellCommandSucceed(output);
       if (!rerunQuery) {
         return `Approved risky shell override (${blockedRuleId}).\n${output}`;
+      }
+      if (!shellSucceeded) {
+        return `Approved risky shell override (${blockedRuleId}).\n${output}\n\nSkipped rerun because shell command did not complete successfully.`;
       }
       const job = await this.enqueueLongTaskJob(channelSessionId, {
         taskType: "agentic_turn",
@@ -2830,8 +2839,12 @@ export class GatewayService {
         override: false
       });
       const output = await this.executeShellCommand(command, resolvedCwd.cwd);
+      const shellSucceeded = this.didShellCommandSucceed(output);
       if (!rerunQuery) {
         return `Approved action executed: shell_exec\n${output}`;
+      }
+      if (!shellSucceeded) {
+        return `Approved action executed: shell_exec\n${output}\n\nSkipped rerun because shell command did not complete successfully.`;
       }
       const job = await this.enqueueLongTaskJob(channelSessionId, {
         taskType: "agentic_turn",
@@ -3274,7 +3287,7 @@ export class GatewayService {
         return resolvedCwd.error;
       }
       const shellPolicy = this.evaluateShellCommandPolicy(command);
-      const rerunQuery = action.rerunQuery?.trim() || (await this.findLatestFailedSearchQuery(channelSessionId));
+      const rerunQuery = action.rerunQuery?.trim() || (await this.findLatestRecoverableSearchQuery(channelSessionId));
       if (shellPolicy.blocked) {
         if (!this.approvalStore) {
           return `Shell command blocked by policy (${shellPolicy.ruleId}). Approvals are not configured for override.`;
@@ -4182,6 +4195,19 @@ export class GatewayService {
         resolve(lines.join("\n"));
       });
     });
+  }
+
+  private didShellCommandSucceed(output: string): boolean {
+    const text = String(output ?? "");
+    if (/Result:\s*timed_out_after_/i.test(text) || /Shell failed to start:/i.test(text)) {
+      return false;
+    }
+    const exitMatch = text.match(/Result:\s*exit_code=([^\s]+)/i);
+    if (!exitMatch) {
+      return false;
+    }
+    const exitCode = Number.parseInt(exitMatch[1] ?? "", 10);
+    return Number.isFinite(exitCode) && exitCode === 0;
   }
 
   private async executeWebSearch(

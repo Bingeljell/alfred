@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-03-01: Fixed shell-recovery rerun correctness in agentic chat turns: approved shell actions now rerun prior research only when shell execution succeeds (`exit_code=0`), and rerun-target selection now prefers the most recent recoverable query (including succeeded-but-unsatisfied search outcomes such as `web_search_no_results` and `agentic_turn_no_context`) to prevent stale-query replays.
 - 2026-03-01: Fixed an agentic-local-ops regression: with LLM enabled, gateway no longer invokes the secondary local-ops planner path before agent turn routing, preventing long stalls and misclassification loops on “service is down, start local process” requests.
 - 2026-03-01: Added explicit LLM timeout bounds for agent-turn decision generation (and local-ops proposal fallback path) so stuck model calls degrade to deterministic error handling instead of silent limbo.
 - 2026-03-01: Updated planner trace phrasing from “selected” to “hint” to reflect advisory-only planner semantics in stream telemetry.
