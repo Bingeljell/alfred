@@ -17,6 +17,13 @@ type SearchHit = {
   domain: string;
 };
 
+type PageEvidence = {
+  url: string;
+  title: string;
+  domain: string;
+  excerpt: string;
+};
+
 type RankingCandidate = {
   name: string;
   category: string;
@@ -487,6 +494,36 @@ export function createWorkerProcessor(input: {
         }
       }
 
+      let pageEvidence: PageEvidence[] = [];
+      if (objective.mode === "research" && mergedHits.length > 0 && msRemaining(deadlineAt, 0) > 7000) {
+        await context.reportProgress({
+          step: "searching",
+          phase: "fetch",
+          message: "Fetching full page context from top sources...",
+          details: {
+            targetPages: Math.min(6, mergedHits.length)
+          }
+        });
+        const hydrateBudgetMs = Math.max(5000, Math.min(22_000, msRemaining(deadlineAt, 5000)));
+        const hydrated = await hydrateEvidenceFromPages({
+          hits: mergedHits,
+          limit: Math.min(6, mergedHits.length),
+          budgetMs: hydrateBudgetMs
+        });
+        mergedHits = hydrated.hits;
+        pageEvidence = hydrated.pages;
+        if (pageEvidence.length > 0) {
+          await context.reportProgress({
+            step: "searching",
+            phase: "fetch",
+            message: `Grounded evidence using ${pageEvidence.length} fetched pages.`,
+            details: {
+              fetchedPages: pageEvidence.length
+            }
+          });
+        }
+      }
+
       const compactEvidence = compactSearchHitsForSynthesis(mergedHits, 14);
       await context.reportProgress({
         step: "ranking",
@@ -498,7 +535,7 @@ export function createWorkerProcessor(input: {
         }
       });
 
-      const rankPrompt = buildAgenticRankingPrompt(goal, compactEvidence);
+      const rankPrompt = buildAgenticRankingPrompt(goal, compactEvidence, pageEvidence);
       let ranking: RankingResult | null = null;
       let rankingRaw = "";
       try {
@@ -585,7 +622,7 @@ export function createWorkerProcessor(input: {
         }
       });
 
-      const synthesisPrompt = buildAgenticSynthesisPrompt(goal, ranking, compactEvidence, providersUsed);
+      const synthesisPrompt = buildAgenticSynthesisPrompt(goal, ranking, compactEvidence, providersUsed, pageEvidence);
       let synthesisText: string | null = null;
       try {
         const generated = await withProgressPulse(
@@ -626,7 +663,7 @@ export function createWorkerProcessor(input: {
           }
         });
         try {
-          const concisePrompt = buildConciseSynthesisPrompt(goal, ranking, compactEvidence);
+          const concisePrompt = buildConciseSynthesisPrompt(goal, ranking, compactEvidence, pageEvidence);
           const concise = await withTimeout(
             input.llmService.generateText(authSessionId || sessionId, concisePrompt, { authPreference }),
             Math.max(2500, Math.min(9000, msRemaining(deadlineAt, 2500))),
@@ -652,7 +689,8 @@ export function createWorkerProcessor(input: {
         recommendationMode: synthesisText ? "rank_plus_synthesis" : "rank_only",
         sourceStats: {
           hits: mergedHits.length,
-          distinctDomains: countDistinctDomains(mergedHits)
+          distinctDomains: countDistinctDomains(mergedHits),
+          fetchedPages: pageEvidence.length
         },
         elapsedSec: Math.max(1, Math.floor((Date.now() - runStartedAt) / 1000))
       });
@@ -1035,9 +1073,13 @@ function rankSearchHitsForGoal(hits: SearchHit[], goal: string): SearchHit[] {
   return scored.map((item) => item.hit);
 }
 
-function buildAgenticRankingPrompt(goal: string, hits: SearchHit[]): string {
+function buildAgenticRankingPrompt(goal: string, hits: SearchHit[], pages: PageEvidence[]): string {
   const evidence = hits
     .map((hit, index) => `${index + 1}. ${hit.title} | ${hit.url} | ${hit.snippet} | provider=${hit.provider}`)
+    .join("\n");
+  const pageEvidence = pages
+    .slice(0, 6)
+    .map((page, index) => `${index + 1}. ${page.title} | ${page.url} | ${page.excerpt}`)
     .join("\n");
   return [
     "You are Alfred's ranking engine.",
@@ -1054,7 +1096,10 @@ function buildAgenticRankingPrompt(goal: string, hits: SearchHit[]): string {
     "",
     `Goal: ${goal}`,
     "Evidence:",
-    evidence
+    evidence,
+    "",
+    "Fetched page evidence:",
+    pageEvidence || "none"
   ].join("\n");
 }
 
@@ -1078,15 +1123,21 @@ function buildAgenticSynthesisPrompt(
   goal: string,
   ranking: RankingResult,
   hits: SearchHit[],
-  providersUsed: ResolvedProvider[]
+  providersUsed: ResolvedProvider[],
+  pages: PageEvidence[]
 ): string {
   const evidence = hits
     .slice(0, 10)
     .map((hit, index) => `${index + 1}. ${hit.title} (${hit.url}) — ${hit.snippet}`)
     .join("\n");
+  const pageEvidence = pages
+    .slice(0, 6)
+    .map((page, index) => `${index + 1}. ${page.title} (${page.url}) — ${page.excerpt}`)
+    .join("\n");
   return [
     "You are Alfred, writing the final recommendation.",
     "Use ranking output and evidence. Do not invent facts.",
+    "Answer the user's ask directly. Do not redirect the user to click links as the primary answer.",
     "Output format:",
     "1) Recommendation (single best option)",
     "2) Why this option (3-5 bullets)",
@@ -1101,17 +1152,25 @@ function buildAgenticSynthesisPrompt(
     JSON.stringify(ranking, null, 2),
     "",
     "Evidence snippets:",
-    evidence
+    evidence,
+    "",
+    "Fetched page excerpts:",
+    pageEvidence || "none"
   ].join("\n");
 }
 
-function buildConciseSynthesisPrompt(goal: string, ranking: RankingResult, hits: SearchHit[]): string {
+function buildConciseSynthesisPrompt(goal: string, ranking: RankingResult, hits: SearchHit[], pages: PageEvidence[]): string {
   const evidence = hits
     .slice(0, 8)
     .map((hit, index) => `${index + 1}. ${hit.title} (${hit.url})`)
     .join("\n");
+  const pageEvidence = pages
+    .slice(0, 4)
+    .map((page, index) => `${index + 1}. ${page.title} (${page.url}) — ${page.excerpt}`)
+    .join("\n");
   return [
     "You are Alfred. Produce a concise recommendation.",
+    "Answer the user's ask directly. Avoid recommending links as the answer itself.",
     "Output exactly:",
     "1) Best option",
     "2) Why (3 bullets)",
@@ -1124,7 +1183,10 @@ function buildConciseSynthesisPrompt(goal: string, ranking: RankingResult, hits:
     JSON.stringify(ranking, null, 2),
     "",
     "Evidence:",
-    evidence
+    evidence,
+    "",
+    "Fetched page excerpts:",
+    pageEvidence || "none"
   ].join("\n");
 }
 
@@ -1423,6 +1485,132 @@ function compactSearchHitsForSynthesis(hits: SearchHit[], limit: number): Search
   }));
 }
 
+async function hydrateEvidenceFromPages(input: {
+  hits: SearchHit[];
+  limit: number;
+  budgetMs: number;
+}): Promise<{ hits: SearchHit[]; pages: PageEvidence[] }> {
+  const max = Math.max(1, Math.min(input.limit, input.hits.length));
+  const deadlineAt = Date.now() + Math.max(2500, input.budgetMs);
+  const selected = input.hits.slice(0, max);
+  const pageByUrl = new Map<string, PageEvidence>();
+
+  for (let index = 0; index < selected.length; index += 1) {
+    const remainingMs = deadlineAt - Date.now();
+    if (remainingMs <= 1200) {
+      break;
+    }
+    const hit = selected[index];
+    if (!hit) {
+      continue;
+    }
+    const timeoutMs = Math.max(1500, Math.min(6500, remainingMs));
+    try {
+      const page = await fetchPageEvidenceFromUrl(hit.url, timeoutMs);
+      if (page && page.excerpt.length >= 120) {
+        pageByUrl.set(hit.url.toLowerCase(), page);
+      }
+    } catch {
+      // best-effort hydration only
+    }
+  }
+
+  const enrichedHits = input.hits.map((hit) => {
+    const page = pageByUrl.get(hit.url.toLowerCase());
+    if (!page) {
+      return hit;
+    }
+    const mergedSnippet = `${hit.snippet} ${page.excerpt}`.replace(/\s+/g, " ").trim();
+    return {
+      ...hit,
+      snippet: mergedSnippet.length > 420 ? `${mergedSnippet.slice(0, 417)}...` : mergedSnippet
+    };
+  });
+
+  const pages = Array.from(pageByUrl.values());
+  return {
+    hits: enrichedHits,
+    pages
+  };
+}
+
+async function fetchPageEvidenceFromUrl(url: string, timeoutMs: number): Promise<PageEvidence | null> {
+  if (!/^https?:\/\//i.test(url)) {
+    return null;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      redirect: "follow",
+      headers: {
+        "user-agent": "AlfredBot/0.1 (+https://github.com/Bingeljell/alfred)",
+        accept: "text/html, text/plain;q=0.9,*/*;q=0.1"
+      }
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+    const raw = await response.text();
+    if (!raw.trim()) {
+      return null;
+    }
+    const title = extractHtmlTitle(raw) || safeDomain(url) || url;
+    const text = contentType.includes("text/plain") ? raw : extractReadableTextFromHtml(raw);
+    const excerpt = text.replace(/\s+/g, " ").trim().slice(0, 1200);
+    if (excerpt.length < 80) {
+      return null;
+    }
+    return {
+      url,
+      title,
+      domain: safeDomain(url),
+      excerpt
+    };
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function extractHtmlTitle(html: string): string {
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (!titleMatch) {
+    return "";
+  }
+  return decodeHtmlEntities(titleMatch[1] ?? "").replace(/\s+/g, " ").trim();
+}
+
+function extractReadableTextFromHtml(html: string): string {
+  const withoutScripts = html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<svg[\s\S]*?<\/svg>/gi, " ");
+  const bodyMatch = withoutScripts.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+  const scope = bodyMatch?.[1] ?? withoutScripts;
+  const text = scope
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/(p|div|li|h1|h2|h3|h4|h5|h6|tr|section|article)>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+\n/g, "\n")
+    .replace(/\n{3,}/g, "\n\n");
+  return decodeHtmlEntities(text);
+}
+
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">");
+}
+
 function countDistinctDomains(hits: SearchHit[]): number {
   return new Set(hits.map((hit) => hit.domain).filter((item) => item.length > 0)).size;
 }
@@ -1513,7 +1701,7 @@ async function finalizePagedAgenticResponse(input: {
   tokenBudget: number;
   confidence: "low" | "medium" | "high";
   recommendationMode: "rank_only" | "rank_plus_synthesis";
-  sourceStats?: { hits: number; distinctDomains: number };
+  sourceStats?: { hits: number; distinctDomains: number; fetchedPages?: number };
   elapsedSec?: number;
 }) {
   const pages = paginateResponse(input.fullText, 2800, 4);

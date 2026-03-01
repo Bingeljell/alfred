@@ -2115,7 +2115,7 @@ export class GatewayService {
     }
 
     const shellPolicy = this.evaluateShellCommandPolicy(proposal.command);
-    const rerunQuery = await this.findLatestRecoverableSearchQuery(sessionId);
+    const rerunQuery = await this.inferRerunQueryFromLocalOpsText(sessionId, rawText);
     if (shellPolicy.blocked) {
       const approval = await this.approvalStore.create(sessionId, "shell_exec_override", {
         command: proposal.command,
@@ -2797,10 +2797,16 @@ export class GatewayService {
         override: true,
         blockedRuleId
       });
-      const output = await this.executeShellCommand(command, resolvedCwd.cwd);
-      const shellSucceeded = this.didShellCommandSucceed(output);
-      if (!rerunQuery) {
-        return `Approved risky shell override (${blockedRuleId}).\n${output}`;
+      let output = await this.executeShellCommand(command, resolvedCwd.cwd);
+      let shellSucceeded = this.didShellCommandSucceed(output);
+      if (shellSucceeded) {
+        const verification = await this.verifyShellOutcome(command, resolvedCwd.cwd);
+        if (!verification.ok) {
+          shellSucceeded = false;
+          output = `${output}\n\nVerification: ${verification.message}`;
+        } else if (verification.message) {
+          output = `${output}\n\nVerification: ${verification.message}`;
+        }
       }
       if (!shellSucceeded) {
         const followup = await this.planAfterApprovedShellFailure(
@@ -2818,6 +2824,9 @@ export class GatewayService {
           return `Approved risky shell override (${blockedRuleId}).\n${output}\n\n${followup}`;
         }
         return `Approved risky shell override (${blockedRuleId}).\n${output}\n\nSkipped rerun because shell command did not complete successfully.`;
+      }
+      if (!rerunQuery) {
+        return `Approved risky shell override (${blockedRuleId}).\n${output}`;
       }
       const job = await this.enqueueLongTaskJob(channelSessionId, {
         taskType: "agentic_turn",
@@ -2852,10 +2861,16 @@ export class GatewayService {
         cwd: resolvedCwd.cwd,
         override: false
       });
-      const output = await this.executeShellCommand(command, resolvedCwd.cwd);
-      const shellSucceeded = this.didShellCommandSucceed(output);
-      if (!rerunQuery) {
-        return `Approved action executed: shell_exec\n${output}`;
+      let output = await this.executeShellCommand(command, resolvedCwd.cwd);
+      let shellSucceeded = this.didShellCommandSucceed(output);
+      if (shellSucceeded) {
+        const verification = await this.verifyShellOutcome(command, resolvedCwd.cwd);
+        if (!verification.ok) {
+          shellSucceeded = false;
+          output = `${output}\n\nVerification: ${verification.message}`;
+        } else if (verification.message) {
+          output = `${output}\n\nVerification: ${verification.message}`;
+        }
       }
       if (!shellSucceeded) {
         const followup = await this.planAfterApprovedShellFailure(
@@ -2873,6 +2888,9 @@ export class GatewayService {
           return `Approved action executed: shell_exec\n${output}\n\n${followup}`;
         }
         return `Approved action executed: shell_exec\n${output}\n\nSkipped rerun because shell command did not complete successfully.`;
+      }
+      if (!rerunQuery) {
+        return `Approved action executed: shell_exec\n${output}`;
       }
       const job = await this.enqueueLongTaskJob(channelSessionId, {
         taskType: "agentic_turn",
@@ -3315,7 +3333,10 @@ export class GatewayService {
         return resolvedCwd.error;
       }
       const shellPolicy = this.evaluateShellCommandPolicy(command);
-      const rerunQuery = action.rerunQuery?.trim() || (await this.findLatestRecoverableSearchQuery(channelSessionId));
+      const rerunQuery =
+        action.rerunQuery?.trim() ||
+        (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) ||
+        "";
       if (shellPolicy.blocked) {
         if (!this.approvalStore) {
           return `Shell command blocked by policy (${shellPolicy.ruleId}). Approvals are not configured for override.`;
@@ -3345,7 +3366,7 @@ export class GatewayService {
         authSessionId,
         source: "agent_turn_v2",
         reason: action.reason ?? "agent_shell_request",
-        rerunQuery
+        rerunQuery: rerunQuery || undefined
       });
       return [
         "Shell operation ready for approval.",
@@ -4236,6 +4257,141 @@ export class GatewayService {
     }
     const exitCode = Number.parseInt(exitMatch[1] ?? "", 10);
     return Number.isFinite(exitCode) && exitCode === 0;
+  }
+
+  private async inferRerunQueryFromLocalOpsText(sessionId: string, rawText: string): Promise<string | undefined> {
+    const text = rawText.toLowerCase();
+    const wantsRerun =
+      /\brerun\b/.test(text) ||
+      /\bretry\b/.test(text) ||
+      /\brun\b[\s\w]{0,20}\bagain\b/.test(text) ||
+      /\bthen\b[\s\w]{0,20}\b(search|query|task|job)\b/.test(text);
+    if (!wantsRerun) {
+      return undefined;
+    }
+    return (await this.findLatestRecoverableSearchQuery(sessionId)) ?? undefined;
+  }
+
+  private async verifyShellOutcome(command: string, cwd: string): Promise<{ ok: boolean; message: string }> {
+    const expectation = this.parseShellExpectation(command);
+    if (!expectation) {
+      return { ok: true, message: "No additional semantic verification rule matched this command." };
+    }
+
+    if (expectation.kind === "pkill_pattern") {
+      const escapedPattern = this.shellEscapeSingleQuoted(expectation.pattern);
+      const check = await this.runShellVerificationCommand(`pgrep -f -- ${escapedPattern}`, cwd);
+      if (check.exitCode === 1) {
+        return { ok: true, message: `Verified: no process remains for pattern '${expectation.pattern}'.` };
+      }
+      if (check.exitCode === 0) {
+        const sample = check.stdout.split(/\s+/).filter((item) => item.trim().length > 0).slice(0, 5).join(", ");
+        return {
+          ok: false,
+          message: `Process still running for pattern '${expectation.pattern}'${sample ? ` (matched: ${sample})` : ""}.`
+        };
+      }
+      return {
+        ok: false,
+        message: `Could not verify process state for '${expectation.pattern}'. stderr: ${check.stderr || "none"}`
+      };
+    }
+
+    if (expectation.kind === "kill_pid") {
+      const check = await this.runShellVerificationCommand(`kill -0 ${expectation.pid}`, cwd);
+      if (check.exitCode === 0) {
+        return { ok: false, message: `Process ${expectation.pid} is still running after kill command.` };
+      }
+      return { ok: true, message: `Verified: process ${expectation.pid} is no longer running.` };
+    }
+
+    return { ok: true, message: "No semantic verification was required." };
+  }
+
+  private parseShellExpectation(command: string): { kind: "pkill_pattern"; pattern: string } | { kind: "kill_pid"; pid: number } | null {
+    const text = String(command ?? "");
+    const pkillMatch = text.match(/\bpkill\b[^\n;|&]*\s-f\s+("([^"]+)"|'([^']+)'|([^\s;|&]+))/i);
+    if (pkillMatch) {
+      const pattern = String(pkillMatch[2] ?? pkillMatch[3] ?? pkillMatch[4] ?? "").trim();
+      if (pattern) {
+        return {
+          kind: "pkill_pattern",
+          pattern
+        };
+      }
+    }
+
+    const killMatch = text.match(/\bkill\b(?:\s+-[A-Z0-9]+)?\s+(\d+)\b/i);
+    if (killMatch) {
+      const pid = Number.parseInt(killMatch[1] ?? "", 10);
+      if (Number.isFinite(pid) && pid > 0) {
+        return {
+          kind: "kill_pid",
+          pid
+        };
+      }
+    }
+
+    return null;
+  }
+
+  private shellEscapeSingleQuoted(value: string): string {
+    return `'${value.replace(/'/g, `'\\''`)}'`;
+  }
+
+  private async runShellVerificationCommand(
+    command: string,
+    cwd: string
+  ): Promise<{ exitCode: number | null; stdout: string; stderr: string }> {
+    const timeoutMs = Math.min(this.capabilityPolicy.shellTimeoutMs, 7000);
+    const maxOutputChars = Math.max(500, Math.min(this.capabilityPolicy.shellMaxOutputChars, 4000));
+
+    return await new Promise((resolve) => {
+      const child = spawn(command, {
+        cwd,
+        shell: true,
+        env: process.env
+      });
+
+      let stdout = "";
+      let stderr = "";
+      let finished = false;
+      const appendBounded = (current: string, chunk: string) => {
+        const combined = `${current}${chunk}`;
+        return combined.length <= maxOutputChars ? combined : combined.slice(0, maxOutputChars);
+      };
+
+      const finalize = (exitCode: number | null, out: string, err: string) => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        clearTimeout(timer);
+        resolve({
+          exitCode,
+          stdout: out.trim(),
+          stderr: err.trim()
+        });
+      };
+
+      const timer = setTimeout(() => {
+        child.kill("SIGKILL");
+        finalize(-1, stdout, `${stderr}\nverification_timeout`);
+      }, timeoutMs);
+
+      child.stdout.on("data", (chunk: Buffer | string) => {
+        stdout = appendBounded(stdout, String(chunk));
+      });
+      child.stderr.on("data", (chunk: Buffer | string) => {
+        stderr = appendBounded(stderr, String(chunk));
+      });
+      child.on("error", (error) => {
+        finalize(-1, stdout, `${stderr}\n${error.message}`);
+      });
+      child.on("close", (code) => {
+        finalize(code, stdout, stderr);
+      });
+    });
   }
 
   private async planAfterApprovedShellFailure(

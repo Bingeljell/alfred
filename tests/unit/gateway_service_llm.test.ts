@@ -1302,7 +1302,7 @@ describe("GatewayService llm path", () => {
 
     const proposed = await service.handleInbound({
       sessionId: "owner@s.whatsapp.net",
-      text: "searxng is down, please start the local service",
+      text: "searxng is down, please start the local service and rerun my last search",
       requestJob: false
     });
     expect(proposed.response).toContain("Shell operation ready for approval.");
