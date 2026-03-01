@@ -134,6 +134,30 @@ type LocalOpsRouteResult = {
   details?: Record<string, unknown>;
 };
 
+type AgentNextActionType =
+  | "none"
+  | "ask_user"
+  | "web.search"
+  | "shell.exec"
+  | "worker.run";
+
+type AgentNextAction = {
+  type: AgentNextActionType;
+  reason?: string;
+  query?: string;
+  provider?: WebSearchProvider | "auto";
+  mode?: "quick" | "deep";
+  command?: string;
+  cwd?: string;
+  rerunQuery?: string;
+  goal?: string;
+};
+
+type AgentTurnDecision = {
+  assistantResponse: string;
+  nextAction?: AgentNextAction;
+};
+
 export class GatewayService {
   private readonly capabilityPolicy: CapabilityPolicy;
   private readonly fileWriteApprovalLeases = new Set<string>();
@@ -477,23 +501,6 @@ export class GatewayService {
         };
 
         await runPolicyPhase({ markPhase });
-        const primaryPlannerRoute = await this.handlePlannerPrimaryRoutes({
-          inbound: {
-            sessionId: inbound.sessionId,
-            text: inbound.text
-          },
-          plan,
-          runId,
-          authSessionId,
-          authPreference,
-          markPhase,
-          markRunNote,
-          recordPlannerTrace
-        });
-        if (primaryPlannerRoute) {
-          return primaryPlannerRoute;
-        }
-
         return await this.handlePlannerFallbackRoutes({
           inbound: {
             sessionId: inbound.sessionId,
@@ -1213,6 +1220,33 @@ export class GatewayService {
       };
     }
 
+    if (this.llmService) {
+      await runRoutePhase({ markPhase: input.markPhase }, "Running agentic chat turn");
+      await input.recordPlannerTrace("run_chat_turn");
+      const response = await this.executeChatTurn(
+        input.inbound.sessionId,
+        input.authSessionId,
+        input.inbound.text,
+        input.authPreference
+      );
+      await runPersistPhase({ markPhase: input.markPhase }, "Persisting chat response");
+      await this.recordConversation(input.inbound.sessionId, "outbound", response, {
+        source: "gateway",
+        channel: "internal",
+        kind: "chat",
+        metadata: {
+          authSessionId: input.authSessionId,
+          runId: input.runId,
+          authPreference: input.authPreference
+        }
+      });
+      return {
+        accepted: true,
+        mode: "chat",
+        response
+      };
+    }
+
     const routed = await this.routeLongTaskIfNeeded(
       input.inbound.sessionId,
       input.inbound.text,
@@ -1258,24 +1292,10 @@ export class GatewayService {
       };
     }
 
-    await runRoutePhase({ markPhase: input.markPhase }, "Running local chat turn");
-    await input.recordPlannerTrace("run_chat_turn");
-    const response = await this.executeChatTurn(input.authSessionId, input.inbound.text, input.authPreference);
-    await runPersistPhase({ markPhase: input.markPhase }, "Persisting chat response");
-    await this.recordConversation(input.inbound.sessionId, "outbound", response, {
-      source: "gateway",
-      channel: "internal",
-      kind: "chat",
-      metadata: {
-        authSessionId: input.authSessionId,
-        runId: input.runId,
-        authPreference: input.authPreference
-      }
-    });
     return {
       accepted: true,
       mode: "chat",
-      response
+      response: "No model backend is configured. Connect ChatGPT OAuth or set OPENAI_API_KEY."
     };
   }
 
@@ -1938,10 +1958,13 @@ export class GatewayService {
     if (!value) {
       return null;
     }
-    if (value === "yes" || value === "y" || value === "approve" || value === "/approve") {
+    if (
+      /^(yes|y|approve|approved|proceed|go ahead|go-ahead|sounds good|do it)\b/.test(value) ||
+      value === "/approve"
+    ) {
       return "approve_latest";
     }
-    if (value === "no" || value === "n" || value === "reject" || value === "/reject") {
+    if (/^(no|n|reject|rejected|decline|cancel|stop)\b/.test(value) || value === "/reject") {
       return "reject_latest";
     }
     return null;
@@ -2073,7 +2096,13 @@ export class GatewayService {
       };
     }
 
-    const resolvedCwd = this.resolveShellCwd(proposal.cwd);
+    let resolvedCwd = this.resolveShellCwd(proposal.cwd);
+    if (!resolvedCwd.ok) {
+      const fallbackCwd = this.inferAllowedCwdFromText(rawText);
+      if (fallbackCwd) {
+        resolvedCwd = { ok: true, cwd: fallbackCwd };
+      }
+    }
     if (!resolvedCwd.ok) {
       return {
         response: `${resolvedCwd.error}\nPlease provide a path under the configured shell allowed roots.`,
@@ -2086,6 +2115,7 @@ export class GatewayService {
     }
 
     const shellPolicy = this.evaluateShellCommandPolicy(proposal.command);
+    const rerunQuery = await this.findLatestFailedSearchQuery(sessionId);
     if (shellPolicy.blocked) {
       const approval = await this.approvalStore.create(sessionId, "shell_exec_override", {
         command: proposal.command,
@@ -2093,7 +2123,8 @@ export class GatewayService {
         blockedRuleId: shellPolicy.ruleId,
         authSessionId,
         source: "planner_local_ops",
-        reason: proposal.reason ?? "policy_blocked"
+        reason: proposal.reason ?? "policy_blocked",
+        rerunQuery: rerunQuery ?? undefined
       });
       return {
         response: [
@@ -2117,7 +2148,8 @@ export class GatewayService {
       cwd: resolvedCwd.cwd,
       authSessionId,
       source: "planner_local_ops",
-      reason: proposal.reason ?? "local_ops_request"
+      reason: proposal.reason ?? "local_ops_request",
+      rerunQuery: rerunQuery ?? undefined
     });
 
     return {
@@ -2144,7 +2176,9 @@ export class GatewayService {
     }
 
     const hasActionVerb =
-      /\b(start|restart|stop|run|launch|boot|kill|fix|debug|check|inspect|tail|open|list|show|deploy)\b/.test(text);
+      /\b(start|restart|stop|run|launch|boot|kill|fix|debug|check|inspect|tail|open|list|show|deploy|enable|configure|setup|set up|bring up)\b/.test(
+        text
+      );
     const hasOpsTarget =
       /\b(server|service|daemon|process|port|logs?|local|repo|directory|folder|path|workspace|shell|command|searxng|gateway|worker|npm|pnpm|node|python|docker)\b/.test(
         text
@@ -2396,6 +2430,29 @@ export class GatewayService {
     }
     relevant.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
     return relevant[0] ?? null;
+  }
+
+  private async findLatestFailedSearchQuery(sessionId: string): Promise<string | null> {
+    const jobs = await this.store.listJobs();
+    const failedSearch = jobs
+      .filter((job) => {
+        const owner = typeof job.payload.sessionId === "string" ? job.payload.sessionId : "";
+        const taskType = typeof job.payload.taskType === "string" ? job.payload.taskType : "";
+        const query = typeof job.payload.query === "string" ? job.payload.query.trim() : "";
+        return (
+          owner === sessionId &&
+          job.status === "failed" &&
+          query.length > 0 &&
+          (taskType === "web_search" || taskType === "agentic_turn" || taskType === "web_to_file")
+        );
+      })
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+
+    const latest = failedSearch[0];
+    if (!latest) {
+      return null;
+    }
+    return String(latest.payload.query ?? "").trim() || null;
   }
 
   private async enqueueLongTaskJob(
@@ -2714,6 +2771,10 @@ export class GatewayService {
       const command = String(approval.payload.command ?? "").trim();
       const requestedCwd = typeof approval.payload.cwd === "string" ? approval.payload.cwd.trim() : undefined;
       const blockedRuleId = String(approval.payload.blockedRuleId ?? "unknown_rule");
+      const rerunQuery =
+        typeof approval.payload.rerunQuery === "string" && approval.payload.rerunQuery.trim()
+          ? approval.payload.rerunQuery.trim()
+          : "";
       if (!command) {
         return "Approved action failed: missing shell command.";
       }
@@ -2728,11 +2789,26 @@ export class GatewayService {
         blockedRuleId
       });
       const output = await this.executeShellCommand(command, resolvedCwd.cwd);
-      return `Approved risky shell override (${blockedRuleId}).\n${output}`;
+      if (!rerunQuery) {
+        return `Approved risky shell override (${blockedRuleId}).\n${output}`;
+      }
+      const job = await this.enqueueLongTaskJob(channelSessionId, {
+        taskType: "agentic_turn",
+        query: rerunQuery,
+        provider: this.capabilityPolicy.webSearchProvider,
+        authSessionId,
+        authPreference,
+        reason: "post_shell_override_rerun"
+      });
+      return `Approved risky shell override (${blockedRuleId}).\n${output}\n\nRerunning prior task as job ${job.id}.`;
     }
     if (approval.action === "shell_exec") {
       const command = String(approval.payload.command ?? "").trim();
       const requestedCwd = typeof approval.payload.cwd === "string" ? approval.payload.cwd.trim() : undefined;
+      const rerunQuery =
+        typeof approval.payload.rerunQuery === "string" && approval.payload.rerunQuery.trim()
+          ? approval.payload.rerunQuery.trim()
+          : "";
       if (!command) {
         return "Approved action failed: missing shell command.";
       }
@@ -2750,7 +2826,18 @@ export class GatewayService {
         override: false
       });
       const output = await this.executeShellCommand(command, resolvedCwd.cwd);
-      return `Approved action executed: shell_exec\n${output}`;
+      if (!rerunQuery) {
+        return `Approved action executed: shell_exec\n${output}`;
+      }
+      const job = await this.enqueueLongTaskJob(channelSessionId, {
+        taskType: "agentic_turn",
+        query: rerunQuery,
+        provider: this.capabilityPolicy.webSearchProvider,
+        authSessionId,
+        authPreference,
+        reason: "post_shell_exec_rerun"
+      });
+      return `Approved action executed: shell_exec\n${output}\n\nRerunning prior task as job ${job.id}.`;
     }
     if (approval.action === "web_to_file_send") {
       if (!this.capabilityPolicy.webSearchEnabled) {
@@ -2996,32 +3083,240 @@ export class GatewayService {
     }
   }
 
-  private async executeChatTurn(sessionId: string, text: string, authPreference: LlmAuthPreference): Promise<string> {
-    const prepared = await this.prepareChatInput(sessionId, text, authPreference);
+  private async executeChatTurn(
+    channelSessionId: string,
+    authSessionId: string,
+    text: string,
+    authPreference: LlmAuthPreference
+  ): Promise<string> {
+    const prepared = await this.prepareChatInput(authSessionId, text, authPreference);
     if (!this.llmService) {
       return "No model backend is configured. Connect ChatGPT OAuth or set OPENAI_API_KEY.";
     }
 
     try {
-      const result = await this.llmService.generateText(sessionId, prepared.prompt, {
-        authPreference,
-        executionMode: "reasoning_only"
+      const decisionPrompt = this.buildAgentTurnDecisionPrompt(prepared.prompt);
+      const result = await this.llmService.generateText(authSessionId, decisionPrompt, {
+        authPreference
       });
-      const llmText = result?.text?.trim();
+      const llmText = result?.text?.trim() ?? "";
       if (!llmText) {
         return this.noModelResponse(authPreference);
       }
-
-      if (prepared.references.length === 0) {
-        return llmText;
+      const decision = this.parseAgentTurnDecision(llmText);
+      const decisionText = decision?.assistantResponse?.trim() || llmText;
+      if (decision?.nextAction && decision.nextAction.type !== "none" && decision.nextAction.type !== "ask_user") {
+        const actionResult = await this.executeAgentNextAction(
+          channelSessionId,
+          authSessionId,
+          authPreference,
+          decision.nextAction,
+          text
+        );
+        if (actionResult) {
+          return decisionText ? `${decisionText}\n\n${actionResult}` : actionResult;
+        }
       }
 
-      return `${llmText}\n\nMemory references:\n${prepared.references
-        .map((reference) => `- [${reference.class}] ${reference.source}`)
-        .join("\n")}`;
+      if (prepared.references.length > 0) {
+        return `${decisionText}\n\nMemory references:\n${prepared.references
+          .map((reference) => `- [${reference.class}] ${reference.source}`)
+          .join("\n")}`;
+      }
+      return decisionText;
     } catch (error) {
       return this.humanizeLlmError(error);
     }
+  }
+
+  private buildAgentTurnDecisionPrompt(contextPrompt: string): string {
+    return [
+      "You are Alfred, a goal-oriented orchestrator.",
+      "Decide whether to answer directly or propose exactly one next action.",
+      "Return STRICT JSON only with this shape:",
+      '{"assistant_response":"", "next_action":{"type":"none|ask_user|web.search|shell.exec|worker.run","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","cwd":"","rerunQuery":"","goal":""}}',
+      "Rules:",
+      "- Use next_action.type=none for pure conversational replies.",
+      "- Use web.search for live/current web retrieval.",
+      "- Use shell.exec for local machine operations.",
+      "- Use worker.run for long-running tasks requiring background execution.",
+      "- If unclear, ask one concise clarification using assistant_response and next_action.type=ask_user.",
+      "- Do not invent execution results. Execution happens after this decision.",
+      "",
+      contextPrompt
+    ].join("\n");
+  }
+
+  private parseAgentTurnDecision(raw: string): AgentTurnDecision | null {
+    const parsed = this.tryParseJsonObject(raw);
+    if (!parsed) {
+      return null;
+    }
+
+    const assistantResponse = typeof parsed.assistant_response === "string" ? parsed.assistant_response.trim() : "";
+    const nextActionRaw =
+      parsed.next_action && typeof parsed.next_action === "object" && !Array.isArray(parsed.next_action)
+        ? (parsed.next_action as Record<string, unknown>)
+        : null;
+
+    let nextAction: AgentNextAction | undefined;
+    if (nextActionRaw) {
+      const type = String(nextActionRaw.type ?? "").trim() as AgentNextActionType;
+      if (type === "none" || type === "ask_user" || type === "web.search" || type === "shell.exec" || type === "worker.run") {
+        const provider = this.normalizeWebSearchProvider(nextActionRaw.provider);
+        const modeRaw = String(nextActionRaw.mode ?? "").trim().toLowerCase();
+        const mode = modeRaw === "quick" || modeRaw === "deep" ? modeRaw : undefined;
+        nextAction = {
+          type,
+          reason: typeof nextActionRaw.reason === "string" ? nextActionRaw.reason.trim() : undefined,
+          query: typeof nextActionRaw.query === "string" ? nextActionRaw.query.trim() : undefined,
+          provider: provider ?? undefined,
+          mode,
+          command: typeof nextActionRaw.command === "string" ? nextActionRaw.command.trim() : undefined,
+          cwd: typeof nextActionRaw.cwd === "string" ? nextActionRaw.cwd.trim() : undefined,
+          rerunQuery: typeof nextActionRaw.rerunQuery === "string" ? nextActionRaw.rerunQuery.trim() : undefined,
+          goal: typeof nextActionRaw.goal === "string" ? nextActionRaw.goal.trim() : undefined
+        };
+      }
+    }
+
+    if (!assistantResponse && !nextAction) {
+      return null;
+    }
+    return {
+      assistantResponse: assistantResponse || "Understood.",
+      nextAction
+    };
+  }
+
+  private async executeAgentNextAction(
+    channelSessionId: string,
+    authSessionId: string,
+    authPreference: LlmAuthPreference,
+    action: AgentNextAction,
+    userText: string
+  ): Promise<string | null> {
+    if (action.type === "web.search") {
+      if (!this.capabilityPolicy.webSearchEnabled) {
+        return "Web search is currently disabled by policy.";
+      }
+      const query = action.query?.trim() || userText.trim();
+      if (!query) {
+        return "Web search action is missing a query.";
+      }
+      const provider = action.provider ?? this.capabilityPolicy.webSearchProvider;
+      if (this.requiresApproval("web_search", { sessionId: channelSessionId, authSessionId })) {
+        if (!this.approvalStore) {
+          return "Web search requires approval, but approvals are not configured.";
+        }
+        const approval = await this.approvalStore.create(channelSessionId, "web_search", {
+          query,
+          provider,
+          authSessionId,
+          authPreference
+        });
+        return `Approval required for web search.\n- query: ${query}\n- provider: ${provider}\nReply yes/no, or approve ${approval.token}`;
+      }
+      const taskType = action.mode === "quick" ? "web_search" : "agentic_turn";
+      const job = await this.enqueueLongTaskJob(channelSessionId, {
+        taskType,
+        query,
+        provider,
+        authSessionId,
+        authPreference,
+        reason: action.reason?.trim() || "agent_turn_v2"
+      });
+      if (taskType === "web_search") {
+        return `Queued web search as job ${job.id}. I’ll share results here.`;
+      }
+      return `Queued research as job ${job.id}. I’ll share concise progress and final results here.`;
+    }
+
+    if (action.type === "worker.run") {
+      const goal = action.goal?.trim() || action.query?.trim() || userText.trim();
+      if (!goal) {
+        return "Worker task is missing a goal.";
+      }
+      const provider = action.provider ?? this.capabilityPolicy.webSearchProvider;
+      const job = await this.enqueueLongTaskJob(channelSessionId, {
+        taskType: "agentic_turn",
+        query: goal,
+        provider,
+        authSessionId,
+        authPreference,
+        reason: action.reason?.trim() || "agent_turn_v2_worker"
+      });
+      return `Queued task as job ${job.id}. I’ll share progress updates here.`;
+    }
+
+    if (action.type === "shell.exec") {
+      if (!isSandboxTargetEnabled("shell.exec", this.buildSandboxPolicyConfig())) {
+        return "Shell execution is disabled by sandbox policy.";
+      }
+      const toolPolicy = this.evaluateToolPolicy("shell.exec", { sessionId: channelSessionId, authSessionId });
+      if (!toolPolicy.allowed || !this.capabilityPolicy.shellEnabled) {
+        return "Shell execution is currently disabled by policy.";
+      }
+      const command = action.command?.trim();
+      if (!command) {
+        return "Shell action is missing command text.";
+      }
+      const resolvedCwd = this.resolveShellCwd(action.cwd);
+      if (!resolvedCwd.ok) {
+        return resolvedCwd.error;
+      }
+      const shellPolicy = this.evaluateShellCommandPolicy(command);
+      const rerunQuery = action.rerunQuery?.trim() || (await this.findLatestFailedSearchQuery(channelSessionId));
+      if (shellPolicy.blocked) {
+        if (!this.approvalStore) {
+          return `Shell command blocked by policy (${shellPolicy.ruleId}). Approvals are not configured for override.`;
+        }
+        const approval = await this.approvalStore.create(channelSessionId, "shell_exec_override", {
+          command,
+          cwd: resolvedCwd.cwd,
+          blockedRuleId: shellPolicy.ruleId,
+          authSessionId,
+          source: "agent_turn_v2",
+          reason: action.reason ?? "policy_blocked",
+          rerunQuery
+        });
+        return [
+          `Proposed command is blocked by shell policy (${shellPolicy.ruleId}).`,
+          `- cwd: ${resolvedCwd.cwd}`,
+          `- command: ${command}`,
+          `Reply yes/no, or explicit override: approve shell ${approval.token}`
+        ].join("\n");
+      }
+      if (!this.requiresApproval("shell_exec", { sessionId: channelSessionId, authSessionId })) {
+        await this.recordToolUsage(channelSessionId, "shell.exec", {
+          command,
+          cwd: resolvedCwd.cwd,
+          source: "agent_turn_v2_direct"
+        });
+        const output = await this.executeShellCommand(command, resolvedCwd.cwd);
+        return `Executed shell command.\n${output}`;
+      }
+      if (!this.approvalStore) {
+        return "Shell execution requires approvals, but approvals are not configured.";
+      }
+      const approval = await this.approvalStore.create(channelSessionId, "shell_exec", {
+        command,
+        cwd: resolvedCwd.cwd,
+        authSessionId,
+        source: "agent_turn_v2",
+        reason: action.reason ?? "agent_shell_request",
+        rerunQuery
+      });
+      return [
+        "Shell operation ready for approval.",
+        `- cwd: ${resolvedCwd.cwd}`,
+        `- command: ${command}`,
+        "Reply yes/no to approve or reject.",
+        `Optional explicit token: approve ${approval.token}`
+      ].join("\n");
+    }
+
+    return null;
   }
 
   private async queueJobNotification(
@@ -3175,7 +3470,7 @@ export class GatewayService {
   }
 
   private normalizeAllowedDirs(rawDirs: unknown, workspaceDir: string): string[] {
-    const defaults = [path.resolve(workspaceDir)];
+    const defaults = [this.canonicalizePathForScope(path.resolve(workspaceDir))];
     if (!Array.isArray(rawDirs)) {
       return defaults;
     }
@@ -3184,7 +3479,7 @@ export class GatewayService {
         rawDirs
           .map((entry) => String(entry ?? "").trim())
           .filter((entry) => entry.length > 0)
-          .map((entry) => path.resolve(this.expandHomePath(entry)))
+          .map((entry) => this.canonicalizePathForScope(path.resolve(this.expandHomePath(entry))))
       )
     );
     return normalized.length > 0 ? normalized : defaults;
@@ -3283,10 +3578,9 @@ export class GatewayService {
       filteredResults.length > 0 ? filteredResults : requestedClasses.length === 0 ? classifiedResults : [];
 
     const promptParts = [
-      "You are answering with optional memory context.",
-      "This is a reasoning-only turn. Do not execute commands, modify files, send messages, or claim side effects were performed.",
-      "If the user asks for side effects, propose a concrete next action and ask for explicit approval.",
-      "If memory snippets are relevant, use them and cite source as [path:start:end]."
+      "You are Alfred and this is live conversational context.",
+      "Use memory snippets only when relevant and cite source as [path:start:end].",
+      "Never claim execution already happened unless a tool/action result confirms it."
     ];
     if (historyLines.length > 0) {
       promptParts.push("Recent conversation context (oldest first):");
@@ -3744,7 +4038,8 @@ export class GatewayService {
   }
 
   private resolveShellCwd(rawCwd?: string): { ok: true; cwd: string } | { ok: false; error: string } {
-    const requested = typeof rawCwd === "string" && rawCwd.trim() ? rawCwd.trim() : this.capabilityPolicy.workspaceDir;
+    const requested =
+      typeof rawCwd === "string" && rawCwd.trim() ? this.normalizeUserPath(rawCwd.trim()) : this.capabilityPolicy.workspaceDir;
     const expanded = this.expandHomePath(requested);
     const candidateRaw = path.isAbsolute(expanded)
       ? path.resolve(expanded)
@@ -3758,6 +4053,17 @@ export class GatewayService {
       };
     }
     return { ok: true, cwd: candidate };
+  }
+
+  private inferAllowedCwdFromText(rawText: string): string | null {
+    const candidates = rawText.match(/(?:~\/|\/)[^\s"'`]+/g) ?? [];
+    for (const candidateRaw of candidates) {
+      const resolved = this.resolveShellCwd(candidateRaw);
+      if (resolved.ok) {
+        return resolved.cwd;
+      }
+    }
+    return null;
   }
 
   private isPathInsideRoot(targetPath: string, rootPath: string): boolean {
@@ -3781,6 +4087,11 @@ export class GatewayService {
   private stripInvisiblePathChars(rawPath: string): string {
     // Remove common hidden code points that frequently appear in copied paths.
     return rawPath.normalize("NFKC").replace(/[\u200B-\u200D\uFEFF]/g, "");
+  }
+
+  private normalizeUserPath(rawPath: string): string {
+    const stripped = this.stripInvisiblePathChars(rawPath).trim();
+    return stripped.replace(/^['"`]+|['"`]+$/g, "").replace(/[.,;:]+$/g, "");
   }
 
   private normalizePathForScopeComparison(value: string): string {

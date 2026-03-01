@@ -134,6 +134,29 @@ describe("GatewayService llm path", () => {
     expect(approved.response).toContain("Approved action executed: send 'hello from approval test'");
   });
 
+  it("treats natural approval phrases as approve_latest when a pending action exists", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-implicit-approval-phrase-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const service = new GatewayService(queueStore, undefined, undefined, undefined, undefined, approvalStore);
+    const gated = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "send hello from phrase approval",
+      requestJob: false
+    });
+    expect(gated.response).toContain("Approval required");
+
+    const approved = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Approve search - do a general search",
+      requestJob: false
+    });
+    expect(approved.response).toContain("Approved action executed: send 'hello from phrase approval'");
+  });
+
   it("creates supervised fan-out web jobs and exposes supervisor status", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-supervisor-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);
@@ -397,7 +420,7 @@ describe("GatewayService llm path", () => {
     const trace = traces[0];
     expect(trace?.text).toContain("Planner selected web_research");
     expect(trace?.metadata?.plannerIntent).toBe("web_research");
-    expect(trace?.metadata?.plannerChosenAction).toBe("enqueue_worker_agentic_turn");
+    expect(trace?.metadata?.plannerChosenAction).toBe("enqueue_heuristic_long_task");
     expect(trace?.metadata?.plannerReason).toBe("unit_test_planner");
     expect(trace?.metadata?.plannerNeedsWorker).toBe(true);
     expect(trace?.metadata?.plannerWillDelegateWorker).toBe(true);
@@ -587,7 +610,7 @@ describe("GatewayService llm path", () => {
       requestJob: false
     });
     expect(routed.mode).toBe("async-job");
-    expect(routed.response).toContain("research + document delivery");
+    expect(routed.response).toContain("research + file delivery");
 
     const jobs = await queueStore.listJobs();
     expect(jobs.length).toBe(1);
@@ -598,7 +621,7 @@ describe("GatewayService llm path", () => {
     expect(directRunSpec?.steps?.[2]?.input?.fileFormat).toBe("txt");
   });
 
-  it("delegates command-intent plans to worker when planner marks needsWorker", async () => {
+  it("treats command-intent planner output as advisory and still runs chat turn", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-command-worker-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);
     await queueStore.ensureReady();
@@ -651,16 +674,14 @@ describe("GatewayService llm path", () => {
       requestJob: false
     });
 
-    expect(result.mode).toBe("async-job");
-    expect(result.response).toContain("Queued research as job");
-
+    expect(result.mode).toBe("chat");
+    expect(result.response).toContain("fallback-chat");
     const jobs = await queueStore.listJobs();
-    expect(jobs.length).toBe(1);
-    expect(jobs[0]?.payload?.taskType).toBe("agentic_turn");
-    expect(llm.generateText).not.toHaveBeenCalled();
+    expect(jobs.length).toBe(0);
+    expect(llm.generateText).toHaveBeenCalledTimes(1);
   });
 
-  it("forces worker delegation for web_research intent even when planner sets needsWorker=false", async () => {
+  it("does not force worker delegation from planner web_research hints alone", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-force-web-worker-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);
     await queueStore.ensureReady();
@@ -713,15 +734,14 @@ describe("GatewayService llm path", () => {
       requestJob: false
     });
 
-    expect(result.mode).toBe("async-job");
-    expect(result.response).toContain("Queued research as job");
+    expect(result.mode).toBe("chat");
+    expect(result.response).toContain("fallback-chat");
     const jobs = await queueStore.listJobs();
-    expect(jobs.length).toBe(1);
-    expect(jobs[0]?.payload?.taskType).toBe("agentic_turn");
-    expect(llm.generateText).not.toHaveBeenCalled();
+    expect(jobs.length).toBe(0);
+    expect(llm.generateText).toHaveBeenCalledTimes(1);
   });
 
-  it("forces worker delegation when planner marks sendAttachment=true with query even if needsWorker=false", async () => {
+  it("does not force attachment worker delegation from planner hints alone", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-force-attachment-worker-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);
     await queueStore.ensureReady();
@@ -778,12 +798,11 @@ describe("GatewayService llm path", () => {
       requestJob: false
     });
 
-    expect(result.mode).toBe("async-job");
-    expect(result.response).toContain("research + document delivery");
+    expect(result.mode).toBe("chat");
+    expect(result.response).toContain("fallback-chat");
     const jobs = await queueStore.listJobs();
-    expect(jobs.length).toBe(1);
-    expect(jobs[0]?.payload?.taskType).toBe("run_spec");
-    expect(llm.generateText).not.toHaveBeenCalled();
+    expect(jobs.length).toBe(0);
+    expect(llm.generateText).toHaveBeenCalledTimes(1);
   });
 
   it("routes planner command+needsWorker local ops to approval-gated shell path instead of research worker", async () => {
@@ -857,7 +876,7 @@ describe("GatewayService llm path", () => {
     expect(jobs.length).toBe(0);
   });
 
-  it("returns deterministic status response for planner status_query intent without invoking chat turn", async () => {
+  it("treats planner status_query as advisory and allows chat turn execution", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-status-intent-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);
     await queueStore.ensureReady();
@@ -904,8 +923,8 @@ describe("GatewayService llm path", () => {
       requestJob: false
     });
     expect(result.mode).toBe("chat");
-    expect(result.response).toBe("No active long-running job for this session.");
-    expect(llm.generateText).not.toHaveBeenCalled();
+    expect(result.response).toBe("this should not be used");
+    expect(llm.generateText).toHaveBeenCalledTimes(1);
   });
 
   it("provides execution policy preview for debugging delegation decisions", async () => {
@@ -1212,6 +1231,93 @@ describe("GatewayService llm path", () => {
     expect(calls.length).toBe(1);
     expect(String(calls[0]?.[1] ?? "")).toContain("local-ops planner");
     expect(calls[0]?.[2]).toEqual({ authPreference: "auto", executionMode: "reasoning_only" });
+  });
+
+  it("reruns latest failed search query after approved local shell recovery action", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-local-ops-rerun-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const failed = await queueStore.createJob({
+      type: "stub_task",
+      payload: {
+        sessionId: "owner@s.whatsapp.net",
+        taskType: "agentic_turn",
+        query: "current EPL top 10 standings"
+      },
+      priority: 5
+    });
+    await queueStore.failJob(failed.id, {
+      code: "web_search_no_results",
+      message: "fetch failed"
+    });
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          needsClarification: false,
+          command: "echo searxng_started",
+          cwd: workspaceDir,
+          reason: "recover_search",
+          confidence: 0.92
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "balanced",
+        approvalDefault: true,
+        webSearchEnabled: true,
+        shellEnabled: true,
+        shellAllowedDirs: [workspaceDir]
+      }
+    );
+
+    const proposed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "searxng is down, please start the local service",
+      requestJob: false
+    });
+    expect(proposed.response).toContain("Local operation ready for approval.");
+
+    const approved = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "yes",
+      requestJob: false
+    });
+    expect(approved.response).toContain("Approved action executed: shell_exec");
+    expect(approved.response).toContain("Rerunning prior task as job");
+
+    const jobs = await queueStore.listJobs();
+    const rerun = jobs.filter(
+      (job) =>
+        job.status === "queued" &&
+        String(job.payload.sessionId ?? "") === "owner@s.whatsapp.net" &&
+        String(job.payload.query ?? "") === "current EPL top 10 standings"
+    );
+    expect(rerun.length).toBe(1);
   });
 
   it("accepts local-ops cwd when allowlisted root is a symlink to the same directory", async () => {
@@ -1723,7 +1829,7 @@ describe("GatewayService llm path", () => {
 
     const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(calls.length).toBe(1);
-    expect(calls[0]?.[2]).toEqual({ authPreference: "api_key", executionMode: "reasoning_only" });
+    expect(calls[0]?.[2]).toEqual({ authPreference: "api_key" });
   });
 
   it("records run-ledger phases for a successful chat turn", async () => {
@@ -1935,8 +2041,9 @@ describe("GatewayService llm path", () => {
 
     const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(calls.length).toBe(1);
-    expect(calls[0]?.[1]).toBe("new question");
-    expect(calls[0]?.[2]).toEqual({ authPreference: "auto", executionMode: "reasoning_only" });
+    expect(String(calls[0]?.[1] ?? "")).toContain("new question");
+    expect(String(calls[0]?.[1] ?? "")).not.toContain("old assistant line");
+    expect(calls[0]?.[2]).toEqual({ authPreference: "auto" });
   });
 
   it("still injects transcript context when api_key mode is forced", async () => {
@@ -2011,7 +2118,7 @@ describe("GatewayService llm path", () => {
     expect(calls.length).toBe(1);
     expect(String(calls[0]?.[1] ?? "")).toContain("Recent conversation context");
     expect(String(calls[0]?.[1] ?? "")).toContain("assistant: prior assistant detail");
-    expect(calls[0]?.[2]).toEqual({ authPreference: "api_key", executionMode: "reasoning_only" });
+    expect(calls[0]?.[2]).toEqual({ authPreference: "api_key" });
   });
 
   it("grants file-write approval once per auth session when configured", async () => {
