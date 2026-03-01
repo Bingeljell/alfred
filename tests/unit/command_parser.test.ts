@@ -149,5 +149,7 @@ describe("parseCommand", () => {
     expect(parseCommand("/approve shell tok_2")).toEqual({ kind: "approve", token: "tok_2" });
     expect(parseCommand("reject shell tok_3")).toEqual({ kind: "reject", token: "tok_3" });
     expect(parseCommand("/reject shell tok_4")).toEqual({ kind: "reject", token: "tok_4" });
+    expect(parseCommand("approve search")).toBeNull();
+    expect(parseCommand("approve search - do a general search")).toBeNull();
   });
 });

@@ -745,32 +745,31 @@ export class GatewayService {
     }
 
     if (plan.intent === "status_query") {
-      const progressStatus = await this.answerProgressQuery(input.inbound.sessionId, input.inbound.text);
-      if (progressStatus) {
-        await input.recordPlannerTrace("reply_progress_status");
-        await runPersistPhase({ markPhase: input.markPhase }, "Persisting status-query response");
-        await this.recordConversation(input.inbound.sessionId, "outbound", progressStatus, {
-          source: "gateway",
-          channel: "internal",
-          kind: "job",
-          metadata: {
-            authSessionId: input.authSessionId,
-            runId: input.runId,
-            progressQuery: true,
-            plannerIntent: plan.intent,
-            plannerConfidence: plan.confidence,
-            plannerReason: plan.reason
-          }
-        });
-        return {
-          accepted: true,
-          mode: "chat",
-          response: progressStatus
-        };
-      }
+      const progressStatus = await this.latestJobStatusMessage(input.inbound.sessionId);
+      await input.recordPlannerTrace("reply_progress_status");
+      await runPersistPhase({ markPhase: input.markPhase }, "Persisting status-query response");
+      await this.recordConversation(input.inbound.sessionId, "outbound", progressStatus, {
+        source: "gateway",
+        channel: "internal",
+        kind: "job",
+        metadata: {
+          authSessionId: input.authSessionId,
+          runId: input.runId,
+          progressQuery: true,
+          plannerIntent: plan.intent,
+          plannerConfidence: plan.confidence,
+          plannerReason: plan.reason
+        }
+      });
+      return {
+        accepted: true,
+        mode: "chat",
+        response: progressStatus
+      };
     }
 
-    if (plan.needsWorker && plan.query?.trim() && plan.intent !== "status_query") {
+    const forcedWebResearchDelegation = plan.intent === "web_research" && Boolean(plan.query?.trim()) && !plan.needsWorker;
+    if ((plan.needsWorker || forcedWebResearchDelegation) && plan.query?.trim()) {
       if (plan.sendAttachment) {
         const runSpecRunId = input.runId ?? randomUUID();
         const runSpec = this.buildWebToFileRunSpec({
@@ -790,8 +789,8 @@ export class GatewayService {
             approvedStepIds: [],
             authSessionId: input.authSessionId,
             authPreference: input.authPreference,
-            reason: `planner_${plan.reason}`
-          });
+          reason: `planner_${plan.reason}`
+        });
           const response =
             approvalResponse ??
             "Approval flow is configured but no approval checkpoint was found for this run.";
@@ -862,7 +861,11 @@ export class GatewayService {
         authPreference: input.authPreference,
         reason: `planner_${plan.reason}`
       });
-      await input.recordPlannerTrace("enqueue_worker_agentic_turn", { jobId: job.id, taskType: "agentic_turn" });
+      await input.recordPlannerTrace("enqueue_worker_agentic_turn", {
+        jobId: job.id,
+        taskType: "agentic_turn",
+        forcedByIntent: forcedWebResearchDelegation
+      });
       await input.markRunNote("Planner delegated to worker", { jobId: job.id, reason: plan.reason });
       const response = `Queued research as job ${job.id}. I will share concise progress and final results here.`;
       await runPersistPhase({ markPhase: input.markPhase }, "Persisting worker delegation response");
@@ -1744,7 +1747,10 @@ export class GatewayService {
     if (!this.looksLikeProgressQuery(rawText)) {
       return null;
     }
+    return this.latestJobStatusMessage(sessionId);
+  }
 
+  private async latestJobStatusMessage(sessionId: string): Promise<string> {
     const active = await this.findLatestActiveJob(sessionId);
     if (!active) {
       return "No active long-running job for this session.";

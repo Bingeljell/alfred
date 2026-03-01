@@ -656,6 +656,118 @@ describe("GatewayService llm path", () => {
     expect(llm.generateText).not.toHaveBeenCalled();
   });
 
+  it("forces worker delegation for web_research intent even when planner sets needsWorker=false", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-force-web-worker-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "fallback-chat"
+      })
+    };
+
+    const planner = {
+      plan: vi.fn().mockResolvedValue({
+        intent: "web_research",
+        confidence: 0.93,
+        needsWorker: false,
+        query: "quick search on middle east news right now",
+        provider: "searxng",
+        sendAttachment: false,
+        reason: "unit_test_web_research_without_needs_worker"
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      llm as never,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        approvalDefault: true,
+        webSearchEnabled: true
+      },
+      undefined,
+      undefined,
+      planner as never
+    );
+
+    const result = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Hey Alfred, can you do a quick search of what's happening in the middle east right now",
+      requestJob: false
+    });
+
+    expect(result.mode).toBe("async-job");
+    expect(result.response).toContain("Queued research as job");
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(1);
+    expect(jobs[0]?.payload?.taskType).toBe("agentic_turn");
+    expect(llm.generateText).not.toHaveBeenCalled();
+  });
+
+  it("returns deterministic status response for planner status_query intent without invoking chat turn", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-status-intent-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "this should not be used"
+      })
+    };
+
+    const planner = {
+      plan: vi.fn().mockResolvedValue({
+        intent: "status_query",
+        confidence: 0.96,
+        needsWorker: false,
+        reason: "unit_test_status_query"
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      llm as never,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      planner as never
+    );
+
+    const result = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "so are you doing anything?",
+      requestJob: false
+    });
+    expect(result.mode).toBe("chat");
+    expect(result.response).toBe("No active long-running job for this session.");
+    expect(llm.generateText).not.toHaveBeenCalled();
+  });
+
   it("serves #next pages from paged response store", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-next-page-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);

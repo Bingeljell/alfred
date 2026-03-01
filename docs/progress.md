@@ -20,6 +20,9 @@
 
 ## Recent Task Updates
 
+- 2026-03-01: Fixed a critical planner/runtime mismatch causing `web_research` plans to fall through to `run_chat_turn` (reasoning-only) when planner returned `needsWorker=false`; gateway now force-delegates `web_research` intents with query payloads to worker execution.
+- 2026-03-01: Fixed approval UX parsing so natural-language acknowledgements like `approve search` are no longer interpreted as approval-token commands; token command parsing now accepts explicit token-like values only.
+- 2026-03-01: Fixed status intent handling so planner `status_query` always returns deterministic active-job state (`Latest job ...` or `No active long-running job...`) instead of falling back into chat-turn responses.
 - 2026-03-01: Hardened chat safety + local ops routing: `run_chat_turn` is now explicitly reasoning-only across Codex/Responses backends (`executionMode=reasoning_only`), natural-language local operation requests are converted into approval-gated `shell_exec` proposals, and shell execution now enforces allowlisted cwd roots before any command can run.
 - 2026-03-01: Added shell scope/operator ergonomics updates with `ALFRED_SHELL_ALLOWED_DIRS` config wiring, `--cwd` support on `/shell` and `/exec`, and unit coverage updates for parser/config/local-ops approval flow plus worker progress-event timing stability.
 - 2026-02-28: Consolidated architecture direction into canonical docs by adding `docs/architecture_principles.md` and wiring cross-links from vision/plan/features/ADR so runtime guidance remains language-agnostic and durable (`minimal core`, `gateway control plane`, `typed safety-tier tools`, `hybrid execution`, `worker execution plane`, `policy-first security`, `observability-first`).

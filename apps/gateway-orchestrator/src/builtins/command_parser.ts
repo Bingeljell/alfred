@@ -313,7 +313,7 @@ export function parseCommand(text: string): ParsedCommand | null {
   if (value.toLowerCase().startsWith("approve shell ") || value.toLowerCase().startsWith("/approve shell ")) {
     const offset = value.toLowerCase().startsWith("/approve shell ") ? 15 : 14;
     const token = value.slice(offset).trim();
-    if (token) {
+    if (isApprovalTokenCandidate(token)) {
       return { kind: "approve", token };
     }
   }
@@ -321,7 +321,7 @@ export function parseCommand(text: string): ParsedCommand | null {
   if (value.toLowerCase().startsWith("approve ") || value.toLowerCase().startsWith("/approve ")) {
     const offset = value.toLowerCase().startsWith("/approve ") ? 9 : 8;
     const token = value.slice(offset).trim();
-    if (token) {
+    if (isApprovalTokenCandidate(token)) {
       return { kind: "approve", token };
     }
   }
@@ -329,7 +329,7 @@ export function parseCommand(text: string): ParsedCommand | null {
   if (value.toLowerCase().startsWith("reject shell ") || value.toLowerCase().startsWith("/reject shell ")) {
     const offset = value.toLowerCase().startsWith("/reject shell ") ? 14 : 13;
     const token = value.slice(offset).trim();
-    if (token) {
+    if (isApprovalTokenCandidate(token)) {
       return { kind: "reject", token };
     }
   }
@@ -337,10 +337,21 @@ export function parseCommand(text: string): ParsedCommand | null {
   if (value.toLowerCase().startsWith("reject ") || value.toLowerCase().startsWith("/reject ")) {
     const offset = value.toLowerCase().startsWith("/reject ") ? 8 : 7;
     const token = value.slice(offset).trim();
-    if (token) {
+    if (isApprovalTokenCandidate(token)) {
       return { kind: "reject", token };
     }
   }
 
   return null;
+}
+
+function isApprovalTokenCandidate(token: string): boolean {
+  if (!token || /\s/.test(token)) {
+    return false;
+  }
+  // Store issues 8-char hex tokens today; keep a broader fallback requiring at least one digit.
+  if (/^[a-f0-9]{8}$/i.test(token)) {
+    return true;
+  }
+  return /^(?=.*\d)[a-z0-9_-]{4,64}$/i.test(token);
 }
