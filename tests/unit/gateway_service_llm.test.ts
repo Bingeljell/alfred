@@ -40,6 +40,31 @@ describe("GatewayService llm path", () => {
     expect(llm.generateText).toHaveBeenCalledTimes(1);
   });
 
+  it("handles standalone approved/rejected messages when no pending approval exists", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-explicit-approve-no-pending-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "normal chat response",
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(queueStore, undefined, undefined, undefined, undefined, approvalStore, undefined, llm);
+    const approved = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "approved",
+      requestJob: false
+    });
+    expect(approved.response).toContain("No pending approvals for this session.");
+    expect(llm.generateText).not.toHaveBeenCalled();
+  });
+
   it("queues web search command without approval and records tool transparency", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-web-search-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);
@@ -1359,6 +1384,67 @@ describe("GatewayService llm path", () => {
     expect(approved.response).toContain("No target process was found.");
   });
 
+  it("infers process kill cwd from user path when model omits cwd", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-process-kill-cwd-infer-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    const searxDir = path.join(stateDir, "searXNG");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(searxDir, { recursive: true });
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          assistant_response: "I will stop the matching process.",
+          next_action: {
+            type: "process.kill",
+            pattern: "searx.webapp",
+            signal: "TERM",
+            reason: "stop_process"
+          }
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "balanced",
+        approvalDefault: true,
+        shellEnabled: true,
+        shellAllowedDirs: [workspaceDir, searxDir]
+      }
+    );
+
+    const proposed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: `Kill searx process in ${searxDir}`,
+      requestJob: false
+    });
+    expect(proposed.response).toContain("Process termination ready for approval.");
+    expect(proposed.response).toContain("- cwd:");
+    expect(proposed.response).toContain("searXNG");
+  });
+
   it("reruns latest failed search query after approved local shell recovery action", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-local-ops-rerun-unit-"));
     const workspaceDir = path.join(stateDir, "workspace", "alfred");
@@ -1446,6 +1532,72 @@ describe("GatewayService llm path", () => {
         String(job.payload.query ?? "") === "current EPL top 10 standings"
     );
     expect(rerun.length).toBe(1);
+  });
+
+  it("ignores model-provided rerunQuery unless the user explicitly asks to rerun", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-shell-rerun-intent-gate-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          assistant_response: "I can stop it now.",
+          next_action: {
+            type: "shell.exec",
+            command: "echo stopped",
+            cwd: workspaceDir,
+            rerunQuery: "stale query from earlier run",
+            reason: "stop_service"
+          }
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "balanced",
+        approvalDefault: true,
+        shellEnabled: true,
+        shellAllowedDirs: [workspaceDir]
+      }
+    );
+
+    const proposed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Stop the local searx service",
+      requestJob: false
+    });
+    expect(proposed.response).toContain("Shell operation ready for approval.");
+
+    const approved = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "yes",
+      requestJob: false
+    });
+    expect(approved.response).toContain("Approved action executed: shell_exec");
+    expect(approved.response).not.toContain("Rerunning prior task as job");
   });
 
   it("does not rerun search when approved shell recovery command exits non-zero", async () => {

@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-03-01: Fixed agentic local-ops approval/action continuity by handling standalone `approved/rejected` without falling through to new LLM actions, inferring process-action cwd from user text paths when model cwd is missing, and requiring explicit rerun intent before auto-rerunning prior search goals after shell/process actions.
 - 2026-03-01: Improved transcript copy UX on `/ui/transcripts` and console persisted transcript by pausing transcript auto-refresh while users are actively selecting text, eliminating the “select-all while dragging” behavior during copy/paste.
 - 2026-03-01: Added first-class process control actions in the agent loop: `process.list` (read-only inspection) and approval-gated `process.kill` (PID/pattern termination with verification summary), including tool-policy metadata and regression tests for routing/policy behavior.
 - 2026-03-01: Hardened shell/local-ops continuation semantics: shell follow-up reruns now require explicit current-turn rerun intent (instead of implicit stale-session fallback), and command outcomes now include semantic verification for process-control operations (`pkill -f` / `kill <pid>`) so false-positive exit-code success can trigger adaptive next-step replanning.

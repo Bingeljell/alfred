@@ -789,6 +789,7 @@ export class GatewayService {
       const decisionResult = await this.executeImplicitApprovalDecision(
         input.inbound.sessionId,
         implicitApprovalDecision,
+        input.inbound.text,
         input.authSessionId,
         input.authPreference
       );
@@ -1157,6 +1158,7 @@ export class GatewayService {
       const decisionResult = await this.executeImplicitApprovalDecision(
         input.inbound.sessionId,
         implicitApproval,
+        input.inbound.text,
         input.authSessionId,
         input.authPreference
       );
@@ -1991,6 +1993,7 @@ export class GatewayService {
   private async executeImplicitApprovalDecision(
     sessionId: string,
     decision: ImplicitApprovalDecision,
+    rawText: string,
     authSessionId: string,
     authPreference: LlmAuthPreference
   ): Promise<{ handled: boolean; response: string }> {
@@ -2000,6 +2003,9 @@ export class GatewayService {
 
     const pending = await this.approvalStore.peekLatest(sessionId);
     if (!pending) {
+      if (this.isExplicitApprovalKeyword(rawText)) {
+        return { handled: true, response: "No pending approvals for this session." };
+      }
       return { handled: false, response: "" };
     }
 
@@ -2023,6 +2029,21 @@ export class GatewayService {
     }
     const response = await this.executeApprovedAction(approval, sessionId, authSessionId, authPreference);
     return { handled: true, response };
+  }
+
+  private isExplicitApprovalKeyword(rawText: string): boolean {
+    const value = rawText.trim().toLowerCase();
+    if (!value) {
+      return false;
+    }
+    return (
+      value === "approve" ||
+      value === "approved" ||
+      value === "/approve" ||
+      value === "reject" ||
+      value === "rejected" ||
+      value === "/reject"
+    );
   }
 
   private async handlePagingRequest(sessionId: string, rawText: string): Promise<string | null> {
@@ -3420,7 +3441,7 @@ export class GatewayService {
       if (!toolPolicy.allowed || !this.capabilityPolicy.shellEnabled) {
         return "Process inspection is currently disabled by policy.";
       }
-      const resolvedCwd = this.resolveShellCwd(action.cwd);
+      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
       if (!resolvedCwd.ok) {
         return resolvedCwd.error;
       }
@@ -3444,7 +3465,7 @@ export class GatewayService {
       if (!toolPolicy.allowed || !this.capabilityPolicy.shellEnabled) {
         return "Process termination is currently disabled by policy.";
       }
-      const resolvedCwd = this.resolveShellCwd(action.cwd);
+      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
       if (!resolvedCwd.ok) {
         return resolvedCwd.error;
       }
@@ -3458,6 +3479,7 @@ export class GatewayService {
         return "Process kill pattern is too short. Provide at least 3 characters.";
       }
       const signal = action.signal ?? "TERM";
+      const rerunQuery = (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || "";
       if (!this.approvalStore) {
         return "Process termination requires approvals, but approvals are not configured.";
       }
@@ -3469,7 +3491,7 @@ export class GatewayService {
         authSessionId,
         source: "agent_turn_v2",
         reason: action.reason ?? "agent_process_kill_request",
-        rerunQuery: action.rerunQuery?.trim() || undefined
+        rerunQuery: rerunQuery || undefined
       });
       return [
         "Process termination ready for approval.",
@@ -3496,15 +3518,12 @@ export class GatewayService {
       if (!command) {
         return "Shell action is missing command text.";
       }
-      const resolvedCwd = this.resolveShellCwd(action.cwd);
+      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
       if (!resolvedCwd.ok) {
         return resolvedCwd.error;
       }
       const shellPolicy = this.evaluateShellCommandPolicy(command);
-      const rerunQuery =
-        action.rerunQuery?.trim() ||
-        (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) ||
-        "";
+      const rerunQuery = (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || "";
       if (shellPolicy.blocked) {
         if (!this.approvalStore) {
           return `Shell command blocked by policy (${shellPolicy.ruleId}). Approvals are not configured for override.`;
@@ -4282,6 +4301,27 @@ export class GatewayService {
       };
     }
     return { ok: true, cwd: candidate };
+  }
+
+  private resolveAgentActionCwd(rawCwd: string | undefined, rawText: string): { ok: true; cwd: string } | { ok: false; error: string } {
+    const explicitCwd = typeof rawCwd === "string" ? rawCwd.trim() : "";
+    if (explicitCwd) {
+      const resolved = this.resolveShellCwd(explicitCwd);
+      if (resolved.ok) {
+        return resolved;
+      }
+      const fallback = this.inferAllowedCwdFromText(rawText);
+      if (fallback) {
+        return { ok: true, cwd: fallback };
+      }
+      return resolved;
+    }
+
+    const inferred = this.inferAllowedCwdFromText(rawText);
+    if (inferred) {
+      return { ok: true, cwd: inferred };
+    }
+    return this.resolveShellCwd(undefined);
   }
 
   private inferAllowedCwdFromText(rawText: string): string | null {
