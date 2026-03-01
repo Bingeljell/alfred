@@ -103,7 +103,7 @@ describe("worker execution modules", () => {
 
     const progressCalls = reportProgress.mock.calls as unknown as Array<Array<Record<string, unknown> | undefined>>;
     const progressMessages = progressCalls.map((call) => String(call[0]?.message ?? ""));
-    expect(progressMessages.some((item) => String(item).includes("Task accepted. Search focus prepared:"))).toBe(true);
+    expect(progressMessages.some((item) => String(item).includes("Task accepted. Planned research objective:"))).toBe(true);
     expect(progressMessages.some((item) => String(item).includes("Retrieving sources via"))).toBe(true);
     expect(progressMessages).toContain("Composing final recommendation from ranked evidence.");
   });
@@ -349,6 +349,121 @@ describe("worker execution modules", () => {
     expect(search).toHaveBeenCalledTimes(2);
     expect(search.mock.calls[0]?.[1]?.provider).toBe("searxng");
     expect(search.mock.calls[1]?.[1]?.provider).toBe("openai");
+  });
+
+  it("uses direct-answer path for non-research goals without web retrieval", async () => {
+    const search = vi.fn(async () => ({
+      provider: "searxng" as const,
+      text: "unused"
+    }));
+    const generateText = vi
+      .fn()
+      .mockResolvedValueOnce({
+        text: '{"mode":"direct_answer","reason":"no_live_data_needed","searchQuery":""}'
+      })
+      .mockResolvedValueOnce({
+        text: "Orchestration coordinates multi-step workflows, while scheduling determines when tasks run."
+      });
+
+    const processor = createWorkerProcessor({
+      config: {
+        alfredWorkspaceDir: "/tmp/alfred",
+        alfredWebSearchProvider: "searxng"
+      },
+      webSearchService: {
+        search
+      },
+      llmService: {
+        generateText
+      },
+      pagedResponseStore: {
+        setPages: async () => undefined,
+        clear: async () => undefined
+      },
+      notificationStore: {
+        enqueue: async () => undefined
+      },
+      runSpecStore: {
+        put: async () => undefined,
+        setStatus: async () => null,
+        updateStep: async () => null
+      }
+    });
+
+    const result = await processor(
+      {
+        id: "j-agentic-direct-1",
+        type: "stub_task",
+        payload: {
+          taskType: "agentic_turn",
+          query: "Explain the difference between orchestration and scheduling in one paragraph.",
+          sessionId: "owner@s.whatsapp.net",
+          authSessionId: "owner@s.whatsapp.net"
+        },
+        priority: 5,
+        status: "queued",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      {
+        reportProgress: async () => undefined
+      }
+    );
+
+    expect(result.summary).toBe("agentic_turn_direct_answer");
+    expect(String(result.responseText)).toContain("Orchestration coordinates");
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("returns local-ops handoff for machine-operation goals", async () => {
+    const processor = createWorkerProcessor({
+      config: {
+        alfredWorkspaceDir: "/tmp/alfred",
+        alfredWebSearchProvider: "searxng"
+      },
+      webSearchService: {
+        search: async () => null
+      },
+      llmService: {
+        generateText: async () => ({ text: "unused" })
+      },
+      pagedResponseStore: {
+        setPages: async () => undefined,
+        clear: async () => undefined
+      },
+      notificationStore: {
+        enqueue: async () => undefined
+      },
+      runSpecStore: {
+        put: async () => undefined,
+        setStatus: async () => null,
+        updateStep: async () => null
+      }
+    });
+
+    const result = await processor(
+      {
+        id: "j-agentic-local-ops-1",
+        type: "stub_task",
+        payload: {
+          taskType: "agentic_turn",
+          query: "Start the searxng service in /Users/nikhil/Projects/searxng",
+          sessionId: "owner@s.whatsapp.net",
+          authSessionId: "owner@s.whatsapp.net"
+        },
+        priority: 5,
+        status: "queued",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      {
+        reportProgress: async () => undefined
+      }
+    );
+
+    expect(result.summary).toBe("agentic_turn_local_ops_handoff");
+    expect(String(result.responseText)).toContain("local-operations request");
+    expect(String(result.responseText)).toContain("approval-gated local-ops action");
   });
 
   it("asks clarification when ranking reports ambiguity", async () => {

@@ -3,9 +3,11 @@ import type { WorkerProcessor } from "../worker";
 import { executeRunSpec } from "../run_spec_executor";
 
 type AuthPreference = "auto" | "oauth" | "api_key";
+type LlmExecutionMode = "default" | "reasoning_only";
 type SearchProvider = "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto";
 type AttachmentFormat = "md" | "txt" | "doc";
 type ResolvedProvider = "searxng" | "openai" | "brave" | "perplexity" | "brightdata";
+type AgenticObjectiveMode = "research" | "local_ops" | "direct_answer";
 
 type SearchHit = {
   title: string;
@@ -34,6 +36,12 @@ type RankingResult = {
   summary: string;
 };
 
+type AgenticObjective = {
+  mode: AgenticObjectiveMode;
+  reason: string;
+  searchQuery?: string;
+};
+
 export function createWorkerProcessor(input: {
   config: {
     alfredWorkspaceDir: string;
@@ -53,7 +61,7 @@ export function createWorkerProcessor(input: {
     generateText: (
       sessionId: string,
       input: string,
-      options?: { authPreference?: AuthPreference }
+      options?: { authPreference?: AuthPreference; executionMode?: LlmExecutionMode }
     ) => Promise<{ text: string } | null>;
   };
   pagedResponseStore: {
@@ -218,7 +226,6 @@ export function createWorkerProcessor(input: {
 
     if (taskType === "agentic_turn") {
       const goal = String(job.payload.query ?? job.payload.goal ?? job.payload.text ?? "").trim();
-      const searchGoal = buildSearchGoal(goal);
       const requestedProvider = normalizeWebSearchProvider(job.payload.provider) ?? input.config.alfredWebSearchProvider;
       const maxRetries = clampInt(job.payload.maxRetries, 0, 5, 1);
       const timeBudgetMs = clampInt(job.payload.timeBudgetMs, 5000, 10 * 60 * 1000, 120_000);
@@ -237,11 +244,77 @@ export function createWorkerProcessor(input: {
         };
       }
 
+      const objective = await classifyAgenticObjective({
+        goal,
+        llmService: input.llmService,
+        sessionId: authSessionId || sessionId,
+        authPreference,
+        timeoutMs: Math.max(2500, Math.min(9000, Math.floor(timeBudgetMs * 0.12)))
+      });
+      const searchGoal = objective.searchQuery?.trim() || buildSearchGoal(goal);
+
+      if (objective.mode === "local_ops") {
+        await context.reportProgress({
+          step: "planning",
+          phase: "plan",
+          message: "Task accepted. Detected a local operation request and preparing handoff instructions.",
+          details: {
+            objectiveMode: objective.mode,
+            objectiveReason: objective.reason
+          }
+        });
+        const localOpsText = renderLocalOpsHandoff(goal, objective.reason);
+        return finalizePagedTextResponse({
+          sessionId,
+          fullText: localOpsText,
+          pagedResponseStore: input.pagedResponseStore,
+          summary: "agentic_turn_local_ops_handoff",
+          mode: "agentic_turn"
+        });
+      }
+
+      if (objective.mode === "direct_answer") {
+        await context.reportProgress({
+          step: "planning",
+          phase: "plan",
+          message: "Task accepted. Drafting a direct answer without external retrieval.",
+          details: {
+            objectiveMode: objective.mode,
+            objectiveReason: objective.reason
+          }
+        });
+        try {
+          const directPrompt = buildDirectAnswerPrompt(goal);
+          const direct = await withTimeout(
+            input.llmService.generateText(authSessionId || sessionId, directPrompt, {
+              authPreference,
+              executionMode: "reasoning_only"
+            }),
+            Math.max(3000, Math.min(20_000, msRemaining(deadlineAt, 3000))),
+            "agentic_turn_direct_answer_time_budget_exceeded"
+          );
+          const directText = String(direct?.text ?? "").trim();
+          if (directText) {
+            return finalizePagedTextResponse({
+              sessionId,
+              fullText: directText,
+              pagedResponseStore: input.pagedResponseStore,
+              summary: "agentic_turn_direct_answer",
+              mode: "agentic_turn"
+            });
+          }
+        } catch {
+          // If direct-answer generation fails, continue into research flow as fallback.
+        }
+      }
+
       await context.reportProgress({
         step: "planning",
         phase: "plan",
-        message: `Task accepted. Search focus prepared: ${searchGoal.slice(0, 90)}${searchGoal.length > 90 ? "..." : ""}`,
+        message: `Task accepted. Planned research objective: ${searchGoal.slice(0, 90)}${searchGoal.length > 90 ? "..." : ""}`,
         details: {
+          objectiveMode: objective.mode,
+          objectiveReason: objective.reason,
           requestedProvider,
           tokenBudget,
           searchGoal
@@ -785,6 +858,122 @@ function parseRunSpec(raw: unknown): RunSpecV1 | null {
     metadata: record.metadata && typeof record.metadata === "object" ? (record.metadata as Record<string, unknown>) : {},
     steps
   };
+}
+
+async function classifyAgenticObjective(input: {
+  goal: string;
+  llmService: {
+    generateText: (
+      sessionId: string,
+      prompt: string,
+      options?: { authPreference?: AuthPreference; executionMode?: LlmExecutionMode }
+    ) => Promise<{ text: string } | null>;
+  };
+  sessionId: string;
+  authPreference: AuthPreference;
+  timeoutMs: number;
+}): Promise<AgenticObjective> {
+  const heuristic = classifyAgenticObjectiveHeuristic(input.goal);
+  if (heuristic.mode !== "direct_answer") {
+    return heuristic;
+  }
+  const prompt = [
+    "Classify the task objective for Alfred worker routing.",
+    "Return STRICT JSON only:",
+    '{"mode":"research|local_ops|direct_answer","reason":"","searchQuery":""}',
+    "",
+    "Rules:",
+    "- Use mode=research for web/news/live lookup or comparative research requests.",
+    "- Use mode=local_ops for local machine/service/path/process/shell operations.",
+    "- Use mode=direct_answer for pure reasoning/explanation that does not need retrieval.",
+    "- For non-research modes, keep searchQuery empty.",
+    "",
+    `Goal: ${input.goal}`
+  ].join("\n");
+
+  try {
+    const generated = await withTimeout(
+      input.llmService.generateText(input.sessionId, prompt, {
+        authPreference: input.authPreference,
+        executionMode: "reasoning_only"
+      }),
+      input.timeoutMs,
+      "agentic_turn_objective_classification_time_budget_exceeded"
+    );
+    const parsed = parseAgenticObjective(generated?.text ?? "");
+    if (!parsed) {
+      return heuristic;
+    }
+    return parsed;
+  } catch {
+    return heuristic;
+  }
+}
+
+function classifyAgenticObjectiveHeuristic(goal: string): AgenticObjective {
+  const text = goal.toLowerCase();
+  const localOps =
+    /\b(start|restart|stop|run|launch|kill|tail|logs?|process|service|server|daemon|port|folder|directory|path|repo|python|node|npm|docker|compose)\b/.test(
+      text
+    ) && /\b(local|machine|workspace|project|searxng|gateway|worker|\/users\/|~\/)\b/.test(text);
+  if (localOps) {
+    return {
+      mode: "local_ops",
+      reason: "heuristic_local_ops"
+    };
+  }
+  const research = /\b(search|research|latest|current|news|compare|comparison|best|review|rank|orchestrator|table|standings)\b/.test(text);
+  if (research) {
+    return {
+      mode: "research",
+      reason: "heuristic_research",
+      searchQuery: buildSearchGoal(goal)
+    };
+  }
+  return {
+    mode: "direct_answer",
+    reason: "heuristic_direct_answer"
+  };
+}
+
+function parseAgenticObjective(raw: string): AgenticObjective | null {
+  const parsed = parseJsonObjectFromText(raw);
+  if (!parsed) {
+    return null;
+  }
+  const modeRaw = String(parsed.mode ?? "").trim().toLowerCase();
+  if (modeRaw !== "research" && modeRaw !== "local_ops" && modeRaw !== "direct_answer") {
+    return null;
+  }
+  const mode: AgenticObjectiveMode = modeRaw;
+  const reason = String(parsed.reason ?? "").trim() || "llm_classification";
+  const searchQuery = mode === "research" ? String(parsed.searchQuery ?? "").trim() : "";
+  return {
+    mode,
+    reason,
+    ...(searchQuery ? { searchQuery } : {})
+  };
+}
+
+function buildDirectAnswerPrompt(goal: string): string {
+  return [
+    "You are Alfred.",
+    "Answer concisely and directly.",
+    "If the question requires current/live data, state that live retrieval is needed.",
+    "",
+    `Goal: ${goal}`
+  ].join("\n");
+}
+
+function renderLocalOpsHandoff(goal: string, reason: string): string {
+  return [
+    "I detected this as a local-operations request.",
+    "I cannot safely execute local shell/file operations from this worker path directly.",
+    "Please send the same request again in the main chat flow so Gateway can create an approval-gated local-ops action.",
+    "",
+    `Goal: ${goal}`,
+    `Classifier: ${reason}`
+  ].join("\n");
 }
 
 function buildSearchGoal(goal: string): string {
@@ -1347,6 +1536,32 @@ async function finalizePagedAgenticResponse(input: {
     recommendationMode: input.recommendationMode,
     sourceStats: input.sourceStats,
     elapsedSec: input.elapsedSec
+  };
+}
+
+async function finalizePagedTextResponse(input: {
+  sessionId: string;
+  fullText: string;
+  pagedResponseStore: {
+    setPages: (sessionId: string, pages: string[]) => Promise<void>;
+    clear: (sessionId: string) => Promise<void>;
+  };
+  summary: string;
+  mode?: "agentic_turn";
+}) {
+  const pages = paginateResponse(input.fullText, 2800, 4);
+  const firstPage = pages[0] ?? input.fullText;
+  if (input.sessionId && pages.length > 1) {
+    await input.pagedResponseStore.setPages(input.sessionId, pages.slice(1));
+  } else if (input.sessionId) {
+    await input.pagedResponseStore.clear(input.sessionId);
+  }
+  const responseText = pages.length > 1 ? `${firstPage}\n\nReply #next for more (${pages.length - 1} remaining).` : firstPage;
+  return {
+    summary: input.summary,
+    responseText,
+    mode: input.mode ?? "agentic_turn",
+    pageCount: pages.length
   };
 }
 
