@@ -418,7 +418,7 @@ describe("GatewayService llm path", () => {
     const traces = events.filter((event) => event.metadata?.plannerTrace === true);
     expect(traces.length).toBe(1);
     const trace = traces[0];
-    expect(trace?.text).toContain("Planner selected web_research");
+    expect(trace?.text).toContain("Planner hint web_research");
     expect(trace?.metadata?.plannerIntent).toBe("web_research");
     expect(trace?.metadata?.plannerChosenAction).toBe("enqueue_heuristic_long_task");
     expect(trace?.metadata?.plannerReason).toBe("unit_test_planner");
@@ -817,11 +817,13 @@ describe("GatewayService llm path", () => {
     const llm = {
       generateText: vi.fn().mockResolvedValue({
         text: JSON.stringify({
-          needsClarification: false,
-          command: "echo searxng_started",
-          cwd: workspaceDir,
-          reason: "start_local_service",
-          confidence: 0.93
+          assistant_response: "I can run that local operation after approval.",
+          next_action: {
+            type: "shell.exec",
+            command: "echo searxng_started",
+            cwd: workspaceDir,
+            reason: "start_local_service"
+          }
         })
       })
     };
@@ -871,7 +873,7 @@ describe("GatewayService llm path", () => {
     });
 
     expect(result.mode).toBe("chat");
-    expect(result.response).toContain("Local operation ready for approval.");
+    expect(result.response).toContain("Shell operation ready for approval.");
     const jobs = await queueStore.listJobs();
     expect(jobs.length).toBe(0);
   });
@@ -1174,12 +1176,13 @@ describe("GatewayService llm path", () => {
     const llm = {
       generateText: vi.fn().mockResolvedValue({
         text: JSON.stringify({
-          needsClarification: false,
-          question: "",
-          command: "echo searxng_ok",
-          cwd: workspaceDir,
-          reason: "restart_local_service",
-          confidence: 0.91
+          assistant_response: "I can restart that now.",
+          next_action: {
+            type: "shell.exec",
+            command: "echo searxng_ok",
+            cwd: workspaceDir,
+            reason: "restart_local_service"
+          }
         }),
         model: "gpt-4.1-mini",
         authMode: "api_key"
@@ -1216,7 +1219,7 @@ describe("GatewayService llm path", () => {
       requestJob: false
     });
     expect(proposed.mode).toBe("chat");
-    expect(proposed.response).toContain("Local operation ready for approval.");
+    expect(proposed.response).toContain("Shell operation ready for approval.");
     expect(proposed.response).toContain("echo searxng_ok");
 
     const approved = await service.handleInbound({
@@ -1229,8 +1232,8 @@ describe("GatewayService llm path", () => {
 
     const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(calls.length).toBe(1);
-    expect(String(calls[0]?.[1] ?? "")).toContain("local-ops planner");
-    expect(calls[0]?.[2]).toEqual({ authPreference: "auto", executionMode: "reasoning_only" });
+    expect(String(calls[0]?.[1] ?? "")).toContain("goal-oriented orchestrator");
+    expect(calls[0]?.[2]).toEqual({ authPreference: "auto" });
   });
 
   it("reruns latest failed search query after approved local shell recovery action", async () => {
@@ -1259,11 +1262,13 @@ describe("GatewayService llm path", () => {
     const llm = {
       generateText: vi.fn().mockResolvedValue({
         text: JSON.stringify({
-          needsClarification: false,
-          command: "echo searxng_started",
-          cwd: workspaceDir,
-          reason: "recover_search",
-          confidence: 0.92
+          assistant_response: "I can recover the search backend now.",
+          next_action: {
+            type: "shell.exec",
+            command: "echo searxng_started",
+            cwd: workspaceDir,
+            reason: "recover_search"
+          }
         }),
         model: "gpt-4.1-mini",
         authMode: "api_key"
@@ -1300,7 +1305,7 @@ describe("GatewayService llm path", () => {
       text: "searxng is down, please start the local service",
       requestJob: false
     });
-    expect(proposed.response).toContain("Local operation ready for approval.");
+    expect(proposed.response).toContain("Shell operation ready for approval.");
 
     const approved = await service.handleInbound({
       sessionId: "owner@s.whatsapp.net",
@@ -1337,12 +1342,13 @@ describe("GatewayService llm path", () => {
     const llm = {
       generateText: vi.fn().mockResolvedValue({
         text: JSON.stringify({
-          needsClarification: false,
-          question: "",
-          command: "python -m searx.webapp",
-          cwd: realAllowedRoot,
-          reason: "start_local_service",
-          confidence: 0.9
+          assistant_response: "I'll start the local service after approval.",
+          next_action: {
+            type: "shell.exec",
+            command: "python -m searx.webapp",
+            cwd: realAllowedRoot,
+            reason: "start_local_service"
+          }
         }),
         model: "gpt-4.1-mini",
         authMode: "api_key"
@@ -1379,7 +1385,7 @@ describe("GatewayService llm path", () => {
       requestJob: false
     });
     expect(proposed.mode).toBe("chat");
-    expect(proposed.response).toContain("Local operation ready for approval.");
+    expect(proposed.response).toContain("Shell operation ready for approval.");
     expect(proposed.response).toContain("python -m searx.webapp");
   });
 
@@ -1399,12 +1405,13 @@ describe("GatewayService llm path", () => {
     const llm = {
       generateText: vi.fn().mockResolvedValue({
         text: JSON.stringify({
-          needsClarification: false,
-          question: "",
-          command: "python -m searx.webapp",
-          cwd: mixedCaseCwd,
-          reason: "start_local_service",
-          confidence: 0.92
+          assistant_response: "I'll run that service startup command.",
+          next_action: {
+            type: "shell.exec",
+            command: "python -m searx.webapp",
+            cwd: mixedCaseCwd,
+            reason: "start_local_service"
+          }
         }),
         model: "gpt-4.1-mini",
         authMode: "api_key"
@@ -1442,7 +1449,7 @@ describe("GatewayService llm path", () => {
     });
 
     if (process.platform === "darwin" || process.platform === "win32") {
-      expect(proposed.response).toContain("Local operation ready for approval.");
+      expect(proposed.response).toContain("Shell operation ready for approval.");
     } else {
       expect(proposed.response).toContain("outside allowed scope");
     }

@@ -472,7 +472,7 @@ export class GatewayService {
           plannerTraceLogged = true;
           const delegation = this.describeWorkerDelegationDecision(plan);
           const confidence = Number.isFinite(plan.confidence) ? plan.confidence : 0;
-          const message = `Planner selected ${plan.intent} (${Math.round(confidence * 100)}%) -> ${chosenAction}`;
+          const message = `Planner hint ${plan.intent} (${Math.round(confidence * 100)}%) -> ${chosenAction}`;
           await this.recordConversation(inbound.sessionId, "system", message, {
             source: "gateway",
             channel: "internal",
@@ -1187,6 +1187,33 @@ export class GatewayService {
       };
     }
 
+    if (this.llmService) {
+      await runRoutePhase({ markPhase: input.markPhase }, "Running agentic chat turn");
+      await input.recordPlannerTrace("run_chat_turn");
+      const response = await this.executeChatTurn(
+        input.inbound.sessionId,
+        input.authSessionId,
+        input.inbound.text,
+        input.authPreference
+      );
+      await runPersistPhase({ markPhase: input.markPhase }, "Persisting chat response");
+      await this.recordConversation(input.inbound.sessionId, "outbound", response, {
+        source: "gateway",
+        channel: "internal",
+        kind: "chat",
+        metadata: {
+          authSessionId: input.authSessionId,
+          runId: input.runId,
+          authPreference: input.authPreference
+        }
+      });
+      return {
+        accepted: true,
+        mode: "chat",
+        response
+      };
+    }
+
     const localOpsRoute = await this.routeNaturalLanguageLocalOpsRequest(
       input.inbound.sessionId,
       input.inbound.text,
@@ -1217,33 +1244,6 @@ export class GatewayService {
         accepted: true,
         mode: "chat",
         response: localOpsRoute.response
-      };
-    }
-
-    if (this.llmService) {
-      await runRoutePhase({ markPhase: input.markPhase }, "Running agentic chat turn");
-      await input.recordPlannerTrace("run_chat_turn");
-      const response = await this.executeChatTurn(
-        input.inbound.sessionId,
-        input.authSessionId,
-        input.inbound.text,
-        input.authPreference
-      );
-      await runPersistPhase({ markPhase: input.markPhase }, "Persisting chat response");
-      await this.recordConversation(input.inbound.sessionId, "outbound", response, {
-        source: "gateway",
-        channel: "internal",
-        kind: "chat",
-        metadata: {
-          authSessionId: input.authSessionId,
-          runId: input.runId,
-          authPreference: input.authPreference
-        }
-      });
-      return {
-        accepted: true,
-        mode: "chat",
-        response
       };
     }
 
@@ -2214,10 +2214,14 @@ export class GatewayService {
 
     let raw = "";
     try {
-      const result = await this.llmService.generateText(authSessionId, prompt, {
-        authPreference,
-        executionMode: "reasoning_only"
-      });
+      const result = await this.withLlmTimeout(
+        this.llmService.generateText(authSessionId, prompt, {
+          authPreference,
+          executionMode: "reasoning_only"
+        }),
+        15_000,
+        "local_ops_planner_timeout"
+      );
       raw = result?.text?.trim() ?? "";
     } catch {
       return null;
@@ -3096,9 +3100,13 @@ export class GatewayService {
 
     try {
       const decisionPrompt = this.buildAgentTurnDecisionPrompt(prepared.prompt);
-      const result = await this.llmService.generateText(authSessionId, decisionPrompt, {
-        authPreference
-      });
+      const result = await this.withLlmTimeout(
+        this.llmService.generateText(authSessionId, decisionPrompt, {
+          authPreference
+        }),
+        45_000,
+        "agent_turn_timeout"
+      );
       const llmText = result?.text?.trim() ?? "";
       if (!llmText) {
         return this.noModelResponse(authPreference);
@@ -3286,15 +3294,6 @@ export class GatewayService {
           `- command: ${command}`,
           `Reply yes/no, or explicit override: approve shell ${approval.token}`
         ].join("\n");
-      }
-      if (!this.requiresApproval("shell_exec", { sessionId: channelSessionId, authSessionId })) {
-        await this.recordToolUsage(channelSessionId, "shell.exec", {
-          command,
-          cwd: resolvedCwd.cwd,
-          source: "agent_turn_v2_direct"
-        });
-        const output = await this.executeShellCommand(command, resolvedCwd.cwd);
-        return `Executed shell command.\n${output}`;
       }
       if (!this.approvalStore) {
         return "Shell execution requires approvals, but approvals are not configured.";
@@ -4100,6 +4099,24 @@ export class GatewayService {
       return value.toLowerCase();
     }
     return value;
+  }
+
+  private async withLlmTimeout<T>(promise: Promise<T>, timeoutMs: number, code: string): Promise<T> {
+    let timer: NodeJS.Timeout | null = null;
+    try {
+      return await Promise.race([
+        promise,
+        new Promise<T>((_, reject) => {
+          timer = setTimeout(() => {
+            reject(new Error(code));
+          }, timeoutMs);
+        })
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
   }
 
   private async executeShellCommand(command: string, cwdOverride?: string): Promise<string> {
