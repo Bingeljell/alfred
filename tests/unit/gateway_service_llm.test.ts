@@ -785,6 +785,77 @@ describe("GatewayService llm path", () => {
     expect(llm.generateText).not.toHaveBeenCalled();
   });
 
+  it("routes planner command+needsWorker local ops to approval-gated shell path instead of research worker", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-localops-precedence-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          needsClarification: false,
+          command: "echo searxng_started",
+          cwd: workspaceDir,
+          reason: "start_local_service",
+          confidence: 0.93
+        })
+      })
+    };
+
+    const planner = {
+      plan: vi.fn().mockResolvedValue({
+        intent: "command",
+        confidence: 0.93,
+        needsWorker: true,
+        query: "Start the SearXNG service by checking setup in /projects/searxng and bringing it up.",
+        provider: "auto",
+        reason: "local_ops_request"
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      llm as never,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "balanced",
+        approvalDefault: true,
+        shellEnabled: true,
+        shellAllowedDirs: [workspaceDir]
+      },
+      undefined,
+      undefined,
+      planner as never
+    );
+
+    const result = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "OH the fetch failed because the SearXNG service is off, can you start it from /projects/searxng?",
+      requestJob: false
+    });
+
+    expect(result.mode).toBe("chat");
+    expect(result.response).toContain("Local operation ready for approval.");
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(0);
+  });
+
   it("returns deterministic status response for planner status_query intent without invoking chat turn", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-status-intent-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);

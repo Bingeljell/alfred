@@ -848,6 +848,42 @@ export class GatewayService {
       };
     }
 
+    const plannerLocalOpsRoute = await this.routeNaturalLanguageLocalOpsRequest(
+      input.inbound.sessionId,
+      plan.query?.trim() || input.inbound.text,
+      input.authSessionId,
+      input.authPreference
+    );
+    if (plannerLocalOpsRoute) {
+      await runRoutePhase({ markPhase: input.markPhase }, "Routing planner local operation request", {
+        plannerAction: plannerLocalOpsRoute.plannerAction,
+        ...(plannerLocalOpsRoute.details ?? {})
+      });
+      await input.recordPlannerTrace(plannerLocalOpsRoute.plannerAction, plannerLocalOpsRoute.details);
+      await input.markRunNote(plannerLocalOpsRoute.note, plannerLocalOpsRoute.details);
+      await runPersistPhase({ markPhase: input.markPhase }, "Persisting planner local-ops response");
+      await this.recordConversation(input.inbound.sessionId, "outbound", plannerLocalOpsRoute.response, {
+        source: "gateway",
+        channel: "internal",
+        kind: "command",
+        metadata: {
+          authSessionId: input.authSessionId,
+          runId: input.runId,
+          plannerIntent: plan.intent,
+          plannerConfidence: plan.confidence,
+          plannerReason: plan.reason,
+          localOps: true,
+          plannerAction: plannerLocalOpsRoute.plannerAction,
+          ...(plannerLocalOpsRoute.details ?? {})
+        }
+      });
+      return {
+        accepted: true,
+        mode: "chat",
+        response: plannerLocalOpsRoute.response
+      };
+    }
+
     const forcedWorkerDelegation = this.shouldForceWorkerDelegation(plan);
     if ((plan.needsWorker || forcedWorkerDelegation) && plan.query?.trim()) {
       if (plan.sendAttachment) {

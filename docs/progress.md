@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-03-01: Fixed planner local-ops precedence so command-like operational requests are checked against local-ops approval routing before worker research delegation, preventing SearXNG/service-control requests from being misrouted into `agentic_turn` web-search jobs.
 - 2026-03-01: Added temporary execution-routing debug surface: new endpoint `POST /v1/debug/execution-policy` returns command/approval detection, planner output, delegation policy (forced vs requested), and predicted route so we can inspect routing behavior without replaying full turns.
 - 2026-03-01: Expanded planner trace observability in conversation stream metadata with `plannerWillDelegateWorker`, `plannerForcedWorkerDelegation`, and `plannerDelegationReason` to make delegation decisions visible per turn.
 - 2026-03-01: Generalized planner-to-executor delegation policy so worker-required intents and attachment side-effect flows are force-routed to worker even when planner emits inconsistent `needsWorker=false`, reducing per-feature routing drift.
