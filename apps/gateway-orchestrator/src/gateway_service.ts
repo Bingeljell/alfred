@@ -768,8 +768,8 @@ export class GatewayService {
       };
     }
 
-    const forcedWebResearchDelegation = plan.intent === "web_research" && Boolean(plan.query?.trim()) && !plan.needsWorker;
-    if ((plan.needsWorker || forcedWebResearchDelegation) && plan.query?.trim()) {
+    const forcedWorkerDelegation = this.shouldForceWorkerDelegation(plan);
+    if ((plan.needsWorker || forcedWorkerDelegation) && plan.query?.trim()) {
       if (plan.sendAttachment) {
         const runSpecRunId = input.runId ?? randomUUID();
         const runSpec = this.buildWebToFileRunSpec({
@@ -864,7 +864,7 @@ export class GatewayService {
       await input.recordPlannerTrace("enqueue_worker_agentic_turn", {
         jobId: job.id,
         taskType: "agentic_turn",
-        forcedByIntent: forcedWebResearchDelegation
+        forcedByIntentOrSideEffect: forcedWorkerDelegation
       });
       await input.markRunNote("Planner delegated to worker", { jobId: job.id, reason: plan.reason });
       const response = `Queued research as job ${job.id}. I will share concise progress and final results here.`;
@@ -891,6 +891,21 @@ export class GatewayService {
     }
 
     return null;
+  }
+
+  private shouldForceWorkerDelegation(plan: PlannerDecision): boolean {
+    const hasQuery = Boolean(plan.query?.trim());
+    if (!hasQuery) {
+      return false;
+    }
+    // Gateway-level safety net so misclassified planner output does not route side-effect/research asks into chat-turn.
+    if (plan.intent === "web_research") {
+      return true;
+    }
+    if (plan.sendAttachment === true) {
+      return true;
+    }
+    return false;
   }
 
   private async handlePlannerFallbackRoutes(input: {

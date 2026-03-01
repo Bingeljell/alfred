@@ -717,6 +717,71 @@ describe("GatewayService llm path", () => {
     expect(llm.generateText).not.toHaveBeenCalled();
   });
 
+  it("forces worker delegation when planner marks sendAttachment=true with query even if needsWorker=false", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-force-attachment-worker-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: "fallback-chat"
+      })
+    };
+
+    const planner = {
+      plan: vi.fn().mockResolvedValue({
+        intent: "command",
+        confidence: 0.9,
+        needsWorker: false,
+        query: "prepare and send a markdown summary of latest middle east updates",
+        provider: "searxng",
+        sendAttachment: true,
+        fileFormat: "md",
+        reason: "unit_test_attachment_without_needs_worker"
+      })
+    };
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      llm as never,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        approvalMode: "relaxed",
+        approvalDefault: false,
+        webSearchEnabled: true,
+        fileWriteEnabled: true,
+        fileWriteRequireApproval: false
+      },
+      undefined,
+      undefined,
+      planner as never
+    );
+
+    const result = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "prepare and send a markdown summary of latest middle east updates",
+      requestJob: false
+    });
+
+    expect(result.mode).toBe("async-job");
+    expect(result.response).toContain("research + document delivery");
+    const jobs = await queueStore.listJobs();
+    expect(jobs.length).toBe(1);
+    expect(jobs[0]?.payload?.taskType).toBe("run_spec");
+    expect(llm.generateText).not.toHaveBeenCalled();
+  });
+
   it("returns deterministic status response for planner status_query intent without invoking chat turn", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-planner-status-intent-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);

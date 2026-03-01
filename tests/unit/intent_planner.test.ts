@@ -43,6 +43,33 @@ describe("IntentPlanner", () => {
     expect(result.fileName).toBe("stable_diffusion_report");
   });
 
+  it("enforces worker delegation policy for web_research and attachment outputs", async () => {
+    const llm = {
+      generateText: vi
+        .fn()
+        .mockResolvedValueOnce({
+          text: '{"intent":"web_research","confidence":0.92,"needsWorker":false,"query":"latest middle east updates","reason":"research_task"}'
+        })
+        .mockResolvedValueOnce({
+          text: '{"intent":"command","confidence":0.88,"needsWorker":false,"query":"prepare and send summary","sendAttachment":true,"fileFormat":"md","reason":"attachment_task"}'
+        })
+    };
+    const catalog = new SystemPromptCatalog(process.cwd(), []);
+    const planner = new IntentPlanner({
+      llmService: llm as never,
+      systemPromptCatalog: catalog
+    });
+
+    const webResearch = await planner.plan("s1", "search latest middle east updates");
+    expect(webResearch.intent).toBe("web_research");
+    expect(webResearch.needsWorker).toBe(true);
+
+    const attachment = await planner.plan("s1", "create and send summary doc");
+    expect(attachment.intent).toBe("command");
+    expect(attachment.sendAttachment).toBe(true);
+    expect(attachment.needsWorker).toBe(true);
+  });
+
   it("falls back to heuristic when llm output is invalid json", async () => {
     const llm = {
       generateText: vi.fn().mockResolvedValue({

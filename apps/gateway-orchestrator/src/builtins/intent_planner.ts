@@ -123,6 +123,7 @@ export class IntentPlanner {
         fileName: normalizeFileName(parsed.fileName),
         reason: typeof parsed.reason === "string" && parsed.reason.trim() ? parsed.reason.trim() : "llm_planner"
       };
+      enforceExecutionPolicy(normalized);
 
       if (normalized.intent === "clarify" && !normalized.question) {
         normalized.question = "Can you clarify what output you want first?";
@@ -349,4 +350,15 @@ function clampConfidence(raw: unknown): number {
     return 0.5;
   }
   return Math.max(0, Math.min(1, numeric));
+}
+
+function enforceExecutionPolicy(decision: PlannerDecision): void {
+  // Central policy: worker-required intents and side-effect payloads should not fall back to chat-turn.
+  if (decision.intent === "web_research") {
+    decision.needsWorker = true;
+    return;
+  }
+  if (decision.sendAttachment && decision.query?.trim()) {
+    decision.needsWorker = true;
+  }
 }

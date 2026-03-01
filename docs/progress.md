@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-03-01: Generalized planner-to-executor delegation policy so worker-required intents and attachment side-effect flows are force-routed to worker even when planner emits inconsistent `needsWorker=false`, reducing per-feature routing drift.
 - 2026-03-01: Fixed a critical planner/runtime mismatch causing `web_research` plans to fall through to `run_chat_turn` (reasoning-only) when planner returned `needsWorker=false`; gateway now force-delegates `web_research` intents with query payloads to worker execution.
 - 2026-03-01: Fixed approval UX parsing so natural-language acknowledgements like `approve search` are no longer interpreted as approval-token commands; token command parsing now accepts explicit token-like values only.
 - 2026-03-01: Fixed status intent handling so planner `status_query` always returns deterministic active-job state (`Latest job ...` or `No active long-running job...`) instead of falling back into chat-turn responses.
