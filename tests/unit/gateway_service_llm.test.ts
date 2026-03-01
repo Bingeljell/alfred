@@ -1349,19 +1349,32 @@ describe("GatewayService llm path", () => {
     });
 
     const llm = {
-      generateText: vi.fn().mockResolvedValue({
-        text: JSON.stringify({
-          assistant_response: "I can bring the search service back first.",
-          next_action: {
-            type: "shell.exec",
-            command: "exit 1",
-            cwd: workspaceDir,
-            reason: "recover_search"
-          }
-        }),
-        model: "gpt-4.1-mini",
-        authMode: "api_key"
-      })
+      generateText: vi
+        .fn()
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            assistant_response: "I can bring the search service back first.",
+            next_action: {
+              type: "shell.exec",
+              command: "exit 1",
+              cwd: workspaceDir,
+              reason: "recover_search"
+            }
+          }),
+          model: "gpt-4.1-mini",
+          authMode: "api_key"
+        })
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            assistant_response: "I hit a shell failure. Should I retry using your searx Python venv activation first?",
+            next_action: {
+              type: "ask_user",
+              reason: "need_runtime_details"
+            }
+          }),
+          model: "gpt-4.1-mini",
+          authMode: "api_key"
+        })
     } as unknown as OpenAIResponsesService;
 
     const service = new GatewayService(
@@ -1403,7 +1416,7 @@ describe("GatewayService llm path", () => {
     });
     expect(approved.response).toContain("Approved action executed: shell_exec");
     expect(approved.response).toContain("exit_code=1");
-    expect(approved.response).toContain("Skipped rerun because shell command did not complete successfully.");
+    expect(approved.response).toContain("Should I retry using your searx Python venv activation first?");
 
     const jobs = await queueStore.listJobs();
     const rerun = jobs.filter(
@@ -1413,6 +1426,104 @@ describe("GatewayService llm path", () => {
         String(job.payload.query ?? "") === "latest middle east headlines"
     );
     expect(rerun.length).toBe(0);
+  });
+
+  it("proposes a new approved shell step after failed shell recovery execution", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-local-ops-replan-shell-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const failed = await queueStore.createJob({
+      type: "stub_task",
+      payload: {
+        sessionId: "owner@s.whatsapp.net",
+        taskType: "agentic_turn",
+        query: "latest EPL top 10 standings"
+      },
+      priority: 5
+    });
+    await queueStore.failJob(failed.id, {
+      code: "web_search_no_results",
+      message: "fetch failed"
+    });
+
+    const llm = {
+      generateText: vi
+        .fn()
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            assistant_response: "I can recover search first.",
+            next_action: {
+              type: "shell.exec",
+              command: "exit 1",
+              cwd: workspaceDir,
+              reason: "recover_search"
+            }
+          }),
+          model: "gpt-4.1-mini",
+          authMode: "api_key"
+        })
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            assistant_response: "I can retry using a venv-based startup command.",
+            next_action: {
+              type: "shell.exec",
+              command: "source searx-pyenv/bin/activate && SEARXNG_SETTINGS_PATH=local/settings.yml python3.13 -m searx.webapp",
+              cwd: workspaceDir,
+              rerunQuery: "latest EPL top 10 standings",
+              reason: "retry_with_venv"
+            }
+          }),
+          model: "gpt-4.1-mini",
+          authMode: "api_key"
+        })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "balanced",
+        approvalDefault: true,
+        webSearchEnabled: true,
+        shellEnabled: true,
+        shellAllowedDirs: [workspaceDir]
+      }
+    );
+
+    const proposed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "restart local searxng and rerun search",
+      requestJob: false
+    });
+    expect(proposed.response).toContain("Shell operation ready for approval.");
+
+    const approved = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "yes",
+      requestJob: false
+    });
+    expect(approved.response).toContain("Approved action executed: shell_exec");
+    expect(approved.response).toContain("I can retry using a venv-based startup command.");
+    expect(approved.response).toContain("Shell operation ready for approval.");
+    expect(approved.response).toContain("source searx-pyenv/bin/activate");
   });
 
   it("reruns the latest recoverable query when most recent search ended with no context", async () => {

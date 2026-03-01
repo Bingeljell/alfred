@@ -2803,6 +2803,20 @@ export class GatewayService {
         return `Approved risky shell override (${blockedRuleId}).\n${output}`;
       }
       if (!shellSucceeded) {
+        const followup = await this.planAfterApprovedShellFailure(
+          channelSessionId,
+          authSessionId,
+          authPreference,
+          {
+            command,
+            cwd: resolvedCwd.cwd,
+            shellOutput: output,
+            rerunQuery
+          }
+        );
+        if (followup) {
+          return `Approved risky shell override (${blockedRuleId}).\n${output}\n\n${followup}`;
+        }
         return `Approved risky shell override (${blockedRuleId}).\n${output}\n\nSkipped rerun because shell command did not complete successfully.`;
       }
       const job = await this.enqueueLongTaskJob(channelSessionId, {
@@ -2844,6 +2858,20 @@ export class GatewayService {
         return `Approved action executed: shell_exec\n${output}`;
       }
       if (!shellSucceeded) {
+        const followup = await this.planAfterApprovedShellFailure(
+          channelSessionId,
+          authSessionId,
+          authPreference,
+          {
+            command,
+            cwd: resolvedCwd.cwd,
+            shellOutput: output,
+            rerunQuery
+          }
+        );
+        if (followup) {
+          return `Approved action executed: shell_exec\n${output}\n\n${followup}`;
+        }
         return `Approved action executed: shell_exec\n${output}\n\nSkipped rerun because shell command did not complete successfully.`;
       }
       const job = await this.enqueueLongTaskJob(channelSessionId, {
@@ -4208,6 +4236,77 @@ export class GatewayService {
     }
     const exitCode = Number.parseInt(exitMatch[1] ?? "", 10);
     return Number.isFinite(exitCode) && exitCode === 0;
+  }
+
+  private async planAfterApprovedShellFailure(
+    channelSessionId: string,
+    authSessionId: string,
+    authPreference: LlmAuthPreference,
+    input: {
+      command: string;
+      cwd: string;
+      shellOutput: string;
+      rerunQuery: string;
+    }
+  ): Promise<string | null> {
+    if (!this.llmService) {
+      return null;
+    }
+
+    const prompt = [
+      "You are Alfred, a goal-oriented orchestrator.",
+      "A user approved a local shell recovery action, but it failed.",
+      "Decide the next best step with minimal friction.",
+      "Return STRICT JSON only with this shape:",
+      '{"assistant_response":"", "next_action":{"type":"none|ask_user|web.search|shell.exec|worker.run","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","cwd":"","rerunQuery":"","goal":""}}',
+      "",
+      "Rules:",
+      "- Do not claim success when shell failed.",
+      "- Prefer next_action.type=ask_user when missing critical details or permission.",
+      "- Prefer next_action.type=shell.exec only if you can propose a concrete corrective command.",
+      "- If proposing shell.exec, set rerunQuery to the original goal so successful recovery can resume it.",
+      "- Keep assistant_response concise and action-oriented.",
+      "",
+      `Original goal to resume: ${input.rerunQuery}`,
+      `Failed command: ${input.command}`,
+      `cwd: ${input.cwd}`,
+      "Shell output:",
+      input.shellOutput.slice(0, 4000)
+    ].join("\n");
+
+    try {
+      const result = await this.withLlmTimeout(
+        this.llmService.generateText(authSessionId, prompt, { authPreference }),
+        20_000,
+        "post_shell_failure_planning_timeout"
+      );
+      const text = result?.text?.trim() ?? "";
+      if (!text) {
+        return null;
+      }
+      const decision = this.parseAgentTurnDecision(text);
+      if (!decision) {
+        return text;
+      }
+
+      if (!decision.nextAction || decision.nextAction.type === "none" || decision.nextAction.type === "ask_user") {
+        return decision.assistantResponse || null;
+      }
+
+      const actionResult = await this.executeAgentNextAction(
+        channelSessionId,
+        authSessionId,
+        authPreference,
+        decision.nextAction,
+        input.rerunQuery
+      );
+      if (actionResult) {
+        return decision.assistantResponse ? `${decision.assistantResponse}\n\n${actionResult}` : actionResult;
+      }
+      return decision.assistantResponse || null;
+    } catch {
+      return null;
+    }
   }
 
   private async executeWebSearch(
