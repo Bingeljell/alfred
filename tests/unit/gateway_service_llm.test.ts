@@ -1277,6 +1277,71 @@ describe("GatewayService llm path", () => {
     expect(proposed.response).toContain("python -m searx.webapp");
   });
 
+  it("handles local-ops cwd case variance on case-insensitive platforms", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-shell-case-scope-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const allowedRoot = path.join(stateDir, "projects", "searxng");
+    await fs.mkdir(allowedRoot, { recursive: true });
+    const mixedCaseCwd = allowedRoot.replace(/searxng$/, "searXNG");
+
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          needsClarification: false,
+          question: "",
+          command: "python -m searx.webapp",
+          cwd: mixedCaseCwd,
+          reason: "start_local_service",
+          confidence: 0.92
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "relaxed",
+        approvalDefault: false,
+        shellEnabled: true,
+        shellAllowedDirs: [allowedRoot]
+      }
+    );
+
+    const proposed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "start searxng from local project folder",
+      requestJob: false
+    });
+
+    if (process.platform === "darwin" || process.platform === "win32") {
+      expect(proposed.response).toContain("Local operation ready for approval.");
+    } else {
+      expect(proposed.response).toContain("outside allowed scope");
+    }
+  });
+
   it("rejects shell command cwd outside allowlisted directories", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-shell-scope-unit-"));
     const workspaceDir = path.join(stateDir, "workspace", "alfred");

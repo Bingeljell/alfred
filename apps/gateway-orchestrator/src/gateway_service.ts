@@ -3763,7 +3763,9 @@ export class GatewayService {
   private isPathInsideRoot(targetPath: string, rootPath: string): boolean {
     const normalizedRoot = this.canonicalizePathForScope(rootPath);
     const normalizedTarget = this.canonicalizePathForScope(targetPath);
-    return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`);
+    const comparableRoot = this.normalizePathForScopeComparison(normalizedRoot);
+    const comparableTarget = this.normalizePathForScopeComparison(normalizedTarget);
+    return comparableTarget === comparableRoot || comparableTarget.startsWith(`${comparableRoot}${path.sep}`);
   }
 
   private canonicalizePathForScope(rawPath: string): string {
@@ -3779,6 +3781,14 @@ export class GatewayService {
   private stripInvisiblePathChars(rawPath: string): string {
     // Remove common hidden code points that frequently appear in copied paths.
     return rawPath.normalize("NFKC").replace(/[\u200B-\u200D\uFEFF]/g, "");
+  }
+
+  private normalizePathForScopeComparison(value: string): string {
+    if (process.platform === "darwin" || process.platform === "win32") {
+      // Default macOS/Windows filesystems are case-insensitive; compare accordingly.
+      return value.toLowerCase();
+    }
+    return value;
   }
 
   private async executeShellCommand(command: string, cwdOverride?: string): Promise<string> {
