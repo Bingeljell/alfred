@@ -28,7 +28,7 @@ export type ParsedCommand =
   | { kind: "supervisor_status"; id: string }
   | { kind: "file_write"; relativePath: string; text: string }
   | { kind: "file_send"; relativePath: string; caption?: string }
-  | { kind: "shell_exec"; command: string }
+  | { kind: "shell_exec"; command: string; cwd?: string }
   | { kind: "policy_status" }
   | { kind: "approval_pending" }
   | { kind: "side_effect_send"; text: string }
@@ -277,16 +277,32 @@ export function parseCommand(text: string): ParsedCommand | null {
   }
 
   if (value.toLowerCase().startsWith("/shell ")) {
-    const command = value.slice("/shell ".length).trim();
-    if (command) {
-      return { kind: "shell_exec", command };
+    const payload = value.slice("/shell ".length).trim();
+    const cwdMatch = payload.match(/^--cwd=([^\s]+)\s+(.+)$/i);
+    if (cwdMatch) {
+      const cwd = cwdMatch[1]?.trim();
+      const command = cwdMatch[2]?.trim();
+      if (cwd && command) {
+        return { kind: "shell_exec", command, cwd };
+      }
+    }
+    if (payload) {
+      return { kind: "shell_exec", command: payload };
     }
   }
 
   if (value.toLowerCase().startsWith("/exec ")) {
-    const command = value.slice("/exec ".length).trim();
-    if (command) {
-      return { kind: "shell_exec", command };
+    const payload = value.slice("/exec ".length).trim();
+    const cwdMatch = payload.match(/^--cwd=([^\s]+)\s+(.+)$/i);
+    if (cwdMatch) {
+      const cwd = cwdMatch[1]?.trim();
+      const command = cwdMatch[2]?.trim();
+      if (cwd && command) {
+        return { kind: "shell_exec", command, cwd };
+      }
+    }
+    if (payload) {
+      return { kind: "shell_exec", command: payload };
     }
   }
 

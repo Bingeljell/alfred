@@ -1,6 +1,7 @@
 import { CodexAuthService } from "../codex/auth_service";
 import { CodexAppServerClient } from "../codex/app_server_client";
 import { CodexThreadStore } from "../codex/thread_store";
+import type { LlmExecutionMode } from "../orchestrator/types";
 
 type ThreadStartResponse = {
   thread: {
@@ -46,9 +47,15 @@ export class CodexChatService {
     this.accountRefreshBeforeTurn = options.accountRefreshBeforeTurn ?? true;
   }
 
-  async generateText(sessionId: string, input: string): Promise<{ text: string; model: string; authMode: "oauth" } | null> {
+  async generateText(
+    sessionId: string,
+    input: string,
+    options?: { executionMode?: LlmExecutionMode }
+  ): Promise<{ text: string; model: string; authMode: "oauth" } | null> {
     await this.client.ensureStarted();
     await this.threadStore.ensureReady();
+    const executionMode = options?.executionMode ?? "default";
+    const turnInput = this.buildTurnInput(input, executionMode);
 
     const status = await this.auth.readStatus(this.accountRefreshBeforeTurn);
     if (!status.connected || status.authMode !== "chatgpt") {
@@ -63,7 +70,7 @@ export class CodexChatService {
         input: [
           {
             type: "text",
-            text: input,
+            text: turnInput,
             text_elements: []
           }
         ]
@@ -83,7 +90,7 @@ export class CodexChatService {
         input: [
           {
             type: "text",
-            text: input,
+            text: turnInput,
             text_elements: []
           }
         ]
@@ -109,6 +116,22 @@ export class CodexChatService {
       model: this.model ?? "openai-codex/default",
       authMode: "oauth"
     };
+  }
+
+  private buildTurnInput(input: string, executionMode: LlmExecutionMode): string {
+    const trimmedInput = input.trim();
+    if (executionMode !== "reasoning_only") {
+      return trimmedInput;
+    }
+
+    const guardrail = [
+      "[EXECUTION_MODE=REASONING_ONLY]",
+      "You are in analysis mode only.",
+      "Do not execute commands, edit files, call tools, or perform side effects.",
+      "If a side effect is requested, propose the next action and ask for explicit approval."
+    ].join("\n");
+
+    return `${guardrail}\n\n${trimmedInput}`;
   }
 
   private async resolveThreadId(sessionId: string): Promise<string> {

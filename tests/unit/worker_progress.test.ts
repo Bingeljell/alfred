@@ -50,6 +50,9 @@ describe("worker progress reporting", () => {
       }
       return job;
     });
+    await waitFor(async () =>
+      events.some((event) => event.status === "succeeded" && event.responseText === "Final output") ? true : null
+    );
 
     expect(completed.progress?.message).toBe("Searching provider...");
     expect(events.some((event) => event.status === "progress" && event.summary === "Searching provider...")).toBe(true);

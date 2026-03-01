@@ -73,6 +73,8 @@ describe("orchestrator phases", () => {
         fileWriteApprovalMode: "session",
         fileWriteApprovalScope: "auth",
         shellEnabled: false,
+        shellRequireApproval: true,
+        shellAllowedDirs: ["/tmp/alfred-workspace"],
         wasmEnabled: false
       },
       buildSkillsSnapshot: () => ({ hash: "skills-v1", content: ["planner", "web"] })

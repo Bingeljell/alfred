@@ -20,6 +20,8 @@
 
 ## Recent Task Updates
 
+- 2026-03-01: Hardened chat safety + local ops routing: `run_chat_turn` is now explicitly reasoning-only across Codex/Responses backends (`executionMode=reasoning_only`), natural-language local operation requests are converted into approval-gated `shell_exec` proposals, and shell execution now enforces allowlisted cwd roots before any command can run.
+- 2026-03-01: Added shell scope/operator ergonomics updates with `ALFRED_SHELL_ALLOWED_DIRS` config wiring, `--cwd` support on `/shell` and `/exec`, and unit coverage updates for parser/config/local-ops approval flow plus worker progress-event timing stability.
 - 2026-02-28: Consolidated architecture direction into canonical docs by adding `docs/architecture_principles.md` and wiring cross-links from vision/plan/features/ADR so runtime guidance remains language-agnostic and durable (`minimal core`, `gateway control plane`, `typed safety-tier tools`, `hybrid execution`, `worker execution plane`, `policy-first security`, `observability-first`).
 - 2026-02-28: Fixed planner-to-router mismatch causing `needsWorker=true` tasks with `intent=command` to run in chat mode; gateway now delegates these plans to worker/run-spec paths, restoring attachment/retry execution behavior for WhatsApp task flows.
 - 2026-02-28: Added `docs/terminal_file_explorer_recommendations.md` with a concise macOS terminal file-tree recommendation brief: confirmed iTerm2 has no native file-tree explorer pane and documented built-in alternatives (Warp, Wave Terminal, Electerm) plus iTerm2-compatible TUI options (Yazi, Ranger) with source links.

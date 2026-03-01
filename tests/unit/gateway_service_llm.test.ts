@@ -842,6 +842,116 @@ describe("GatewayService llm path", () => {
     expect(pending[0]?.caption).toBe("daily update");
   });
 
+  it("routes natural-language local ops to approval-gated shell execution", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-local-ops-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          needsClarification: false,
+          question: "",
+          command: "echo searxng_ok",
+          cwd: workspaceDir,
+          reason: "restart_local_service",
+          confidence: 0.91
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "relaxed",
+        approvalDefault: false,
+        shellEnabled: true,
+        shellAllowedDirs: [workspaceDir]
+      }
+    );
+
+    const proposed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Please restart the searxng server in the local workspace",
+      requestJob: false
+    });
+    expect(proposed.mode).toBe("chat");
+    expect(proposed.response).toContain("Local operation ready for approval.");
+    expect(proposed.response).toContain("echo searxng_ok");
+
+    const approved = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "yes",
+      requestJob: false
+    });
+    expect(approved.response).toContain("Approved action executed: shell_exec");
+    expect(approved.response).toContain("searxng_ok");
+
+    const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(calls.length).toBe(1);
+    expect(String(calls[0]?.[1] ?? "")).toContain("local-ops planner");
+    expect(calls[0]?.[2]).toEqual({ authPreference: "auto", executionMode: "reasoning_only" });
+  });
+
+  it("rejects shell command cwd outside allowlisted directories", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-shell-scope-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "relaxed",
+        approvalDefault: false,
+        shellEnabled: true,
+        shellAllowedDirs: [workspaceDir]
+      }
+    );
+
+    const blocked = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "/shell --cwd=/tmp pwd",
+      requestJob: false
+    });
+    expect(blocked.mode).toBe("chat");
+    expect(blocked.response).toContain("outside allowed scope");
+  });
+
   it("uses llm response for regular chat and preserves command routing", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-llm-unit-"));
     const queueStore = new FileBackedQueueStore(stateDir);
@@ -1114,7 +1224,7 @@ describe("GatewayService llm path", () => {
 
     const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(calls.length).toBe(1);
-    expect(calls[0]?.[2]).toEqual({ authPreference: "api_key" });
+    expect(calls[0]?.[2]).toEqual({ authPreference: "api_key", executionMode: "reasoning_only" });
   });
 
   it("records run-ledger phases for a successful chat turn", async () => {
@@ -1327,7 +1437,7 @@ describe("GatewayService llm path", () => {
     const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
     expect(calls.length).toBe(1);
     expect(calls[0]?.[1]).toBe("new question");
-    expect(calls[0]?.[2]).toEqual({ authPreference: "auto" });
+    expect(calls[0]?.[2]).toEqual({ authPreference: "auto", executionMode: "reasoning_only" });
   });
 
   it("still injects transcript context when api_key mode is forced", async () => {
@@ -1402,7 +1512,7 @@ describe("GatewayService llm path", () => {
     expect(calls.length).toBe(1);
     expect(String(calls[0]?.[1] ?? "")).toContain("Recent conversation context");
     expect(String(calls[0]?.[1] ?? "")).toContain("assistant: prior assistant detail");
-    expect(calls[0]?.[2]).toEqual({ authPreference: "api_key" });
+    expect(calls[0]?.[2]).toEqual({ authPreference: "api_key", executionMode: "reasoning_only" });
   });
 
   it("grants file-write approval once per auth session when configured", async () => {

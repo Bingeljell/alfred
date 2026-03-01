@@ -181,6 +181,7 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .transform((v) => (v ? v.toLowerCase() !== "false" : false)),
+  ALFRED_SHELL_ALLOWED_DIRS: z.string().optional().default("./workspace/alfred"),
   ALFRED_SHELL_TIMEOUT_MS: z
     .string()
     .optional()
@@ -365,6 +366,7 @@ export type AppConfig = {
   alfredFileWriteApprovalMode: "per_action" | "session" | "always";
   alfredFileWriteApprovalScope: "auth" | "channel";
   alfredShellEnabled: boolean;
+  alfredShellAllowedDirs: string[];
   alfredShellTimeoutMs: number;
   alfredShellMaxOutputChars: number;
   alfredWasmEnabled: boolean;
@@ -432,6 +434,12 @@ export function loadDotEnvFile(dotEnvPath = path.resolve(process.cwd(), ".env"))
 
 export function loadConfig(env: Record<string, string | undefined> = process.env): AppConfig {
   const parsed = EnvSchema.parse(env);
+  const alfredWorkspaceDir = path.resolve(parsed.ALFRED_WORKSPACE_DIR);
+  const configuredShellAllowedDirs = parsed.ALFRED_SHELL_ALLOWED_DIRS.split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0)
+    .map((item) => path.resolve(item));
+  const alfredShellAllowedDirs = configuredShellAllowedDirs.length > 0 ? configuredShellAllowedDirs : [alfredWorkspaceDir];
 
   return {
     port: parsed.PORT,
@@ -465,7 +473,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     streamRetentionDays: parsed.STREAM_RETENTION_DAYS,
     streamDedupeWindowMs: parsed.STREAM_DEDUPE_WINDOW_MS,
     publicBaseUrl: parsed.PUBLIC_BASE_URL.replace(/\/+$/, ""),
-    alfredWorkspaceDir: path.resolve(parsed.ALFRED_WORKSPACE_DIR),
+    alfredWorkspaceDir,
     alfredApprovalMode: parsed.ALFRED_APPROVAL_MODE,
     alfredApprovalDefault: parsed.ALFRED_APPROVAL_DEFAULT,
     alfredPlannerEnabled: parsed.ALFRED_PLANNER_ENABLED,
@@ -483,6 +491,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     alfredFileWriteApprovalMode: parsed.ALFRED_FILE_WRITE_APPROVAL_MODE,
     alfredFileWriteApprovalScope: parsed.ALFRED_FILE_WRITE_APPROVAL_SCOPE,
     alfredShellEnabled: parsed.ALFRED_SHELL_ENABLED,
+    alfredShellAllowedDirs,
     alfredShellTimeoutMs: parsed.ALFRED_SHELL_TIMEOUT_MS,
     alfredShellMaxOutputChars: parsed.ALFRED_SHELL_MAX_OUTPUT_CHARS,
     alfredWasmEnabled: parsed.ALFRED_WASM_ENABLED,

@@ -3,6 +3,7 @@ import type { RunQueueMode } from "../builtins/run_ledger_store";
 import type { WebSearchProvider } from "../builtins/web_search_service";
 
 export type LlmAuthPreference = "auto" | "oauth" | "api_key";
+export type LlmExecutionMode = "default" | "reasoning_only";
 
 export type OrchestrationPhase =
   | "normalize"
@@ -55,6 +56,8 @@ export type ToolPolicySnapshot = {
   fileWriteApprovalMode: "per_action" | "session" | "always";
   fileWriteApprovalScope: "auth" | "channel";
   shellEnabled: boolean;
+  shellRequireApproval: boolean;
+  shellAllowedDirs: string[];
   wasmEnabled: boolean;
 };
 

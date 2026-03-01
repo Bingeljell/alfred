@@ -25,7 +25,7 @@ import type { MemoryCheckpointClass } from "./builtins/memory_checkpoint_service
 import type { RunSpecStore } from "./builtins/run_spec_store";
 import { runNormalizePhase } from "./orchestrator/normalize_phase";
 import { runSessionPhase } from "./orchestrator/session_phase";
-import type { LlmAuthPreference, PlannerDecision } from "./orchestrator/types";
+import type { LlmAuthPreference, LlmExecutionMode, PlannerDecision } from "./orchestrator/types";
 import {
   runDirectivesPhase,
   runDispatchPhase,
@@ -81,6 +81,7 @@ type CapabilityPolicy = {
   fileWriteApprovalMode: "per_action" | "session" | "always";
   fileWriteApprovalScope: "auth" | "channel";
   shellEnabled: boolean;
+  shellAllowedDirs: string[];
   shellTimeoutMs: number;
   shellMaxOutputChars: number;
   wasmEnabled: boolean;
@@ -100,9 +101,26 @@ const DEFAULT_CAPABILITY_POLICY: CapabilityPolicy = {
   fileWriteApprovalMode: "session",
   fileWriteApprovalScope: "auth",
   shellEnabled: false,
+  shellAllowedDirs: [path.resolve(process.cwd(), "workspace", "alfred")],
   shellTimeoutMs: 20_000,
   shellMaxOutputChars: 8_000,
   wasmEnabled: false
+};
+
+type LocalOpsProposal = {
+  needsClarification: boolean;
+  question?: string;
+  command?: string;
+  cwd?: string;
+  reason?: string;
+  confidence: number;
+};
+
+type LocalOpsRouteResult = {
+  response: string;
+  plannerAction: string;
+  note: string;
+  details?: Record<string, unknown>;
 };
 
 export class GatewayService {
@@ -131,7 +149,7 @@ export class GatewayService {
       generateText: (
         sessionId: string,
         input: string,
-        options?: { authPreference?: LlmAuthPreference }
+        options?: { authPreference?: LlmAuthPreference; executionMode?: LlmExecutionMode }
       ) => Promise<{ text: string } | null>;
     },
     private readonly codexAuthService?: CodexAuthService,
@@ -226,6 +244,10 @@ export class GatewayService {
         typeof capabilityPolicy?.shellEnabled === "boolean"
           ? capabilityPolicy.shellEnabled
           : DEFAULT_CAPABILITY_POLICY.shellEnabled,
+      shellAllowedDirs: this.normalizeShellAllowedDirs(
+        capabilityPolicy?.shellAllowedDirs,
+        path.resolve(capabilityPolicy?.workspaceDir ?? DEFAULT_CAPABILITY_POLICY.workspaceDir)
+      ),
       shellTimeoutMs: Number.isFinite(configuredShellTimeoutMs)
         ? Math.max(1000, Math.min(120000, Math.floor(configuredShellTimeoutMs)))
         : DEFAULT_CAPABILITY_POLICY.shellTimeoutMs,
@@ -307,6 +329,8 @@ export class GatewayService {
         fileWriteApprovalMode: this.capabilityPolicy.fileWriteApprovalMode,
         fileWriteApprovalScope: this.capabilityPolicy.fileWriteApprovalScope,
         shellEnabled: this.capabilityPolicy.shellEnabled,
+        shellRequireApproval: this.requiresApproval("shell_exec"),
+        shellAllowedDirs: this.capabilityPolicy.shellAllowedDirs,
         wasmEnabled: this.capabilityPolicy.wasmEnabled
       },
       buildSkillsSnapshot: () => this.buildSkillsSnapshot()
@@ -956,6 +980,39 @@ export class GatewayService {
       };
     }
 
+    const localOpsRoute = await this.routeNaturalLanguageLocalOpsRequest(
+      input.inbound.sessionId,
+      input.inbound.text,
+      input.authSessionId,
+      input.authPreference
+    );
+    if (localOpsRoute) {
+      await runRoutePhase({ markPhase: input.markPhase }, "Routing natural-language local operation request", {
+        plannerAction: localOpsRoute.plannerAction,
+        ...(localOpsRoute.details ?? {})
+      });
+      await input.recordPlannerTrace(localOpsRoute.plannerAction, localOpsRoute.details);
+      await input.markRunNote(localOpsRoute.note, localOpsRoute.details);
+      await runPersistPhase({ markPhase: input.markPhase }, "Persisting local-ops routing response");
+      await this.recordConversation(input.inbound.sessionId, "outbound", localOpsRoute.response, {
+        source: "gateway",
+        channel: "internal",
+        kind: "command",
+        metadata: {
+          authSessionId: input.authSessionId,
+          runId: input.runId,
+          localOps: true,
+          plannerAction: localOpsRoute.plannerAction,
+          ...(localOpsRoute.details ?? {})
+        }
+      });
+      return {
+        accepted: true,
+        mode: "chat",
+        response: localOpsRoute.response
+      };
+    }
+
     const routed = await this.routeLongTaskIfNeeded(
       input.inbound.sessionId,
       input.inbound.text,
@@ -1359,6 +1416,7 @@ export class GatewayService {
           `- webSearch: enabled=${String(this.capabilityPolicy.webSearchEnabled)}, requireApproval=${String(this.capabilityPolicy.webSearchRequireApproval)}, provider=${this.capabilityPolicy.webSearchProvider}`,
           `- fileWrite: enabled=${String(this.capabilityPolicy.fileWriteEnabled)}, requireApproval=${String(this.capabilityPolicy.fileWriteRequireApproval)}, mode=${this.capabilityPolicy.fileWriteApprovalMode}, scope=${this.capabilityPolicy.fileWriteApprovalScope}, notesOnly=${String(this.capabilityPolicy.fileWriteNotesOnly)}, notesDir=${this.capabilityPolicy.fileWriteNotesDir}`,
           `- shell: enabled=${String(this.capabilityPolicy.shellEnabled)}, timeoutMs=${this.capabilityPolicy.shellTimeoutMs}, maxOutputChars=${this.capabilityPolicy.shellMaxOutputChars}`,
+          `- shellAllowedDirs: ${this.capabilityPolicy.shellAllowedDirs.join(", ")}`,
           `- wasm: enabled=${String(this.capabilityPolicy.wasmEnabled)}`
         ].join("\n");
       }
@@ -1532,6 +1590,10 @@ export class GatewayService {
         if (!policy.allowed) {
           return policy.reason ?? "Shell execution is disabled by policy.";
         }
+        const resolvedCwd = this.resolveShellCwd(command.cwd);
+        if (!resolvedCwd.ok) {
+          return resolvedCwd.error;
+        }
         const shellPolicy = this.evaluateShellCommandPolicy(command.command);
         if (shellPolicy.blocked) {
           if (!this.approvalStore) {
@@ -1539,6 +1601,7 @@ export class GatewayService {
           }
           const approval = await this.approvalStore.create(sessionId, "shell_exec_override", {
             command: command.command,
+            cwd: resolvedCwd.cwd,
             blockedRuleId: shellPolicy.ruleId,
             authSessionId
           });
@@ -1547,9 +1610,26 @@ export class GatewayService {
 
         await this.recordToolUsage(sessionId, "shell.exec", {
           command: command.command,
+          cwd: resolvedCwd.cwd,
           override: false
         });
-        return this.executeShellCommand(command.command);
+        if (policy.requiresApproval) {
+          if (!this.approvalStore) {
+            return "Approvals are not configured.";
+          }
+          const approval = await this.approvalStore.create(sessionId, "shell_exec", {
+            command: command.command,
+            cwd: resolvedCwd.cwd,
+            authSessionId
+          });
+          return [
+            "Approval required for shell command.",
+            `- cwd: ${resolvedCwd.cwd}`,
+            `- command: ${command.command}`,
+            `Reply yes or no. Optional explicit token: approve ${approval.token}`
+          ].join("\n");
+        }
+        return this.executeShellCommand(command.command, resolvedCwd.cwd);
       }
 
       case "side_effect_send": {
@@ -1672,6 +1752,238 @@ export class GatewayService {
 
     const progress = active.progress?.message ? ` | progress: ${String(active.progress.message)}` : "";
     return `Latest job ${active.id} is ${active.status}${progress}`;
+  }
+
+  private async routeNaturalLanguageLocalOpsRequest(
+    sessionId: string,
+    rawText: string,
+    authSessionId: string,
+    authPreference: LlmAuthPreference
+  ): Promise<LocalOpsRouteResult | null> {
+    if (!this.shouldAttemptLocalOpsRouting(rawText)) {
+      return null;
+    }
+
+    if (!isSandboxTargetEnabled("shell.exec", this.buildSandboxPolicyConfig())) {
+      return {
+        response: "I detected a local-ops request, but shell.exec is disabled by sandbox policy.",
+        plannerAction: "local_ops_disabled_sandbox",
+        note: "Local-ops request blocked by sandbox policy"
+      };
+    }
+
+    const toolPolicy = this.evaluateToolPolicy("shell.exec", { sessionId, authSessionId });
+    if (!toolPolicy.allowed || !this.capabilityPolicy.shellEnabled) {
+      return {
+        response:
+          "I detected a local-ops request, but shell execution is currently disabled. Enable shell policy first, then retry.",
+        plannerAction: "local_ops_disabled_policy",
+        note: "Local-ops request blocked by shell policy"
+      };
+    }
+
+    if (!this.approvalStore) {
+      return {
+        response: "I detected a local-ops request, but approvals are not configured.",
+        plannerAction: "local_ops_missing_approval_store",
+        note: "Local-ops request could not be routed because approval store is unavailable"
+      };
+    }
+
+    const proposal = await this.proposeLocalOps(rawText, authSessionId, authPreference);
+    if (!proposal) {
+      return null;
+    }
+
+    if (proposal.needsClarification || !proposal.command || proposal.confidence < 0.62) {
+      const question =
+        proposal.question?.trim() ||
+        "I can run this locally once approved. Which exact command should I run, and in which directory?";
+      return {
+        response: question,
+        plannerAction: "local_ops_clarify",
+        note: "Local-ops proposal required clarification",
+        details: {
+          confidence: proposal.confidence
+        }
+      };
+    }
+
+    const resolvedCwd = this.resolveShellCwd(proposal.cwd);
+    if (!resolvedCwd.ok) {
+      return {
+        response: `${resolvedCwd.error}\nPlease provide a path under the configured shell allowed roots.`,
+        plannerAction: "local_ops_invalid_cwd",
+        note: "Local-ops proposal rejected due to cwd outside allowed scope",
+        details: {
+          proposedCwd: proposal.cwd ?? ""
+        }
+      };
+    }
+
+    const shellPolicy = this.evaluateShellCommandPolicy(proposal.command);
+    if (shellPolicy.blocked) {
+      const approval = await this.approvalStore.create(sessionId, "shell_exec_override", {
+        command: proposal.command,
+        cwd: resolvedCwd.cwd,
+        blockedRuleId: shellPolicy.ruleId,
+        authSessionId,
+        source: "planner_local_ops",
+        reason: proposal.reason ?? "policy_blocked"
+      });
+      return {
+        response: [
+          `Proposed command is blocked by shell policy (${shellPolicy.ruleId}).`,
+          `- cwd: ${resolvedCwd.cwd}`,
+          `- command: ${proposal.command}`,
+          `Reply yes/no, or explicit override: approve shell ${approval.token}`
+        ].join("\n"),
+        plannerAction: "request_approval_local_ops_shell_override",
+        note: "Local-ops proposal blocked by command policy and queued for explicit override approval",
+        details: {
+          confidence: proposal.confidence,
+          blockedRuleId: shellPolicy.ruleId,
+          cwd: resolvedCwd.cwd
+        }
+      };
+    }
+
+    const approval = await this.approvalStore.create(sessionId, "shell_exec", {
+      command: proposal.command,
+      cwd: resolvedCwd.cwd,
+      authSessionId,
+      source: "planner_local_ops",
+      reason: proposal.reason ?? "local_ops_request"
+    });
+
+    return {
+      response: [
+        "Local operation ready for approval.",
+        `- cwd: ${resolvedCwd.cwd}`,
+        `- command: ${proposal.command}`,
+        "Reply yes/no to approve or reject.",
+        `Optional explicit token: approve ${approval.token}`
+      ].join("\n"),
+      plannerAction: "request_approval_local_ops_shell_exec",
+      note: "Local-ops proposal queued for shell approval",
+      details: {
+        confidence: proposal.confidence,
+        cwd: resolvedCwd.cwd
+      }
+    };
+  }
+
+  private shouldAttemptLocalOpsRouting(rawText: string): boolean {
+    const text = rawText.trim().toLowerCase();
+    if (!text || text.startsWith("/")) {
+      return false;
+    }
+
+    const hasActionVerb =
+      /\b(start|restart|stop|run|launch|boot|kill|fix|debug|check|inspect|tail|open|list|show|deploy)\b/.test(text);
+    const hasOpsTarget =
+      /\b(server|service|daemon|process|port|logs?|local|repo|directory|folder|path|workspace|shell|command|searxng|gateway|worker|npm|pnpm|node|python|docker)\b/.test(
+        text
+      );
+
+    return hasActionVerb && hasOpsTarget;
+  }
+
+  private async proposeLocalOps(
+    message: string,
+    authSessionId: string,
+    authPreference: LlmAuthPreference
+  ): Promise<LocalOpsProposal | null> {
+    if (!this.llmService) {
+      return null;
+    }
+
+    const allowedRoots = this.capabilityPolicy.shellAllowedDirs.join(", ");
+    const prompt = [
+      "You are Alfred's local-ops planner.",
+      "Convert the user request into a safe shell proposal.",
+      "Return strict JSON only with keys:",
+      "needsClarification (boolean), question (string), command (string), cwd (string), reason (string), confidence (0..1).",
+      "Rules:",
+      "- If intent is not clearly a local operation, set needsClarification=true.",
+      "- If unsure about command or path, ask a focused question.",
+      "- Propose one command only.",
+      "- Prefer cwd inside allowed roots.",
+      `Allowed roots: ${allowedRoots}`,
+      "",
+      `User request: ${message.trim()}`
+    ].join("\n");
+
+    let raw = "";
+    try {
+      const result = await this.llmService.generateText(authSessionId, prompt, {
+        authPreference,
+        executionMode: "reasoning_only"
+      });
+      raw = result?.text?.trim() ?? "";
+    } catch {
+      return null;
+    }
+
+    if (!raw) {
+      return null;
+    }
+
+    const parsed = this.tryParseJsonObject(raw);
+    if (!parsed) {
+      return null;
+    }
+
+    const confidenceRaw = Number(parsed.confidence);
+    return {
+      needsClarification: Boolean(parsed.needsClarification),
+      question: typeof parsed.question === "string" ? parsed.question.trim() : undefined,
+      command: typeof parsed.command === "string" ? parsed.command.trim() : undefined,
+      cwd: typeof parsed.cwd === "string" ? parsed.cwd.trim() : undefined,
+      reason: typeof parsed.reason === "string" ? parsed.reason.trim() : undefined,
+      confidence: Number.isFinite(confidenceRaw) ? Math.max(0, Math.min(1, confidenceRaw)) : 0
+    };
+  }
+
+  private tryParseJsonObject(raw: string): Record<string, unknown> | null {
+    const trimmed = raw.trim();
+    if (!trimmed) {
+      return null;
+    }
+
+    const fencedMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (fencedMatch?.[1]) {
+      try {
+        const parsed = JSON.parse(fencedMatch[1].trim());
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+      } catch {
+        // fallback below
+      }
+    }
+
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Record<string, unknown>;
+      }
+      return null;
+    } catch {
+      const start = trimmed.indexOf("{");
+      const end = trimmed.lastIndexOf("}");
+      if (start >= 0 && end > start) {
+        try {
+          const parsed = JSON.parse(trimmed.slice(start, end + 1));
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+            return parsed as Record<string, unknown>;
+          }
+        } catch {
+          return null;
+        }
+      }
+      return null;
+    }
   }
 
   private async routeLongTaskIfNeeded(
@@ -2136,17 +2448,45 @@ export class GatewayService {
     }
     if (approval.action === "shell_exec_override") {
       const command = String(approval.payload.command ?? "").trim();
+      const requestedCwd = typeof approval.payload.cwd === "string" ? approval.payload.cwd.trim() : undefined;
       const blockedRuleId = String(approval.payload.blockedRuleId ?? "unknown_rule");
       if (!command) {
         return "Approved action failed: missing shell command.";
       }
+      const resolvedCwd = this.resolveShellCwd(requestedCwd);
+      if (!resolvedCwd.ok) {
+        return `Approved action failed: ${resolvedCwd.error}`;
+      }
       await this.recordToolUsage(channelSessionId, "shell.exec", {
         command,
+        cwd: resolvedCwd.cwd,
         override: true,
         blockedRuleId
       });
-      const output = await this.executeShellCommand(command);
+      const output = await this.executeShellCommand(command, resolvedCwd.cwd);
       return `Approved risky shell override (${blockedRuleId}).\n${output}`;
+    }
+    if (approval.action === "shell_exec") {
+      const command = String(approval.payload.command ?? "").trim();
+      const requestedCwd = typeof approval.payload.cwd === "string" ? approval.payload.cwd.trim() : undefined;
+      if (!command) {
+        return "Approved action failed: missing shell command.";
+      }
+      const resolvedCwd = this.resolveShellCwd(requestedCwd);
+      if (!resolvedCwd.ok) {
+        return `Approved action failed: ${resolvedCwd.error}`;
+      }
+      const shellPolicy = this.evaluateShellCommandPolicy(command);
+      if (shellPolicy.blocked) {
+        return `Approved action failed: shell command blocked by policy (${shellPolicy.ruleId}).`;
+      }
+      await this.recordToolUsage(channelSessionId, "shell.exec", {
+        command,
+        cwd: resolvedCwd.cwd,
+        override: false
+      });
+      const output = await this.executeShellCommand(command, resolvedCwd.cwd);
+      return `Approved action executed: shell_exec\n${output}`;
     }
     if (approval.action === "web_to_file_send") {
       if (!this.capabilityPolicy.webSearchEnabled) {
@@ -2319,6 +2659,13 @@ export class GatewayService {
       return text.replace(/\s+/g, " ").slice(0, 140);
     }
 
+    const command = typeof payload.command === "string" ? payload.command.trim() : "";
+    if (command) {
+      const cwd = typeof payload.cwd === "string" ? payload.cwd.trim() : "";
+      const combined = cwd ? `${command} @ ${cwd}` : command;
+      return combined.replace(/\s+/g, " ").slice(0, 140);
+    }
+
     return "";
   }
 
@@ -2344,7 +2691,10 @@ export class GatewayService {
     }
 
     try {
-      const result = await this.llmService.generateText(sessionId, prepared.prompt, { authPreference });
+      const result = await this.llmService.generateText(sessionId, prepared.prompt, {
+        authPreference,
+        executionMode: "reasoning_only"
+      });
       const llmText = result?.text?.trim();
       if (!llmText) {
         return this.noModelResponse(authPreference);
@@ -2512,6 +2862,35 @@ export class GatewayService {
     return normalized || undefined;
   }
 
+  private normalizeShellAllowedDirs(rawDirs: unknown, workspaceDir: string): string[] {
+    const defaults = [path.resolve(workspaceDir)];
+    if (!Array.isArray(rawDirs)) {
+      return defaults;
+    }
+    const normalized = Array.from(
+      new Set(
+        rawDirs
+          .map((entry) => String(entry ?? "").trim())
+          .filter((entry) => entry.length > 0)
+          .map((entry) => path.resolve(this.expandHomePath(entry)))
+      )
+    );
+    return normalized.length > 0 ? normalized : defaults;
+  }
+
+  private expandHomePath(value: string): string {
+    if (value === "~") {
+      return process.env.HOME ? path.resolve(process.env.HOME) : value;
+    }
+    if (value.startsWith("~/")) {
+      const home = process.env.HOME;
+      if (home) {
+        return path.join(home, value.slice(2));
+      }
+    }
+    return value;
+  }
+
   private noModelResponse(authPreference: LlmAuthPreference): string {
     if (authPreference === "oauth") {
       return "No OAuth-backed model session is available. Connect ChatGPT OAuth and try again.";
@@ -2593,6 +2972,8 @@ export class GatewayService {
 
     const promptParts = [
       "You are answering with optional memory context.",
+      "This is a reasoning-only turn. Do not execute commands, modify files, send messages, or claim side effects were performed.",
+      "If the user asks for side effects, propose a concrete next action and ask for explicit approval.",
       "If memory snippets are relevant, use them and cite source as [path:start:end]."
     ];
     if (historyLines.length > 0) {
@@ -2857,6 +3238,9 @@ export class GatewayService {
   }
 
   private evaluateShellCommandPolicy(command: string): { blocked: false } | { blocked: true; ruleId: string } {
+    if (/(^|\s|[;&|])(cd|pushd)\s+/i.test(command)) {
+      return { blocked: true, ruleId: "manual_dir_change_use_cwd" };
+    }
     return evaluateSandboxShellCommandPolicy(command);
   }
 
@@ -2953,7 +3337,29 @@ export class GatewayService {
     return `Queued attachment send: workspace/${relativePath}`;
   }
 
-  private async executeShellCommand(command: string): Promise<string> {
+  private resolveShellCwd(rawCwd?: string): { ok: true; cwd: string } | { ok: false; error: string } {
+    const requested = typeof rawCwd === "string" && rawCwd.trim() ? rawCwd.trim() : this.capabilityPolicy.workspaceDir;
+    const expanded = this.expandHomePath(requested);
+    const candidate = path.isAbsolute(expanded)
+      ? path.resolve(expanded)
+      : path.resolve(this.capabilityPolicy.workspaceDir, expanded);
+    const allowed = this.capabilityPolicy.shellAllowedDirs.some((root) => this.isPathInsideRoot(candidate, root));
+    if (!allowed) {
+      return {
+        ok: false,
+        error: `Shell cwd is outside allowed scope: ${candidate}. Allowed roots: ${this.capabilityPolicy.shellAllowedDirs.join(", ")}`
+      };
+    }
+    return { ok: true, cwd: candidate };
+  }
+
+  private isPathInsideRoot(targetPath: string, rootPath: string): boolean {
+    const normalizedRoot = path.resolve(rootPath);
+    const normalizedTarget = path.resolve(targetPath);
+    return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`);
+  }
+
+  private async executeShellCommand(command: string, cwdOverride?: string): Promise<string> {
     const trimmed = command.trim();
     if (!trimmed) {
       return "Shell command is empty.";
@@ -2961,7 +3367,7 @@ export class GatewayService {
 
     const maxOutputChars = this.capabilityPolicy.shellMaxOutputChars;
     const timeoutMs = this.capabilityPolicy.shellTimeoutMs;
-    const cwd = this.capabilityPolicy.workspaceDir;
+    const cwd = cwdOverride ?? this.capabilityPolicy.workspaceDir;
 
     return await new Promise((resolve) => {
       const child = spawn(trimmed, {

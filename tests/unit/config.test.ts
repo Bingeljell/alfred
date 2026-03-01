@@ -52,6 +52,8 @@ describe("loadConfig", () => {
     expect(config.alfredFileWriteApprovalMode).toBe("session");
     expect(config.alfredFileWriteApprovalScope).toBe("auth");
     expect(config.alfredShellEnabled).toBe(false);
+    expect(config.alfredShellAllowedDirs.length).toBe(1);
+    expect(config.alfredShellAllowedDirs[0]?.endsWith("workspace/alfred")).toBe(true);
     expect(config.alfredShellTimeoutMs).toBe(20000);
     expect(config.alfredShellMaxOutputChars).toBe(8000);
     expect(config.alfredWasmEnabled).toBe(false);
@@ -136,6 +138,7 @@ describe("loadConfig", () => {
       ALFRED_FILE_WRITE_APPROVAL_MODE: "always",
       ALFRED_FILE_WRITE_APPROVAL_SCOPE: "channel",
       ALFRED_SHELL_ENABLED: "true",
+      ALFRED_SHELL_ALLOWED_DIRS: "./tmp/alfred-workspace,./tmp/searxng",
       ALFRED_SHELL_TIMEOUT_MS: "30000",
       ALFRED_SHELL_MAX_OUTPUT_CHARS: "16000",
       ALFRED_WASM_ENABLED: "true",
@@ -224,6 +227,9 @@ describe("loadConfig", () => {
     expect(config.alfredFileWriteApprovalMode).toBe("always");
     expect(config.alfredFileWriteApprovalScope).toBe("channel");
     expect(config.alfredShellEnabled).toBe(true);
+    expect(config.alfredShellAllowedDirs.length).toBe(2);
+    expect(config.alfredShellAllowedDirs[0]?.endsWith("tmp/alfred-workspace")).toBe(true);
+    expect(config.alfredShellAllowedDirs[1]?.endsWith("tmp/searxng")).toBe(true);
     expect(config.alfredShellTimeoutMs).toBe(30000);
     expect(config.alfredShellMaxOutputChars).toBe(16000);
     expect(config.alfredWasmEnabled).toBe(true);

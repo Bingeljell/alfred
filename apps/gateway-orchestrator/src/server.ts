@@ -365,6 +365,7 @@ async function main(): Promise<void> {
       fileWriteApprovalMode: config.alfredFileWriteApprovalMode,
       fileWriteApprovalScope: config.alfredFileWriteApprovalScope,
       shellEnabled: config.alfredShellEnabled,
+      shellAllowedDirs: config.alfredShellAllowedDirs,
       shellTimeoutMs: config.alfredShellTimeoutMs,
       shellMaxOutputChars: config.alfredShellMaxOutputChars,
       wasmEnabled: config.alfredWasmEnabled

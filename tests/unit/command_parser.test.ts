@@ -77,9 +77,19 @@ describe("parseCommand", () => {
       kind: "shell_exec",
       command: "ls -la"
     });
+    expect(parseCommand("/shell --cwd=./workspace/alfred ls -la")).toEqual({
+      kind: "shell_exec",
+      command: "ls -la",
+      cwd: "./workspace/alfred"
+    });
     expect(parseCommand("/exec pwd")).toEqual({
       kind: "shell_exec",
       command: "pwd"
+    });
+    expect(parseCommand("/exec --cwd=/tmp pwd")).toEqual({
+      kind: "shell_exec",
+      command: "pwd",
+      cwd: "/tmp"
     });
     expect(parseCommand("/calendar add 2026-02-23T09:00:00Z team sync")).toEqual({
       kind: "calendar_add",

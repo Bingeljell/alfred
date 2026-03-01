@@ -1,4 +1,5 @@
 import { OAuthService } from "../auth/oauth_service";
+import type { LlmExecutionMode } from "../orchestrator/types";
 
 export type ResponsesAuthMode = "oauth" | "api_key";
 export type LlmAuthPreference = "auto" | "oauth" | "api_key";
@@ -37,7 +38,7 @@ export class OpenAIResponsesService {
   async generateText(
     sessionId: string,
     input: string,
-    options?: { authPreference?: LlmAuthPreference }
+    options?: { authPreference?: LlmAuthPreference; executionMode?: LlmExecutionMode }
   ): Promise<ResponsesResult | null> {
     if (!this.enabled || !input.trim()) {
       return null;
@@ -47,6 +48,7 @@ export class OpenAIResponsesService {
     if (!credential) {
       return null;
     }
+    const executionMode = options?.executionMode ?? "default";
 
     const controller = new AbortController();
     const timeout = setTimeout(() => {
@@ -62,7 +64,7 @@ export class OpenAIResponsesService {
         },
         body: JSON.stringify({
           model: this.model,
-          input
+          input: this.buildInput(input, executionMode)
         }),
         signal: controller.signal
       });
@@ -94,6 +96,21 @@ export class OpenAIResponsesService {
     } finally {
       clearTimeout(timeout);
     }
+  }
+
+  private buildInput(input: string, executionMode: LlmExecutionMode): string {
+    const trimmed = input.trim();
+    if (executionMode !== "reasoning_only") {
+      return trimmed;
+    }
+    return [
+      "[EXECUTION_MODE=REASONING_ONLY]",
+      "You are in analysis mode only.",
+      "Do not execute commands, call tools, send messages, or claim any side effect was performed.",
+      "If side effects are needed, propose the next action and ask for explicit approval.",
+      "",
+      trimmed
+    ].join("\n");
   }
 
   private async resolveCredential(

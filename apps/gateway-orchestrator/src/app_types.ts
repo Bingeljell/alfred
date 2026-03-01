@@ -14,7 +14,7 @@ import type { RunLedgerStore } from "./builtins/run_ledger_store";
 import type { SupervisorStore } from "./builtins/supervisor_store";
 import type { RunSpecStore } from "./builtins/run_spec_store";
 import type { MemoryCheckpointClass } from "./builtins/memory_checkpoint_service";
-import type { LlmAuthPreference, PlannerDecision } from "./orchestrator/types";
+import type { LlmAuthPreference, LlmExecutionMode, PlannerDecision } from "./orchestrator/types";
 
 export type CreateGatewayAppOptions = {
   dedupeStore?: MessageDedupeStore;
@@ -29,7 +29,7 @@ export type CreateGatewayAppOptions = {
     generateText: (
       sessionId: string,
       input: string,
-      options?: { authPreference?: LlmAuthPreference }
+      options?: { authPreference?: LlmAuthPreference; executionMode?: LlmExecutionMode }
     ) => Promise<{ text: string } | null>;
   };
   webSearchService?: {
@@ -125,6 +125,7 @@ export type CreateGatewayAppOptions = {
     fileWriteApprovalMode?: "per_action" | "session" | "always";
     fileWriteApprovalScope?: "auth" | "channel";
     shellEnabled?: boolean;
+    shellAllowedDirs?: string[];
     shellTimeoutMs?: number;
     shellMaxOutputChars?: number;
     wasmEnabled?: boolean;
