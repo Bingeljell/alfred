@@ -22,6 +22,8 @@ describe("tool_policy_engine", () => {
     expect(TOOL_SPECS_V1["web.search"].safetyTier).toBe("read_only");
     expect(TOOL_SPECS_V1["file.write"].safetyTier).toBe("side_effecting");
     expect(TOOL_SPECS_V1["shell.exec"].safetyTier).toBe("privileged");
+    expect(TOOL_SPECS_V1["process.list"].safetyTier).toBe("read_only");
+    expect(TOOL_SPECS_V1["process.kill"].safetyTier).toBe("privileged");
   });
 
   it("allows web search without approval when enabled", () => {
@@ -61,6 +63,19 @@ describe("tool_policy_engine", () => {
     });
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toContain("disabled");
+  });
+
+  it("blocks process tools when shell capability is disabled", () => {
+    const listDecision = evaluateToolPolicy("process.list", {
+      ...BASE_POLICY,
+      shellEnabled: false
+    });
+    const killDecision = evaluateToolPolicy("process.kill", {
+      ...BASE_POLICY,
+      shellEnabled: false
+    });
+    expect(listDecision.allowed).toBe(false);
+    expect(killDecision.allowed).toBe(false);
   });
 
   it("gates wasm execution by explicit policy flag", () => {

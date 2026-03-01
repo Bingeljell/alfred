@@ -1,5 +1,14 @@
 export type ExternalCapability = "web_search" | "file_read" | "file_write" | "shell_exec" | "wasm_exec";
-export type ToolId = "web.search" | "file.read" | "file.write" | "file.edit" | "file.send" | "shell.exec" | "wasm.exec";
+export type ToolId =
+  | "web.search"
+  | "file.read"
+  | "file.write"
+  | "file.edit"
+  | "file.send"
+  | "shell.exec"
+  | "process.list"
+  | "process.kill"
+  | "wasm.exec";
 export type ToolSafetyTier = "read_only" | "side_effecting" | "privileged";
 
 export type ToolSpecV1 = {
@@ -74,6 +83,20 @@ export const TOOL_SPECS_V1: Record<ToolId, ToolSpecV1> = {
     capability: "shell_exec",
     safetyTier: "privileged",
     description: "Executes shell commands inside the workspace policy boundary."
+  },
+  "process.list": {
+    version: 1,
+    toolId: "process.list",
+    capability: "shell_exec",
+    safetyTier: "read_only",
+    description: "Lists running local processes with optional pattern filtering."
+  },
+  "process.kill": {
+    version: 1,
+    toolId: "process.kill",
+    capability: "shell_exec",
+    safetyTier: "privileged",
+    description: "Stops local processes by PID or pattern with post-kill verification."
   },
   "wasm.exec": {
     version: 1,

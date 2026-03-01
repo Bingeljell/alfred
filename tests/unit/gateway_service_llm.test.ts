@@ -1236,6 +1236,129 @@ describe("GatewayService llm path", () => {
     expect(calls[0]?.[2]).toEqual({ authPreference: "auto" });
   });
 
+  it("runs process.list next_action and returns filtered process output", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-process-list-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          assistant_response: "I will check matching local processes.",
+          next_action: {
+            type: "process.list",
+            pattern: "alfred_no_match_pattern_12345",
+            cwd: workspaceDir,
+            limit: 10,
+            reason: "inspect_processes"
+          }
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "relaxed",
+        approvalDefault: false,
+        shellEnabled: true,
+        shellAllowedDirs: [workspaceDir]
+      }
+    );
+
+    const response = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "find local process for searx",
+      requestJob: false
+    });
+    expect(response.mode).toBe("chat");
+    expect(response.response).toContain("No running process matched pattern");
+  });
+
+  it("runs process.kill with approval and reports when no process target is found", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-process-kill-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          assistant_response: "I will stop the matching process.",
+          next_action: {
+            type: "process.kill",
+            pattern: "alfred_no_match_pattern_98765",
+            signal: "TERM",
+            cwd: workspaceDir,
+            reason: "stop_process"
+          }
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "balanced",
+        approvalDefault: true,
+        shellEnabled: true,
+        shellAllowedDirs: [workspaceDir]
+      }
+    );
+
+    const proposed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "stop searx process locally",
+      requestJob: false
+    });
+    expect(proposed.response).toContain("Process termination ready for approval.");
+
+    const approved = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "yes",
+      requestJob: false
+    });
+    expect(approved.response).toContain("Approved action executed: process_kill");
+    expect(approved.response).toContain("No target process was found.");
+  });
+
   it("reruns latest failed search query after approved local shell recovery action", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-local-ops-rerun-unit-"));
     const workspaceDir = path.join(stateDir, "workspace", "alfred");

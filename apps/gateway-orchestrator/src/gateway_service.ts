@@ -139,6 +139,8 @@ type AgentNextActionType =
   | "ask_user"
   | "web.search"
   | "shell.exec"
+  | "process.list"
+  | "process.kill"
   | "worker.run";
 
 type AgentNextAction = {
@@ -148,6 +150,10 @@ type AgentNextAction = {
   provider?: WebSearchProvider | "auto";
   mode?: "quick" | "deep";
   command?: string;
+  pattern?: string;
+  pid?: number;
+  signal?: "TERM" | "KILL" | "INT";
+  limit?: number;
   cwd?: string;
   rerunQuery?: string;
   goal?: string;
@@ -156,6 +162,18 @@ type AgentNextAction = {
 type AgentTurnDecision = {
   assistantResponse: string;
   nextAction?: AgentNextAction;
+};
+
+type ProcessKillResult = {
+  ok: boolean;
+  signal: "TERM" | "KILL" | "INT";
+  requestedPid?: number;
+  requestedPattern?: string;
+  targetedPids: number[];
+  killedPids: number[];
+  remainingPids: number[];
+  notFound: boolean;
+  errors: string[];
 };
 
 export class GatewayService {
@@ -2776,6 +2794,62 @@ export class GatewayService {
       });
       return `Approved action executed: web_search (queued job ${job.id}).`;
     }
+    if (approval.action === "process_kill") {
+      const pidRaw = Number(approval.payload.pid);
+      const pid = Number.isFinite(pidRaw) && pidRaw > 0 ? Math.trunc(pidRaw) : undefined;
+      const pattern = typeof approval.payload.pattern === "string" ? approval.payload.pattern.trim() : "";
+      const signalRaw = String(approval.payload.signal ?? "TERM")
+        .trim()
+        .toUpperCase();
+      const signal: "TERM" | "KILL" | "INT" = signalRaw === "KILL" || signalRaw === "INT" ? signalRaw : "TERM";
+      const requestedCwd = typeof approval.payload.cwd === "string" ? approval.payload.cwd.trim() : undefined;
+      const rerunQuery = typeof approval.payload.rerunQuery === "string" ? approval.payload.rerunQuery.trim() : "";
+      if (!pid && !pattern) {
+        return "Approved action failed: process_kill requires pid or pattern.";
+      }
+      const resolvedCwd = this.resolveShellCwd(requestedCwd);
+      if (!resolvedCwd.ok) {
+        return `Approved action failed: ${resolvedCwd.error}`;
+      }
+      await this.recordToolUsage(channelSessionId, "process.kill", {
+        route: "approval_execute",
+        pid,
+        pattern: pattern || undefined,
+        signal,
+        cwd: resolvedCwd.cwd
+      });
+      const result = await this.killProcesses({
+        cwd: resolvedCwd.cwd,
+        pid,
+        pattern: pattern || undefined,
+        signal
+      });
+      const output = renderProcessKillResult(result);
+      if (!result.ok) {
+        const followup = await this.planAfterApprovedShellFailure(channelSessionId, authSessionId, authPreference, {
+          command: pid ? `kill -${signal} ${pid}` : `pkill -${signal} -f ${pattern}`,
+          cwd: resolvedCwd.cwd,
+          shellOutput: output,
+          rerunQuery
+        });
+        if (followup) {
+          return `Approved action executed: process_kill\n${output}\n\n${followup}`;
+        }
+        return `Approved action executed: process_kill\n${output}`;
+      }
+      if (!rerunQuery) {
+        return `Approved action executed: process_kill\n${output}`;
+      }
+      const job = await this.enqueueLongTaskJob(channelSessionId, {
+        taskType: "agentic_turn",
+        query: rerunQuery,
+        provider: this.capabilityPolicy.webSearchProvider,
+        authSessionId,
+        authPreference,
+        reason: "post_process_kill_rerun"
+      });
+      return `Approved action executed: process_kill\n${output}\n\nRerunning prior task as job ${job.id}.`;
+    }
     if (approval.action === "shell_exec_override") {
       const command = String(approval.payload.command ?? "").trim();
       const requestedCwd = typeof approval.payload.cwd === "string" ? approval.payload.cwd.trim() : undefined;
@@ -3201,11 +3275,13 @@ export class GatewayService {
       "You are Alfred, a goal-oriented orchestrator.",
       "Decide whether to answer directly or propose exactly one next action.",
       "Return STRICT JSON only with this shape:",
-      '{"assistant_response":"", "next_action":{"type":"none|ask_user|web.search|shell.exec|worker.run","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","cwd":"","rerunQuery":"","goal":""}}',
+      '{"assistant_response":"", "next_action":{"type":"none|ask_user|web.search|shell.exec|process.list|process.kill|worker.run","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","pattern":"","pid":0,"signal":"TERM|KILL|INT","limit":10,"cwd":"","rerunQuery":"","goal":""}}',
       "Rules:",
       "- Use next_action.type=none for pure conversational replies.",
       "- Use web.search for live/current web retrieval.",
       "- Use shell.exec for local machine operations.",
+      "- Use process.list to inspect running processes (optionally with a pattern).",
+      "- Use process.kill to stop a specific PID or processes matching a pattern.",
       "- Use worker.run for long-running tasks requiring background execution.",
       "- If unclear, ask one concise clarification using assistant_response and next_action.type=ask_user.",
       "- Do not invent execution results. Execution happens after this decision.",
@@ -3229,10 +3305,26 @@ export class GatewayService {
     let nextAction: AgentNextAction | undefined;
     if (nextActionRaw) {
       const type = String(nextActionRaw.type ?? "").trim() as AgentNextActionType;
-      if (type === "none" || type === "ask_user" || type === "web.search" || type === "shell.exec" || type === "worker.run") {
+      if (
+        type === "none" ||
+        type === "ask_user" ||
+        type === "web.search" ||
+        type === "shell.exec" ||
+        type === "process.list" ||
+        type === "process.kill" ||
+        type === "worker.run"
+      ) {
         const provider = this.normalizeWebSearchProvider(nextActionRaw.provider);
         const modeRaw = String(nextActionRaw.mode ?? "").trim().toLowerCase();
         const mode = modeRaw === "quick" || modeRaw === "deep" ? modeRaw : undefined;
+        const signalRaw = String(nextActionRaw.signal ?? "")
+          .trim()
+          .toUpperCase();
+        const signal = signalRaw === "KILL" || signalRaw === "INT" ? signalRaw : signalRaw === "TERM" ? "TERM" : undefined;
+        const pidRaw = Number(nextActionRaw.pid);
+        const pid = Number.isFinite(pidRaw) && pidRaw > 0 ? Math.trunc(pidRaw) : undefined;
+        const limitRaw = Number(nextActionRaw.limit);
+        const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(100, Math.trunc(limitRaw)) : undefined;
         nextAction = {
           type,
           reason: typeof nextActionRaw.reason === "string" ? nextActionRaw.reason.trim() : undefined,
@@ -3240,6 +3332,10 @@ export class GatewayService {
           provider: provider ?? undefined,
           mode,
           command: typeof nextActionRaw.command === "string" ? nextActionRaw.command.trim() : undefined,
+          pattern: typeof nextActionRaw.pattern === "string" ? nextActionRaw.pattern.trim() : undefined,
+          pid,
+          signal,
+          limit,
           cwd: typeof nextActionRaw.cwd === "string" ? nextActionRaw.cwd.trim() : undefined,
           rerunQuery: typeof nextActionRaw.rerunQuery === "string" ? nextActionRaw.rerunQuery.trim() : undefined,
           goal: typeof nextActionRaw.goal === "string" ? nextActionRaw.goal.trim() : undefined
@@ -3314,6 +3410,78 @@ export class GatewayService {
         reason: action.reason?.trim() || "agent_turn_v2_worker"
       });
       return `Queued task as job ${job.id}. I’ll share progress updates here.`;
+    }
+
+    if (action.type === "process.list") {
+      if (!isSandboxTargetEnabled("shell.exec", this.buildSandboxPolicyConfig())) {
+        return "Process inspection is disabled by sandbox policy.";
+      }
+      const toolPolicy = this.evaluateToolPolicy("process.list", { sessionId: channelSessionId, authSessionId });
+      if (!toolPolicy.allowed || !this.capabilityPolicy.shellEnabled) {
+        return "Process inspection is currently disabled by policy.";
+      }
+      const resolvedCwd = this.resolveShellCwd(action.cwd);
+      if (!resolvedCwd.ok) {
+        return resolvedCwd.error;
+      }
+      const pattern = action.pattern?.trim() || this.inferProcessPatternFromText(userText) || "";
+      const limit = action.limit && action.limit > 0 ? Math.min(100, action.limit) : 20;
+      await this.recordToolUsage(channelSessionId, "process.list", {
+        route: action.reason ?? "agent_turn_v2_process_list",
+        pattern: pattern || undefined,
+        cwd: resolvedCwd.cwd,
+        limit
+      });
+      const output = await this.listProcesses({ cwd: resolvedCwd.cwd, pattern, limit });
+      return output;
+    }
+
+    if (action.type === "process.kill") {
+      if (!isSandboxTargetEnabled("shell.exec", this.buildSandboxPolicyConfig())) {
+        return "Process termination is disabled by sandbox policy.";
+      }
+      const toolPolicy = this.evaluateToolPolicy("process.kill", { sessionId: channelSessionId, authSessionId });
+      if (!toolPolicy.allowed || !this.capabilityPolicy.shellEnabled) {
+        return "Process termination is currently disabled by policy.";
+      }
+      const resolvedCwd = this.resolveShellCwd(action.cwd);
+      if (!resolvedCwd.ok) {
+        return resolvedCwd.error;
+      }
+
+      const pid = Number.isFinite(action.pid) && (action.pid ?? 0) > 0 ? Math.trunc(action.pid as number) : undefined;
+      const pattern = action.pattern?.trim() || this.inferProcessPatternFromText(userText) || "";
+      if (!pid && !pattern) {
+        return "Process kill action is missing both pid and pattern.";
+      }
+      if (pattern && pattern.length < 3) {
+        return "Process kill pattern is too short. Provide at least 3 characters.";
+      }
+      const signal = action.signal ?? "TERM";
+      if (!this.approvalStore) {
+        return "Process termination requires approvals, but approvals are not configured.";
+      }
+      const approval = await this.approvalStore.create(channelSessionId, "process_kill", {
+        pid,
+        pattern: pattern || undefined,
+        signal,
+        cwd: resolvedCwd.cwd,
+        authSessionId,
+        source: "agent_turn_v2",
+        reason: action.reason ?? "agent_process_kill_request",
+        rerunQuery: action.rerunQuery?.trim() || undefined
+      });
+      return [
+        "Process termination ready for approval.",
+        `- cwd: ${resolvedCwd.cwd}`,
+        pid ? `- pid: ${pid}` : "",
+        pattern ? `- pattern: ${pattern}` : "",
+        `- signal: ${signal}`,
+        "Reply yes/no to approve or reject.",
+        `Optional explicit token: approve ${approval.token}`
+      ]
+        .filter((line) => line.length > 0)
+        .join("\n");
     }
 
     if (action.type === "shell.exec") {
@@ -4394,6 +4562,122 @@ export class GatewayService {
     });
   }
 
+  private inferProcessPatternFromText(rawText: string): string | null {
+    const quoted = rawText.match(/["']([^"']{3,120})["']/);
+    if (quoted?.[1]) {
+      return quoted[1].trim();
+    }
+    const looksLikeProcess = rawText.match(/\b(searx(?:\.webapp|ng)?|python3?(?:\.\d+)?\s+-m\s+[a-z0-9_.-]+|node\s+\S+)\b/i);
+    if (looksLikeProcess?.[1]) {
+      return looksLikeProcess[1].trim();
+    }
+    return null;
+  }
+
+  private async listProcesses(input: { cwd: string; pattern?: string; limit: number }): Promise<string> {
+    const pattern = input.pattern?.trim() || "";
+    if (pattern) {
+      const escaped = this.shellEscapeSingleQuoted(pattern);
+      const listed = await this.runShellVerificationCommand(`pgrep -af -- ${escaped}`, input.cwd);
+      if (listed.exitCode === 1 || !listed.stdout) {
+        return `No running process matched pattern: ${pattern}`;
+      }
+      const lines = listed.stdout
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .slice(0, input.limit);
+      return [`Matching processes for pattern '${pattern}':`, ...lines.map((line) => `- ${line}`)].join("\n");
+    }
+
+    const listed = await this.runShellVerificationCommand(
+      `ps -axo pid,ppid,command | sed 1d | head -n ${Math.max(1, Math.min(100, input.limit))}`,
+      input.cwd
+    );
+    if (listed.exitCode !== 0 || !listed.stdout) {
+      return `Could not list processes. stderr: ${listed.stderr || "none"}`;
+    }
+    const lines = listed.stdout
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    return [`Top ${lines.length} running processes:`, ...lines.map((line) => `- ${line}`)].join("\n");
+  }
+
+  private async killProcesses(input: {
+    cwd: string;
+    pid?: number;
+    pattern?: string;
+    signal: "TERM" | "KILL" | "INT";
+  }): Promise<ProcessKillResult> {
+    const targetedPids: number[] = [];
+    const errors: string[] = [];
+    const pattern = input.pattern?.trim() || "";
+
+    if (typeof input.pid === "number" && input.pid > 0) {
+      targetedPids.push(input.pid);
+    } else if (pattern) {
+      const escaped = this.shellEscapeSingleQuoted(pattern);
+      const listed = await this.runShellVerificationCommand(`pgrep -f -- ${escaped}`, input.cwd);
+      if (listed.exitCode === 0 && listed.stdout) {
+        const parsed = listed.stdout
+          .split(/\s+/)
+          .map((item) => Number.parseInt(item, 10))
+          .filter((pid) => Number.isFinite(pid) && pid > 0);
+        targetedPids.push(...parsed);
+      } else if (listed.exitCode !== 1 && listed.stderr) {
+        errors.push(`lookup_error: ${listed.stderr}`);
+      }
+    }
+
+    const dedupedTargets = Array.from(new Set(targetedPids));
+    if (dedupedTargets.length === 0) {
+      return {
+        ok: false,
+        signal: input.signal,
+        requestedPid: input.pid,
+        requestedPattern: pattern || undefined,
+        targetedPids: [],
+        killedPids: [],
+        remainingPids: [],
+        notFound: true,
+        errors
+      };
+    }
+
+    const killedPids: number[] = [];
+    const remainingPids: number[] = [];
+    for (const pid of dedupedTargets) {
+      const killResult = await this.runShellVerificationCommand(`kill -${input.signal} ${pid}`, input.cwd);
+      if (killResult.exitCode !== 0) {
+        errors.push(`kill(${pid}) failed: ${killResult.stderr || "unknown"}`);
+        remainingPids.push(pid);
+        continue;
+      }
+      // Give process a brief chance to terminate before verification.
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      const probe = await this.runShellVerificationCommand(`kill -0 ${pid}`, input.cwd);
+      if (probe.exitCode === 0) {
+        remainingPids.push(pid);
+      } else {
+        killedPids.push(pid);
+      }
+    }
+
+    const ok = remainingPids.length === 0 && killedPids.length > 0;
+    return {
+      ok,
+      signal: input.signal,
+      requestedPid: input.pid,
+      requestedPattern: pattern || undefined,
+      targetedPids: dedupedTargets,
+      killedPids,
+      remainingPids,
+      notFound: false,
+      errors
+    };
+  }
+
   private async planAfterApprovedShellFailure(
     channelSessionId: string,
     authSessionId: string,
@@ -4414,12 +4698,12 @@ export class GatewayService {
       "A user approved a local shell recovery action, but it failed.",
       "Decide the next best step with minimal friction.",
       "Return STRICT JSON only with this shape:",
-      '{"assistant_response":"", "next_action":{"type":"none|ask_user|web.search|shell.exec|worker.run","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","cwd":"","rerunQuery":"","goal":""}}',
+      '{"assistant_response":"", "next_action":{"type":"none|ask_user|web.search|shell.exec|process.list|process.kill|worker.run","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","pattern":"","pid":0,"signal":"TERM|KILL|INT","limit":10,"cwd":"","rerunQuery":"","goal":""}}',
       "",
       "Rules:",
       "- Do not claim success when shell failed.",
       "- Prefer next_action.type=ask_user when missing critical details or permission.",
-      "- Prefer next_action.type=shell.exec only if you can propose a concrete corrective command.",
+      "- Prefer next_action.type=shell.exec or process.kill only if you can propose a concrete corrective action.",
       "- If proposing shell.exec, set rerunQuery to the original goal so successful recovery can resume it.",
       "- Keep assistant_response concise and action-oriented.",
       "",
@@ -4524,4 +4808,33 @@ export class GatewayService {
       return false;
     }
   }
+}
+
+function renderProcessKillResult(result: ProcessKillResult): string {
+  if (result.notFound) {
+    return [
+      "No target process was found.",
+      result.requestedPattern ? `Pattern: ${result.requestedPattern}` : "",
+      result.requestedPid ? `PID: ${result.requestedPid}` : "",
+      result.errors.length > 0 ? `Details: ${result.errors.join(" | ")}` : ""
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n");
+  }
+
+  const lines = [
+    `Signal: ${result.signal}`,
+    `Targeted PIDs: ${result.targetedPids.join(", ") || "none"}`,
+    `Stopped PIDs: ${result.killedPids.join(", ") || "none"}`,
+    `Remaining PIDs: ${result.remainingPids.join(", ") || "none"}`
+  ];
+  if (result.errors.length > 0) {
+    lines.push(`Errors: ${result.errors.join(" | ")}`);
+  }
+  if (result.ok) {
+    lines.unshift("Process termination verified.");
+  } else {
+    lines.unshift("Process termination incomplete.");
+  }
+  return lines.join("\n");
 }
