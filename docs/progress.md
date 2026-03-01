@@ -20,6 +20,9 @@
 
 ## Recent Task Updates
 
+- 2026-03-01: Fixed an agentic-local-ops regression: with LLM enabled, gateway no longer invokes the secondary local-ops planner path before agent turn routing, preventing long stalls and misclassification loops on “service is down, start local process” requests.
+- 2026-03-01: Added explicit LLM timeout bounds for agent-turn decision generation (and local-ops proposal fallback path) so stuck model calls degrade to deterministic error handling instead of silent limbo.
+- 2026-03-01: Updated planner trace phrasing from “selected” to “hint” to reflect advisory-only planner semantics in stream telemetry.
 - 2026-03-01: Implemented agent-first gateway execution cutover while keeping planner traces as advisory telemetry: inbound turns now prefer agentic chat decisions with optional structured next actions (`web.search`, `shell.exec`, `worker.run`) enforced by policy/approval contracts instead of hard planner routing branches.
 - 2026-03-01: Improved approval/local-ops continuity for real chat flows by accepting natural approval phrases (`approve ...`, `go ahead`, `approved`), expanding local-ops detection verbs (`enable/configure/setup`), canonicalizing shell allowlist paths, and inferring cwd from user-provided absolute paths when model proposals are off.
 - 2026-03-01: Added recovery resume behavior for approved local shell actions: gateway now discovers the latest failed search query for a session and can automatically requeue that goal after successful local service recovery, with unit coverage validating rerun behavior.
