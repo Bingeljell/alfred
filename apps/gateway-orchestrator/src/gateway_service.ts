@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { realpathSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -3512,9 +3513,10 @@ export class GatewayService {
   private resolveShellCwd(rawCwd?: string): { ok: true; cwd: string } | { ok: false; error: string } {
     const requested = typeof rawCwd === "string" && rawCwd.trim() ? rawCwd.trim() : this.capabilityPolicy.workspaceDir;
     const expanded = this.expandHomePath(requested);
-    const candidate = path.isAbsolute(expanded)
+    const candidateRaw = path.isAbsolute(expanded)
       ? path.resolve(expanded)
       : path.resolve(this.capabilityPolicy.workspaceDir, expanded);
+    const candidate = this.canonicalizePathForScope(candidateRaw);
     const allowed = this.capabilityPolicy.shellAllowedDirs.some((root) => this.isPathInsideRoot(candidate, root));
     if (!allowed) {
       return {
@@ -3526,9 +3528,24 @@ export class GatewayService {
   }
 
   private isPathInsideRoot(targetPath: string, rootPath: string): boolean {
-    const normalizedRoot = path.resolve(rootPath);
-    const normalizedTarget = path.resolve(targetPath);
+    const normalizedRoot = this.canonicalizePathForScope(rootPath);
+    const normalizedTarget = this.canonicalizePathForScope(targetPath);
     return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}${path.sep}`);
+  }
+
+  private canonicalizePathForScope(rawPath: string): string {
+    const sanitized = this.stripInvisiblePathChars(String(rawPath ?? ""));
+    const resolved = path.resolve(sanitized);
+    try {
+      return realpathSync.native(resolved);
+    } catch {
+      return resolved;
+    }
+  }
+
+  private stripInvisiblePathChars(rawPath: string): string {
+    // Remove common hidden code points that frequently appear in copied paths.
+    return rawPath.normalize("NFKC").replace(/[\u200B-\u200D\uFEFF]/g, "");
   }
 
   private async executeShellCommand(command: string, cwdOverride?: string): Promise<string> {

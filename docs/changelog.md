@@ -133,6 +133,7 @@
 - **2026-02-22** > docs/features.md > MVP and post-MVP features > Added key feature set with acceptance criteria and test approach per feature.
 - **2026-02-22** > docs/changelog.md > changelog entries > Corrected legacy entry format and logged new planning/documentation updates.
 - **2026-02-22** > AGENTS.md, Gemini.md > Repo Guidelines updates > Reloaded and committed updated agent instruction files with clarified architect/clarification-first guidance.
+- **2026-03-01** > apps/gateway-orchestrator/src/gateway_service.ts, tests/unit/gateway_service_llm.test.ts > resolveShellCwd, isPathInsideRoot, canonicalizePathForScope, stripInvisiblePathChars > Fixed shell scope false-negatives by canonicalizing symlink/invisible-character paths before allowlist checks and added regression coverage for symlink-root local-ops cwd resolution.
 - **2026-02-22** > docs/detailed_project_plan.md > architecture and phase definitions > Replaced draft plan with locked decisions, phase exit criteria, and completion rule for progress/changelog updates.
 - **2026-02-22** > docs/features.md > MVP and deferred scope > Aligned features to locked runtime, memory, external skill integration, and security model.
 - **2026-02-22** > docs/progress.md > phase tracker > Added canonical progress tracking file with current phase and completion checklist template.

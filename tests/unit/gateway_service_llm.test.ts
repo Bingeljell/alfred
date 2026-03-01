@@ -1213,6 +1213,69 @@ describe("GatewayService llm path", () => {
     expect(calls[0]?.[2]).toEqual({ authPreference: "auto", executionMode: "reasoning_only" });
   });
 
+  it("accepts local-ops cwd when allowlisted root is a symlink to the same directory", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-shell-symlink-scope-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const realAllowedRoot = path.join(stateDir, "external", "searxng");
+    await fs.mkdir(realAllowedRoot, { recursive: true });
+    const symlinkAllowedRoot = path.join(stateDir, "external", "searxng-link");
+    await fs.symlink(realAllowedRoot, symlinkAllowedRoot);
+
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          needsClarification: false,
+          question: "",
+          command: "python -m searx.webapp",
+          cwd: realAllowedRoot,
+          reason: "start_local_service",
+          confidence: 0.9
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "relaxed",
+        approvalDefault: false,
+        shellEnabled: true,
+        shellAllowedDirs: [symlinkAllowedRoot]
+      }
+    );
+
+    const proposed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "start the local searxng server in my project folder",
+      requestJob: false
+    });
+    expect(proposed.mode).toBe("chat");
+    expect(proposed.response).toContain("Local operation ready for approval.");
+    expect(proposed.response).toContain("python -m searx.webapp");
+  });
+
   it("rejects shell command cwd outside allowlisted directories", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-shell-scope-unit-"));
     const workspaceDir = path.join(stateDir, "workspace", "alfred");
