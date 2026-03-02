@@ -1319,6 +1319,76 @@ describe("GatewayService llm path", () => {
     expect(response.response).toContain("No running process matched pattern");
   });
 
+  it("asks confirmation to correct disallowed cwd and proceeds after yes", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-process-list-cwd-correct-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    const searxDir = path.join(stateDir, "searXNG");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(searxDir, { recursive: true });
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          assistant_response: "I will inspect the local searx process.",
+          next_action: {
+            type: "process.list",
+            pattern: "searx.webapp",
+            cwd: "/Users/nikhil/Projects/Alfred",
+            limit: 10,
+            reason: "inspect_searx_process"
+          }
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "balanced",
+        approvalDefault: true,
+        shellEnabled: true,
+        shellAllowedDirs: [workspaceDir, searxDir]
+      }
+    );
+
+    const proposed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "check if searx.webapp is active in local searxng directory",
+      requestJob: false
+    });
+    expect(proposed.mode).toBe("chat");
+    expect(proposed.response).toContain("Proposed cwd is outside allowed scope.");
+    expect(proposed.response).toContain("Reply yes/no to approve this cwd correction and continue.");
+
+    const approved = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "yes",
+      requestJob: false
+    });
+    expect(approved.mode).toBe("chat");
+    expect(approved.response).toContain("Approved action executed: process.list");
+  });
+
   it("runs process.kill with approval and reports when no process target is found", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-process-kill-unit-"));
     const workspaceDir = path.join(stateDir, "workspace", "alfred");

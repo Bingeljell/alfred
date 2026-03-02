@@ -592,6 +592,54 @@ describe("worker execution modules", () => {
     expect(search).not.toHaveBeenCalled();
   });
 
+  it("returns structured error metadata when web_search has no provider context", async () => {
+    const search = vi.fn(async () => null);
+    const processor = createWorkerProcessor({
+      config: {
+        alfredWorkspaceDir: "/tmp/alfred",
+        alfredWebSearchProvider: "searxng"
+      },
+      webSearchService: {
+        search
+      },
+      llmService: {
+        generateText: async () => ({ text: "ok" })
+      },
+      pagedResponseStore: {
+        setPages: async () => undefined,
+        clear: async () => undefined
+      },
+      notificationStore: {
+        enqueue: async () => undefined
+      },
+      runSpecStore: {
+        put: async () => undefined,
+        setStatus: async () => null,
+        updateStep: async () => null
+      }
+    });
+
+    const result = await processor(
+      {
+        id: "j-web-no-results",
+        type: "stub_task",
+        payload: { taskType: "web_search", query: "epl top 10", provider: "searxng", sessionId: "owner@s.whatsapp.net" },
+        priority: 5,
+        status: "queued",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      {
+        reportProgress: async () => undefined
+      }
+    );
+
+    expect(result.summary).toBe("web_search_no_results");
+    expect(result.tool).toBe("web.search");
+    expect(result.provider).toBe("searxng");
+    expect(result.errorClass).toBe("unknown");
+  });
+
   it("generates CSV artifact for contact/email goals and enqueues attachment", async () => {
     const search = vi.fn(async () => ({
       provider: "searxng" as const,

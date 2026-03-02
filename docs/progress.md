@@ -20,6 +20,8 @@
 
 ## Recent Task Updates
 
+- 2026-03-02: Upgraded gateway `run_chat_turn` into a bounded action/observation loop with runtime tool exposure each step, added confirmation-first cwd correction when model-proposed shell/process cwd is outside policy roots, and introduced approval-driven continuation (`agent_action_with_cwd`) so a user can approve corrected cwd and continue execution without restating the task.
+- 2026-03-02: Added structured worker search failure metadata for no-context outcomes (`tool`, `provider`, `errorClass`, `retryable`) to improve downstream diagnosis/recovery planning instead of opaque `fetch failed` only responses.
 - 2026-03-02: Extended worker `agentic_turn` output with CSV artifact delivery for contact/list goals: parses CSV intent from natural-language requests, extracts public email/source evidence into rows, writes artifacts under `workspace/alfred/artifacts`, enqueues file notifications for delivery, and includes artifact notes in both fallback and synthesized responses.
 - 2026-03-02: Added a new desktop `/ui/workspace` (3-pane) for agent workflows and shipped supporting `/v1/agent/*` APIs (`sessions`, `runs`, `run events`, `artifacts`) plus conversation-session summaries to improve non-WhatsApp operator control loops.
 - 2026-03-02: Cut over agent turn action exposure to a runtime registry path (`listAgentActionSpecs`) so prompt-visible next actions are now derived from ToolSpec + capability policy + sandbox availability per session, and gateway decision parsing now validates against that exposed action set instead of a static hardcoded enum.

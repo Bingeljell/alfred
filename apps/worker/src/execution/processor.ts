@@ -439,9 +439,14 @@ export function createWorkerProcessor(input: {
       const primary = await runProviderSearch(primaryProvider, maxRetries, searchGoal);
       if (!primary) {
         const reason = searchError instanceof Error ? searchError.message : "no_result";
+        const errorClass = classifySearchError(reason);
         return {
           summary: "agentic_turn_no_context",
-          responseText: `I couldn't gather web context for this request. Reason: ${reason}`
+          responseText: `I couldn't gather web context for this request. Reason: ${reason}`,
+          tool: "web.search",
+          provider: primaryProvider,
+          errorClass,
+          retryable: errorClass === "connectivity" || errorClass === "timeout"
         };
       }
       providersUsed.push(primary.provider);
@@ -830,9 +835,14 @@ export function createWorkerProcessor(input: {
 
     if (!resultText || !resultProvider) {
       const reason = lastError instanceof Error ? lastError.message : "no_result";
+      const errorClass = classifySearchError(reason);
       return {
         summary: "web_search_no_results",
-        responseText: `No web search result is available for this query. Reason: ${reason}`
+        responseText: `No web search result is available for this query. Reason: ${reason}`,
+        tool: "web.search",
+        provider,
+        errorClass,
+        retryable: errorClass === "connectivity" || errorClass === "timeout"
       };
     }
 
@@ -1363,6 +1373,31 @@ function resolvePrimaryProvider(requested: SearchProvider): ResolvedProvider {
 function resolveFallbackProviders(primary: ResolvedProvider): ResolvedProvider[] {
   const all: ResolvedProvider[] = ["openai", "brave", "perplexity", "brightdata", "searxng"];
   return all.filter((provider) => provider !== primary);
+}
+
+function classifySearchError(reason: string): "connectivity" | "timeout" | "auth" | "validation" | "unknown" {
+  const normalized = String(reason ?? "").toLowerCase();
+  if (!normalized) {
+    return "unknown";
+  }
+  if (
+    normalized.includes("fetch failed") ||
+    normalized.includes("econnrefused") ||
+    normalized.includes("enotfound") ||
+    normalized.includes("network")
+  ) {
+    return "connectivity";
+  }
+  if (normalized.includes("timeout") || normalized.includes("timed out")) {
+    return "timeout";
+  }
+  if (normalized.includes("unauthorized") || normalized.includes("forbidden") || normalized.includes("401")) {
+    return "auth";
+  }
+  if (normalized.includes("missing query") || normalized.includes("invalid")) {
+    return "validation";
+  }
+  return "unknown";
 }
 
 function evaluateCoverage(hits: SearchHit[]): {

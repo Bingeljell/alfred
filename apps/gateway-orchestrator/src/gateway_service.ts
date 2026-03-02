@@ -167,6 +167,21 @@ type AgentTurnDecision = {
   nextAction?: AgentNextAction;
 };
 
+type AgentToolObservationV1 = {
+  tool: AgentActionType | "chat.reply";
+  status: "ok" | "error" | "blocked" | "needs_approval";
+  errorClass?: "connectivity" | "timeout" | "auth" | "policy" | "validation" | "unknown";
+  message: string;
+  retryable: boolean;
+  data?: Record<string, unknown>;
+};
+
+type AgentActionExecutionResult = {
+  text: string;
+  continueLoop: boolean;
+  observation: AgentToolObservationV1;
+};
+
 const AGENT_ACTION_INPUT_HINTS: Partial<Record<AgentActionType, string[]>> = {
   "web.search": ["query", "provider", "mode", "reason"],
   "web.fetch": ["url", "reason"],
@@ -2831,6 +2846,26 @@ export class GatewayService {
       });
       return `Approved action executed: web_search (queued job ${job.id}).`;
     }
+    if (approval.action === "agent_action_with_cwd") {
+      const nextAction = this.hydrateAgentNextAction(approval.payload.nextAction);
+      if (!nextAction) {
+        return "Approved action failed: invalid or missing next action payload.";
+      }
+      const sourceText = typeof approval.payload.userText === "string" ? approval.payload.userText : "";
+      const targetAuthSessionId = String(approval.payload.authSessionId ?? authSessionId).trim() || authSessionId;
+      const requestedAuthPreference = this.normalizeAuthPreference(approval.payload.authPreference ?? authPreference);
+      const actionResult = await this.executeAgentNextAction(
+        channelSessionId,
+        targetAuthSessionId,
+        requestedAuthPreference,
+        nextAction,
+        sourceText
+      );
+      if (!actionResult) {
+        return `Approved action executed: ${nextAction.type}`;
+      }
+      return `Approved action executed: ${nextAction.type}\n${actionResult.text}`;
+    }
     if (approval.action === "process_kill") {
       const pidRaw = Number(approval.payload.pid);
       const pid = Number.isFinite(pidRaw) && pidRaw > 0 ? Math.trunc(pidRaw) : undefined;
@@ -3321,25 +3356,52 @@ export class GatewayService {
     }
 
     try {
-      const availableActions = this.listAvailableAgentActions(channelSessionId, authSessionId);
-      const decisionPrompt = this.buildAgentTurnDecisionPrompt(prepared.prompt, availableActions);
-      const result = await this.withLlmTimeout(
-        this.llmService.generateText(authSessionId, decisionPrompt, {
-          authPreference
-        }),
-        45_000,
-        "agent_turn_timeout"
-      );
-      const llmText = result?.text?.trim() ?? "";
-      if (!llmText) {
-        return this.noModelResponse(authPreference);
-      }
-      const decision = this.parseAgentTurnDecision(
-        llmText,
-        new Set<AgentActionType>(availableActions.map((action) => action.type))
-      );
-      const decisionText = decision?.assistantResponse?.trim() || llmText;
-      if (decision?.nextAction && decision.nextAction.type !== "none" && decision.nextAction.type !== "ask_user") {
+      const observations: AgentToolObservationV1[] = [];
+      const seenActionSignatures = new Set<string>();
+      let lastActionResult: AgentActionExecutionResult | null = null;
+      const maxSteps = 4;
+
+      for (let step = 1; step <= maxSteps; step += 1) {
+        const availableActions = this.listAvailableAgentActions(channelSessionId, authSessionId);
+        const decisionPrompt = this.buildAgentTurnDecisionPrompt(prepared.prompt, availableActions, {
+          step,
+          maxSteps,
+          observations
+        });
+        const result = await this.withLlmTimeout(
+          this.llmService.generateText(authSessionId, decisionPrompt, {
+            authPreference
+          }),
+          45_000,
+          "agent_turn_timeout"
+        );
+        const llmText = result?.text?.trim() ?? "";
+        if (!llmText) {
+          return this.noModelResponse(authPreference);
+        }
+        const decision = this.parseAgentTurnDecision(
+          llmText,
+          new Set<AgentActionType>(availableActions.map((action) => action.type))
+        );
+        const decisionText = decision?.assistantResponse?.trim() || llmText;
+        if (!decision?.nextAction || decision.nextAction.type === "none" || decision.nextAction.type === "ask_user") {
+          if (prepared.references.length > 0) {
+            return `${decisionText}\n\nMemory references:\n${prepared.references
+              .map((reference) => `- [${reference.class}] ${reference.source}`)
+              .join("\n")}`;
+          }
+          return decisionText;
+        }
+
+        const actionSignature = this.computeAgentActionSignature(decision.nextAction);
+        if (seenActionSignatures.has(actionSignature)) {
+          if (lastActionResult) {
+            return decisionText ? `${decisionText}\n\n${lastActionResult.text}` : lastActionResult.text;
+          }
+          return decisionText;
+        }
+        seenActionSignatures.add(actionSignature);
+
         const actionResult = await this.executeAgentNextAction(
           channelSessionId,
           authSessionId,
@@ -3347,23 +3409,35 @@ export class GatewayService {
           decision.nextAction,
           text
         );
-        if (actionResult) {
-          return decisionText ? `${decisionText}\n\n${actionResult}` : actionResult;
+        if (!actionResult) {
+          return decisionText;
+        }
+        lastActionResult = actionResult;
+        observations.push(actionResult.observation);
+
+        if (!actionResult.continueLoop) {
+          return decisionText ? `${decisionText}\n\n${actionResult.text}` : actionResult.text;
         }
       }
 
-      if (prepared.references.length > 0) {
-        return `${decisionText}\n\nMemory references:\n${prepared.references
-          .map((reference) => `- [${reference.class}] ${reference.source}`)
-          .join("\n")}`;
+      if (lastActionResult) {
+        return `${lastActionResult.text}\n\nI stopped here after multiple action steps. If you want, I can continue with another pass.`;
       }
-      return decisionText;
+      return "I reached the step budget for this turn before I could complete the task. Please continue with one more message.";
     } catch (error) {
       return this.humanizeLlmError(error);
     }
   }
 
-  private buildAgentTurnDecisionPrompt(contextPrompt: string, actions: AgentActionSpecV1[]): string {
+  private buildAgentTurnDecisionPrompt(
+    contextPrompt: string,
+    actions: AgentActionSpecV1[],
+    options?: {
+      step?: number;
+      maxSteps?: number;
+      observations?: AgentToolObservationV1[];
+    }
+  ): string {
     const allowedActionTypes = actions.map((action) => action.type).join("|");
     const actionDocs = actions
       .filter((action) => action.type !== "none" && action.type !== "ask_user")
@@ -3372,9 +3446,23 @@ export class GatewayService {
         const fieldText = fields && fields.length > 0 ? ` fields: ${fields.join(", ")}` : "";
         return `- ${action.type}: ${action.description}${fieldText}`;
       });
+    const observations = options?.observations ?? [];
+    const observationText =
+      observations.length > 0
+        ? [
+            "",
+            "Recent action observations (newest last):",
+            ...observations.slice(-6).map((item, index) => {
+              const base = `${index + 1}. tool=${item.tool} status=${item.status} retryable=${String(item.retryable)} message=${item.message}`;
+              return item.errorClass ? `${base} errorClass=${item.errorClass}` : base;
+            }),
+            ""
+          ].join("\n")
+        : "";
 
     return [
       "You are Alfred, a goal-oriented orchestrator.",
+      "Follow this loop: read context -> reason -> choose one next action -> execute -> observe -> decide next step.",
       "Decide whether to answer directly or propose exactly one next action.",
       "Return STRICT JSON only with this shape:",
       `{"assistant_response":"","next_action":{"type":"${allowedActionTypes}","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","pattern":"","pid":0,"signal":"TERM|KILL|INT","limit":10,"cwd":"","rerunQuery":"","goal":"","url":"","urls":[],"targetPath":"","fromLine":1,"lineCount":120,"verifyPattern":"","verifyPort":0,"timeoutSec":20}}`,
@@ -3382,9 +3470,13 @@ export class GatewayService {
       "- Use next_action.type=none for pure conversational replies.",
       "- Available next_action types for this turn are listed below; do not invent unknown types.",
       ...actionDocs,
+      `- Current loop step: ${options?.step ?? 1}/${options?.maxSteps ?? 1}.`,
       "- If unclear, ask one concise clarification using assistant_response and next_action.type=ask_user.",
+      "- For local/process/service operations, prefer process.* / shell.exec over web.search.",
+      "- If an action failed, use observations to propose the next corrective action instead of repeating the same action.",
       "- Do not invent execution results. Execution happens after this decision.",
       "",
+      observationText,
       contextPrompt
     ].join("\n");
   }
@@ -3488,19 +3580,97 @@ export class GatewayService {
     authPreference: LlmAuthPreference,
     action: AgentNextAction,
     userText: string
-  ): Promise<string | null> {
+  ): Promise<AgentActionExecutionResult | null> {
+    const approveCwdCorrection = async (
+      correctedCwd: string,
+      originalError: string
+    ): Promise<AgentActionExecutionResult> => {
+      if (!this.approvalStore) {
+        return {
+          text: originalError,
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: originalError,
+            retryable: false
+          }
+        };
+      }
+      const approvedAction = this.serializeAgentNextAction({
+        ...action,
+        cwd: correctedCwd
+      });
+      const approval = await this.approvalStore.create(channelSessionId, "agent_action_with_cwd", {
+        nextAction: approvedAction,
+        userText,
+        authSessionId,
+        authPreference
+      });
+      return {
+        text: [
+          "Proposed cwd is outside allowed scope.",
+          `I can run this action in: ${correctedCwd}`,
+          "Reply yes/no to approve this cwd correction and continue.",
+          `Optional explicit token: approve ${approval.token}`
+        ].join("\n"),
+        continueLoop: false,
+        observation: {
+          tool: action.type,
+          status: "needs_approval",
+          errorClass: "policy",
+          message: "CWD correction requires user confirmation.",
+          retryable: true,
+          data: {
+            correctedCwd
+          }
+        }
+      };
+    };
+
     if (action.type === "web.search") {
       if (!this.capabilityPolicy.webSearchEnabled) {
-        return "Web search is currently disabled by policy.";
+        return {
+          text: "Web search is currently disabled by policy.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "Web search disabled by policy.",
+            retryable: false
+          }
+        };
       }
       const query = action.query?.trim() || userText.trim();
       if (!query) {
-        return "Web search action is missing a query.";
+        return {
+          text: "Web search action is missing a query.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "error",
+            errorClass: "validation",
+            message: "Missing query for web.search action.",
+            retryable: true
+          }
+        };
       }
       const provider = action.provider ?? this.capabilityPolicy.webSearchProvider;
       if (this.requiresApproval("web_search", { sessionId: channelSessionId, authSessionId })) {
         if (!this.approvalStore) {
-          return "Web search requires approval, but approvals are not configured.";
+          return {
+            text: "Web search requires approval, but approvals are not configured.",
+            continueLoop: false,
+            observation: {
+              tool: action.type,
+              status: "blocked",
+              errorClass: "policy",
+              message: "Web search approval required but approval store unavailable.",
+              retryable: false
+            }
+          };
         }
         const approval = await this.approvalStore.create(channelSessionId, "web_search", {
           query,
@@ -3508,7 +3678,20 @@ export class GatewayService {
           authSessionId,
           authPreference
         });
-        return `Approval required for web search.\n- query: ${query}\n- provider: ${provider}\nReply yes/no, or approve ${approval.token}`;
+        return {
+          text: `Approval required for web search.\n- query: ${query}\n- provider: ${provider}\nReply yes/no, or approve ${approval.token}`,
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "needs_approval",
+            message: "Web search queued for approval.",
+            retryable: true,
+            data: {
+              query,
+              provider
+            }
+          }
+        };
       }
       const taskType = action.mode === "quick" ? "web_search" : "agentic_turn";
       const job = await this.enqueueLongTaskJob(channelSessionId, {
@@ -3520,31 +3703,100 @@ export class GatewayService {
         reason: action.reason?.trim() || "agent_turn_v2"
       });
       if (taskType === "web_search") {
-        return `Queued web search as job ${job.id}. I’ll share results here.`;
+        return {
+          text: `Queued web search as job ${job.id}. I’ll share results here.`,
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "ok",
+            message: `Queued quick web search job ${job.id}.`,
+            retryable: false,
+            data: {
+              taskType,
+              jobId: job.id
+            }
+          }
+        };
       }
-      return `Queued research as job ${job.id}. I’ll share concise progress and final results here.`;
+      return {
+        text: `Queued research as job ${job.id}. I’ll share concise progress and final results here.`,
+        continueLoop: false,
+        observation: {
+          tool: action.type,
+          status: "ok",
+          message: `Queued agentic research job ${job.id}.`,
+          retryable: false,
+          data: {
+            taskType,
+            jobId: job.id
+          }
+        }
+      };
     }
 
     if (action.type === "web.fetch") {
       const toolPolicy = this.evaluateToolPolicy("web.fetch", { sessionId: channelSessionId, authSessionId });
       if (!toolPolicy.allowed || !this.capabilityPolicy.webSearchEnabled) {
-        return "Web fetch is currently disabled by policy.";
+        return {
+          text: "Web fetch is currently disabled by policy.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "web.fetch disabled by policy.",
+            retryable: false
+          }
+        };
       }
       const targetUrl = action.url?.trim() || this.extractFirstUrlFromText(userText) || "";
       if (!targetUrl) {
-        return "Web fetch action is missing a URL.";
+        return {
+          text: "Web fetch action is missing a URL.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "error",
+            errorClass: "validation",
+            message: "Missing URL for web.fetch action.",
+            retryable: true
+          }
+        };
       }
       await this.recordToolUsage(channelSessionId, "web.fetch", {
         route: action.reason ?? "agent_turn_v2_web_fetch",
         url: targetUrl
       });
-      return this.fetchWebPageSummary(targetUrl, 16_000);
+      const output = await this.fetchWebPageSummary(targetUrl, 16_000);
+      return {
+        text: output,
+        continueLoop: false,
+        observation: {
+          tool: action.type,
+          status: "ok",
+          message: "Fetched web page content.",
+          retryable: false,
+          data: {
+            url: targetUrl
+          }
+        }
+      };
     }
 
     if (action.type === "web.extract") {
       const toolPolicy = this.evaluateToolPolicy("web.extract", { sessionId: channelSessionId, authSessionId });
       if (!toolPolicy.allowed || !this.capabilityPolicy.webSearchEnabled) {
-        return "Web extraction is currently disabled by policy.";
+        return {
+          text: "Web extraction is currently disabled by policy.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "web.extract disabled by policy.",
+            retryable: false
+          }
+        };
       }
       const query = action.query?.trim() || userText.trim();
       const provider = action.provider ?? this.capabilityPolicy.webSearchProvider;
@@ -3554,27 +3806,71 @@ export class GatewayService {
         provider,
         query: query || undefined
       });
-      return this.executeWebExtractAction({
+      const output = await this.executeWebExtractAction({
         authSessionId,
         authPreference,
         query,
         provider,
         urlHints
       });
+      return {
+        text: output,
+        continueLoop: false,
+        observation: {
+          tool: action.type,
+          status: "ok",
+          message: "Extracted grounded web summary.",
+          retryable: false,
+          data: {
+            provider,
+            query
+          }
+        }
+      };
     }
 
     if (action.type === "file.read.range") {
       const toolPolicy = this.evaluateToolPolicy("file.read.range", { sessionId: channelSessionId, authSessionId });
       if (!toolPolicy.allowed || !this.capabilityPolicy.fileReadEnabled) {
-        return "File range read is currently disabled by policy.";
+        return {
+          text: "File range read is currently disabled by policy.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "file.read.range disabled by policy.",
+            retryable: false
+          }
+        };
       }
       const targetPath = action.targetPath?.trim() || this.extractFirstPathFromText(userText) || "";
       if (!targetPath) {
-        return "File range read action is missing a target path.";
+        return {
+          text: "File range read action is missing a target path.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "error",
+            errorClass: "validation",
+            message: "Missing target path for file.read.range.",
+            retryable: true
+          }
+        };
       }
       const resolved = this.resolvePathWithinAllowedRoots(targetPath, this.capabilityPolicy.fileReadAllowedDirs, "read");
       if (!resolved.ok) {
-        return resolved.error;
+        return {
+          text: resolved.error,
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: resolved.error,
+            retryable: false
+          }
+        };
       }
       await this.recordToolUsage(channelSessionId, "file.read.range", {
         route: action.reason ?? "agent_turn_v2_file_read_range",
@@ -3582,13 +3878,36 @@ export class GatewayService {
         fromLine: action.fromLine,
         lineCount: action.lineCount
       });
-      return this.executeFileRead(resolved.absolutePath, action.fromLine, action.lineCount);
+      const output = await this.executeFileRead(resolved.absolutePath, action.fromLine, action.lineCount);
+      return {
+        text: output,
+        continueLoop: false,
+        observation: {
+          tool: action.type,
+          status: "ok",
+          message: "Read file range successfully.",
+          retryable: false,
+          data: {
+            path: resolved.absolutePath
+          }
+        }
+      };
     }
 
     if (action.type === "worker.run") {
       const goal = action.goal?.trim() || action.query?.trim() || userText.trim();
       if (!goal) {
-        return "Worker task is missing a goal.";
+        return {
+          text: "Worker task is missing a goal.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "error",
+            errorClass: "validation",
+            message: "Missing goal for worker.run.",
+            retryable: true
+          }
+        };
       }
       const provider = action.provider ?? this.capabilityPolicy.webSearchProvider;
       const job = await this.enqueueLongTaskJob(channelSessionId, {
@@ -3599,20 +3918,65 @@ export class GatewayService {
         authPreference,
         reason: action.reason?.trim() || "agent_turn_v2_worker"
       });
-      return `Queued task as job ${job.id}. I’ll share progress updates here.`;
+      return {
+        text: `Queued task as job ${job.id}. I’ll share progress updates here.`,
+        continueLoop: false,
+        observation: {
+          tool: action.type,
+          status: "ok",
+          message: `Queued worker task ${job.id}.`,
+          retryable: false,
+          data: {
+            jobId: job.id
+          }
+        }
+      };
     }
 
     if (action.type === "process.list") {
       if (!isSandboxTargetEnabled("shell.exec", this.buildSandboxPolicyConfig())) {
-        return "Process inspection is disabled by sandbox policy.";
+        return {
+          text: "Process inspection is disabled by sandbox policy.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "Process inspection disabled by sandbox policy.",
+            retryable: false
+          }
+        };
       }
       const toolPolicy = this.evaluateToolPolicy("process.list", { sessionId: channelSessionId, authSessionId });
       if (!toolPolicy.allowed || !this.capabilityPolicy.shellEnabled) {
-        return "Process inspection is currently disabled by policy.";
+        return {
+          text: "Process inspection is currently disabled by policy.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "Process inspection disabled by policy.",
+            retryable: false
+          }
+        };
       }
       const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
       if (!resolvedCwd.ok) {
-        return resolvedCwd.error;
+        if (resolvedCwd.suggestedCwd) {
+          return approveCwdCorrection(resolvedCwd.suggestedCwd, resolvedCwd.error);
+        }
+        return {
+          text: resolvedCwd.error,
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: resolvedCwd.error,
+            retryable: false
+          }
+        };
       }
       const pattern = action.pattern?.trim() || this.inferProcessPatternFromText(userText) || "";
       const limit = action.limit && action.limit > 0 ? Math.min(100, action.limit) : 20;
@@ -3623,34 +3987,110 @@ export class GatewayService {
         limit
       });
       const output = await this.listProcesses({ cwd: resolvedCwd.cwd, pattern, limit });
-      return output;
+      return {
+        text: output,
+        continueLoop: false,
+        observation: {
+          tool: action.type,
+          status: "ok",
+          message: "Listed processes.",
+          retryable: false,
+          data: {
+            cwd: resolvedCwd.cwd,
+            pattern: pattern || undefined
+          }
+        }
+      };
     }
 
     if (action.type === "process.kill") {
       if (!isSandboxTargetEnabled("shell.exec", this.buildSandboxPolicyConfig())) {
-        return "Process termination is disabled by sandbox policy.";
+        return {
+          text: "Process termination is disabled by sandbox policy.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "Process termination disabled by sandbox policy.",
+            retryable: false
+          }
+        };
       }
       const toolPolicy = this.evaluateToolPolicy("process.kill", { sessionId: channelSessionId, authSessionId });
       if (!toolPolicy.allowed || !this.capabilityPolicy.shellEnabled) {
-        return "Process termination is currently disabled by policy.";
+        return {
+          text: "Process termination is currently disabled by policy.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "Process termination disabled by policy.",
+            retryable: false
+          }
+        };
       }
       const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
       if (!resolvedCwd.ok) {
-        return resolvedCwd.error;
+        if (resolvedCwd.suggestedCwd) {
+          return approveCwdCorrection(resolvedCwd.suggestedCwd, resolvedCwd.error);
+        }
+        return {
+          text: resolvedCwd.error,
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: resolvedCwd.error,
+            retryable: false
+          }
+        };
       }
 
       const pid = Number.isFinite(action.pid) && (action.pid ?? 0) > 0 ? Math.trunc(action.pid as number) : undefined;
       const pattern = action.pattern?.trim() || this.inferProcessPatternFromText(userText) || "";
       if (!pid && !pattern) {
-        return "Process kill action is missing both pid and pattern.";
+        return {
+          text: "Process kill action is missing both pid and pattern.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "error",
+            errorClass: "validation",
+            message: "Missing pid/pattern for process.kill.",
+            retryable: true
+          }
+        };
       }
       if (pattern && pattern.length < 3) {
-        return "Process kill pattern is too short. Provide at least 3 characters.";
+        return {
+          text: "Process kill pattern is too short. Provide at least 3 characters.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "error",
+            errorClass: "validation",
+            message: "Process kill pattern too short.",
+            retryable: true
+          }
+        };
       }
       const signal = action.signal ?? "TERM";
       const rerunQuery = (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || "";
       if (!this.approvalStore) {
-        return "Process termination requires approvals, but approvals are not configured.";
+        return {
+          text: "Process termination requires approvals, but approvals are not configured.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "Approval store unavailable for process.kill.",
+            retryable: false
+          }
+        };
       }
       const approval = await this.approvalStore.create(channelSessionId, "process_kill", {
         pid,
@@ -3662,7 +4102,8 @@ export class GatewayService {
         reason: action.reason ?? "agent_process_kill_request",
         rerunQuery: rerunQuery || undefined
       });
-      return [
+      return {
+        text: [
         "Process termination ready for approval.",
         `- cwd: ${resolvedCwd.cwd}`,
         pid ? `- pid: ${pid}` : "",
@@ -3672,35 +4113,109 @@ export class GatewayService {
         `Optional explicit token: approve ${approval.token}`
       ]
         .filter((line) => line.length > 0)
-        .join("\n");
+        .join("\n"),
+        continueLoop: false,
+        observation: {
+          tool: action.type,
+          status: "needs_approval",
+          message: "Process termination queued for approval.",
+          retryable: true,
+          data: {
+            cwd: resolvedCwd.cwd
+          }
+        }
+      };
     }
 
     if (action.type === "process.start") {
       if (!isSandboxTargetEnabled("shell.exec", this.buildSandboxPolicyConfig())) {
-        return "Process start is disabled by sandbox policy.";
+        return {
+          text: "Process start is disabled by sandbox policy.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "Process start disabled by sandbox policy.",
+            retryable: false
+          }
+        };
       }
       const toolPolicy = this.evaluateToolPolicy("process.start", { sessionId: channelSessionId, authSessionId });
       if (!toolPolicy.allowed || !this.capabilityPolicy.shellEnabled) {
-        return "Process start is currently disabled by policy.";
+        return {
+          text: "Process start is currently disabled by policy.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "Process start disabled by policy.",
+            retryable: false
+          }
+        };
       }
       const command = action.command?.trim();
       if (!command) {
-        return "Process start action is missing command text.";
+        return {
+          text: "Process start action is missing command text.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "error",
+            errorClass: "validation",
+            message: "Missing command for process.start.",
+            retryable: true
+          }
+        };
       }
       const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
       if (!resolvedCwd.ok) {
-        return resolvedCwd.error;
+        if (resolvedCwd.suggestedCwd) {
+          return approveCwdCorrection(resolvedCwd.suggestedCwd, resolvedCwd.error);
+        }
+        return {
+          text: resolvedCwd.error,
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: resolvedCwd.error,
+            retryable: false
+          }
+        };
       }
       const shellPolicy = this.evaluateShellCommandPolicy(command);
       if (shellPolicy.blocked) {
-        return `Proposed process-start command is blocked by shell policy (${shellPolicy.ruleId}).`;
+        return {
+          text: `Proposed process-start command is blocked by shell policy (${shellPolicy.ruleId}).`,
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: `Process start command blocked: ${shellPolicy.ruleId}.`,
+            retryable: true
+          }
+        };
       }
       const verifyPattern = action.verifyPattern?.trim() || this.inferProcessPatternFromText(userText) || undefined;
       const verifyPort = Number.isFinite(action.verifyPort) && (action.verifyPort ?? 0) > 0 ? action.verifyPort : undefined;
       const timeoutSec = Number.isFinite(action.timeoutSec) && (action.timeoutSec ?? 0) > 0 ? Math.min(300, action.timeoutSec as number) : 20;
       const rerunQuery = (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || "";
       if (!this.approvalStore) {
-        return "Process start requires approvals, but approvals are not configured.";
+        return {
+          text: "Process start requires approvals, but approvals are not configured.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "Approval store unavailable for process.start.",
+            retryable: false
+          }
+        };
       }
       const approval = await this.approvalStore.create(channelSessionId, "process_start", {
         command,
@@ -3713,7 +4228,8 @@ export class GatewayService {
         reason: action.reason ?? "agent_process_start_request",
         rerunQuery: rerunQuery || undefined
       });
-      return [
+      return {
+        text: [
         "Process start ready for approval.",
         `- cwd: ${resolvedCwd.cwd}`,
         `- command: ${command}`,
@@ -3724,27 +4240,81 @@ export class GatewayService {
         `Optional explicit token: approve ${approval.token}`
       ]
         .filter((line) => line.length > 0)
-        .join("\n");
+        .join("\n"),
+        continueLoop: false,
+        observation: {
+          tool: action.type,
+          status: "needs_approval",
+          message: "Process start queued for approval.",
+          retryable: true,
+          data: {
+            cwd: resolvedCwd.cwd
+          }
+        }
+      };
     }
 
     if (action.type === "process.wait") {
       if (!isSandboxTargetEnabled("shell.exec", this.buildSandboxPolicyConfig())) {
-        return "Process wait is disabled by sandbox policy.";
+        return {
+          text: "Process wait is disabled by sandbox policy.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "Process wait disabled by sandbox policy.",
+            retryable: false
+          }
+        };
       }
       const toolPolicy = this.evaluateToolPolicy("process.wait", { sessionId: channelSessionId, authSessionId });
       if (!toolPolicy.allowed || !this.capabilityPolicy.shellEnabled) {
-        return "Process wait is currently disabled by policy.";
+        return {
+          text: "Process wait is currently disabled by policy.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "Process wait disabled by policy.",
+            retryable: false
+          }
+        };
       }
       const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
       if (!resolvedCwd.ok) {
-        return resolvedCwd.error;
+        if (resolvedCwd.suggestedCwd) {
+          return approveCwdCorrection(resolvedCwd.suggestedCwd, resolvedCwd.error);
+        }
+        return {
+          text: resolvedCwd.error,
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: resolvedCwd.error,
+            retryable: false
+          }
+        };
       }
       const pid = Number.isFinite(action.pid) && (action.pid ?? 0) > 0 ? Math.trunc(action.pid as number) : undefined;
       const pattern = action.pattern?.trim() || this.inferProcessPatternFromText(userText) || undefined;
       const verifyPort = Number.isFinite(action.verifyPort) && (action.verifyPort ?? 0) > 0 ? Math.trunc(action.verifyPort as number) : undefined;
       const timeoutSec = Number.isFinite(action.timeoutSec) && (action.timeoutSec ?? 0) > 0 ? Math.min(300, Math.trunc(action.timeoutSec as number)) : 20;
       if (!pid && !pattern && !verifyPort) {
-        return "Process wait requires at least one selector: pid, pattern, or verifyPort.";
+        return {
+          text: "Process wait requires at least one selector: pid, pattern, or verifyPort.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "error",
+            errorClass: "validation",
+            message: "Missing selector for process.wait.",
+            retryable: true
+          }
+        };
       }
       await this.recordToolUsage(channelSessionId, "process.wait", {
         route: action.reason ?? "agent_turn_v2_process_wait",
@@ -3754,36 +4324,99 @@ export class GatewayService {
         timeoutSec,
         cwd: resolvedCwd.cwd
       });
-      return this.waitForProcessReady({
+      const output = await this.waitForProcessReady({
         cwd: resolvedCwd.cwd,
         pid,
         pattern,
         verifyPort,
         timeoutSec
       });
+      return {
+        text: output,
+        continueLoop: false,
+        observation: {
+          tool: action.type,
+          status: "ok",
+          message: "Process wait check completed.",
+          retryable: false
+        }
+      };
     }
 
     if (action.type === "shell.exec") {
       if (!isSandboxTargetEnabled("shell.exec", this.buildSandboxPolicyConfig())) {
-        return "Shell execution is disabled by sandbox policy.";
+        return {
+          text: "Shell execution is disabled by sandbox policy.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "Shell execution disabled by sandbox policy.",
+            retryable: false
+          }
+        };
       }
       const toolPolicy = this.evaluateToolPolicy("shell.exec", { sessionId: channelSessionId, authSessionId });
       if (!toolPolicy.allowed || !this.capabilityPolicy.shellEnabled) {
-        return "Shell execution is currently disabled by policy.";
+        return {
+          text: "Shell execution is currently disabled by policy.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "Shell execution disabled by policy.",
+            retryable: false
+          }
+        };
       }
       const command = action.command?.trim();
       if (!command) {
-        return "Shell action is missing command text.";
+        return {
+          text: "Shell action is missing command text.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "error",
+            errorClass: "validation",
+            message: "Missing command for shell.exec.",
+            retryable: true
+          }
+        };
       }
       const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
       if (!resolvedCwd.ok) {
-        return resolvedCwd.error;
+        if (resolvedCwd.suggestedCwd) {
+          return approveCwdCorrection(resolvedCwd.suggestedCwd, resolvedCwd.error);
+        }
+        return {
+          text: resolvedCwd.error,
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: resolvedCwd.error,
+            retryable: false
+          }
+        };
       }
       const shellPolicy = this.evaluateShellCommandPolicy(command);
       const rerunQuery = (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || "";
       if (shellPolicy.blocked) {
         if (!this.approvalStore) {
-          return `Shell command blocked by policy (${shellPolicy.ruleId}). Approvals are not configured for override.`;
+          return {
+            text: `Shell command blocked by policy (${shellPolicy.ruleId}). Approvals are not configured for override.`,
+            continueLoop: false,
+            observation: {
+              tool: action.type,
+              status: "blocked",
+              errorClass: "policy",
+              message: `Shell command blocked (${shellPolicy.ruleId}).`,
+              retryable: false
+            }
+          };
         }
         const approval = await this.approvalStore.create(channelSessionId, "shell_exec_override", {
           command,
@@ -3794,15 +4427,35 @@ export class GatewayService {
           reason: action.reason ?? "policy_blocked",
           rerunQuery
         });
-        return [
+        return {
+          text: [
           `Proposed command is blocked by shell policy (${shellPolicy.ruleId}).`,
           `- cwd: ${resolvedCwd.cwd}`,
           `- command: ${command}`,
           `Reply yes/no, or explicit override: approve shell ${approval.token}`
-        ].join("\n");
+        ].join("\n"),
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "needs_approval",
+            errorClass: "policy",
+            message: "Shell override approval requested.",
+            retryable: true
+          }
+        };
       }
       if (!this.approvalStore) {
-        return "Shell execution requires approvals, but approvals are not configured.";
+        return {
+          text: "Shell execution requires approvals, but approvals are not configured.",
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "blocked",
+            errorClass: "policy",
+            message: "Approval store unavailable for shell.exec.",
+            retryable: false
+          }
+        };
       }
       const approval = await this.approvalStore.create(channelSessionId, "shell_exec", {
         command,
@@ -3812,13 +4465,22 @@ export class GatewayService {
         reason: action.reason ?? "agent_shell_request",
         rerunQuery: rerunQuery || undefined
       });
-      return [
+      return {
+        text: [
         "Shell operation ready for approval.",
         `- cwd: ${resolvedCwd.cwd}`,
         `- command: ${command}`,
         "Reply yes/no to approve or reject.",
         `Optional explicit token: approve ${approval.token}`
-      ].join("\n");
+      ].join("\n"),
+        continueLoop: false,
+        observation: {
+          tool: action.type,
+          status: "needs_approval",
+          message: "Shell execution queued for approval.",
+          retryable: true
+        }
+      };
     }
 
     return null;
@@ -4560,7 +5222,10 @@ export class GatewayService {
     return { ok: true, cwd: candidate };
   }
 
-  private resolveAgentActionCwd(rawCwd: string | undefined, rawText: string): { ok: true; cwd: string } | { ok: false; error: string } {
+  private resolveAgentActionCwd(
+    rawCwd: string | undefined,
+    rawText: string
+  ): { ok: true; cwd: string } | { ok: false; error: string; suggestedCwd?: string } {
     const explicitCwd = typeof rawCwd === "string" ? rawCwd.trim() : "";
     if (explicitCwd) {
       const resolved = this.resolveShellCwd(explicitCwd);
@@ -4569,9 +5234,24 @@ export class GatewayService {
       }
       const fallback = this.inferAllowedCwdFromText(rawText);
       if (fallback) {
-        return { ok: true, cwd: fallback };
+        return {
+          ok: false,
+          error: resolved.error,
+          suggestedCwd: fallback
+        };
       }
-      return resolved;
+      const suggested = this.suggestFallbackShellCwd(rawText);
+      if (suggested) {
+        return {
+          ok: false,
+          error: resolved.error,
+          suggestedCwd: suggested
+        };
+      }
+      return {
+        ok: false,
+        error: resolved.error
+      };
     }
 
     const inferred = this.inferAllowedCwdFromText(rawText);
@@ -4590,6 +5270,73 @@ export class GatewayService {
       }
     }
     return null;
+  }
+
+  private suggestFallbackShellCwd(rawText: string): string | null {
+    const lowered = rawText.toLowerCase();
+    const searxRoot = this.capabilityPolicy.shellAllowedDirs.find((root) => root.toLowerCase().includes("searx"));
+    if (searxRoot && /\b(searx|webapp|search server)\b/.test(lowered)) {
+      return searxRoot;
+    }
+    return this.capabilityPolicy.shellAllowedDirs[0] ?? null;
+  }
+
+  private computeAgentActionSignature(action: AgentNextAction): string {
+    const serialized = this.serializeAgentNextAction(action);
+    return JSON.stringify(serialized);
+  }
+
+  private serializeAgentNextAction(action: AgentNextAction): Record<string, unknown> {
+    return {
+      type: action.type,
+      reason: action.reason,
+      query: action.query,
+      provider: action.provider,
+      mode: action.mode,
+      command: action.command,
+      pattern: action.pattern,
+      pid: action.pid,
+      signal: action.signal,
+      limit: action.limit,
+      cwd: action.cwd,
+      rerunQuery: action.rerunQuery,
+      goal: action.goal,
+      url: action.url,
+      urls: action.urls,
+      targetPath: action.targetPath,
+      fromLine: action.fromLine,
+      lineCount: action.lineCount,
+      verifyPattern: action.verifyPattern,
+      verifyPort: action.verifyPort,
+      timeoutSec: action.timeoutSec
+    };
+  }
+
+  private hydrateAgentNextAction(raw: unknown): AgentNextAction | null {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      return null;
+    }
+    const parsed = this.parseAgentTurnDecision(
+      JSON.stringify({
+        assistant_response: "approved",
+        next_action: raw
+      }),
+      new Set<AgentActionType>([
+        "none",
+        "ask_user",
+        "web.search",
+        "web.fetch",
+        "web.extract",
+        "file.read.range",
+        "shell.exec",
+        "process.list",
+        "process.kill",
+        "process.start",
+        "process.wait",
+        "worker.run"
+      ])
+    );
+    return parsed?.nextAction ?? null;
   }
 
   private extractFirstUrlFromText(rawText: string): string | null {
@@ -5373,7 +6120,7 @@ export class GatewayService {
         input.rerunQuery
       );
       if (actionResult) {
-        return decision.assistantResponse ? `${decision.assistantResponse}\n\n${actionResult}` : actionResult;
+        return decision.assistantResponse ? `${decision.assistantResponse}\n\n${actionResult.text}` : actionResult.text;
       }
       return decision.assistantResponse || null;
     } catch {
