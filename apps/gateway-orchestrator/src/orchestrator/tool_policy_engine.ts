@@ -46,6 +46,28 @@ export type ToolPolicyDecision = {
   spec: ToolSpecV1;
 };
 
+export type AgentActionType =
+  | "none"
+  | "ask_user"
+  | "web.search"
+  | "web.fetch"
+  | "web.extract"
+  | "file.read.range"
+  | "shell.exec"
+  | "process.list"
+  | "process.kill"
+  | "process.start"
+  | "process.wait"
+  | "worker.run";
+
+export type AgentActionSpecV1 = {
+  version: 1;
+  type: AgentActionType;
+  description: string;
+  toolId?: ToolId;
+  longRunning?: boolean;
+};
+
 export const TOOL_SPECS_V1: Record<ToolId, ToolSpecV1> = {
   "web.search": {
     version: 1,
@@ -146,6 +168,103 @@ export const TOOL_SPECS_V1: Record<ToolId, ToolSpecV1> = {
     description: "Reserved runtime surface for sandboxed WASM guest execution."
   }
 };
+
+const CORE_AGENT_ACTION_SPECS: AgentActionSpecV1[] = [
+  {
+    version: 1,
+    type: "none",
+    description: "Reply conversationally without external actions."
+  },
+  {
+    version: 1,
+    type: "ask_user",
+    description: "Ask one concise clarification when critical details are missing."
+  }
+];
+
+const TOOL_AGENT_ACTION_SPECS: AgentActionSpecV1[] = [
+  {
+    version: 1,
+    type: "web.search",
+    toolId: "web.search",
+    description: "Run web retrieval for live/current information."
+  },
+  {
+    version: 1,
+    type: "web.fetch",
+    toolId: "web.fetch",
+    description: "Fetch and summarize a specific URL."
+  },
+  {
+    version: 1,
+    type: "web.extract",
+    toolId: "web.extract",
+    description: "Synthesize grounded findings from web evidence."
+  },
+  {
+    version: 1,
+    type: "file.read.range",
+    toolId: "file.read.range",
+    description: "Read bounded file lines within allowlisted roots."
+  },
+  {
+    version: 1,
+    type: "shell.exec",
+    toolId: "shell.exec",
+    description: "Execute a local shell command (approval-gated)."
+  },
+  {
+    version: 1,
+    type: "process.list",
+    toolId: "process.list",
+    description: "List running processes, optionally filtered by pattern."
+  },
+  {
+    version: 1,
+    type: "process.kill",
+    toolId: "process.kill",
+    description: "Terminate process(es) by PID or pattern (approval-gated)."
+  },
+  {
+    version: 1,
+    type: "process.start",
+    toolId: "process.start",
+    description: "Start a background process with verification checks (approval-gated)."
+  },
+  {
+    version: 1,
+    type: "process.wait",
+    toolId: "process.wait",
+    description: "Wait for process readiness via pid/pattern/port checks."
+  },
+  {
+    version: 1,
+    type: "worker.run",
+    longRunning: true,
+    description: "Delegate a long-running objective to worker execution."
+  }
+];
+
+export function listAgentActionSpecs(input: {
+  policy: ToolPolicyInput;
+  context?: {
+    hasFileWriteLease?: boolean;
+  };
+  includeToolId?: (toolId: ToolId) => boolean;
+}): AgentActionSpecV1[] {
+  const includeToolId = input.includeToolId ?? (() => true);
+  const allowedToolActions = TOOL_AGENT_ACTION_SPECS.filter((spec) => {
+    if (!spec.toolId) {
+      return true;
+    }
+    if (!includeToolId(spec.toolId)) {
+      return false;
+    }
+    const decision = evaluateToolPolicy(spec.toolId, input.policy, input.context);
+    return decision.allowed;
+  });
+  return [...CORE_AGENT_ACTION_SPECS, ...allowedToolActions];
+}
 
 function requiresApprovalByMode(input: {
   capability: ExternalCapability;

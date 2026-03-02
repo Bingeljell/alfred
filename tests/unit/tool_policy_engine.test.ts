@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { TOOL_SPECS_V1, evaluateToolPolicy } from "../../apps/gateway-orchestrator/src/orchestrator/tool_policy_engine";
+import {
+  TOOL_SPECS_V1,
+  evaluateToolPolicy,
+  listAgentActionSpecs
+} from "../../apps/gateway-orchestrator/src/orchestrator/tool_policy_engine";
 
 const BASE_POLICY = {
   approvalMode: "balanced" as const,
@@ -110,5 +114,33 @@ describe("tool_policy_engine", () => {
       wasmEnabled: true
     });
     expect(enabled.allowed).toBe(true);
+  });
+
+  it("builds agent action exposure from tool policy", () => {
+    const actions = listAgentActionSpecs({
+      policy: BASE_POLICY,
+      context: { hasFileWriteLease: false },
+      includeToolId: () => true
+    });
+    const types = new Set(actions.map((item) => item.type));
+    expect(types.has("none")).toBe(true);
+    expect(types.has("ask_user")).toBe(true);
+    expect(types.has("web.search")).toBe(true);
+    expect(types.has("process.start")).toBe(true);
+    expect(types.has("worker.run")).toBe(true);
+  });
+
+  it("filters action exposure when includeToolId excludes shell tools", () => {
+    const actions = listAgentActionSpecs({
+      policy: BASE_POLICY,
+      includeToolId: (toolId) => !toolId.startsWith("process.") && toolId !== "shell.exec"
+    });
+    const types = new Set(actions.map((item) => item.type));
+    expect(types.has("process.list")).toBe(false);
+    expect(types.has("process.kill")).toBe(false);
+    expect(types.has("process.start")).toBe(false);
+    expect(types.has("process.wait")).toBe(false);
+    expect(types.has("shell.exec")).toBe(false);
+    expect(types.has("worker.run")).toBe(true);
   });
 });

@@ -37,8 +37,11 @@ import {
   runRoutePhase
 } from "./orchestrator/turn_phase_handlers";
 import {
+  listAgentActionSpecs,
   TOOL_SPECS_V1,
   evaluateToolPolicy,
+  type AgentActionSpecV1,
+  type AgentActionType,
   type ExternalCapability,
   type ToolId,
   type ToolPolicyInput
@@ -135,22 +138,8 @@ type LocalOpsRouteResult = {
   details?: Record<string, unknown>;
 };
 
-type AgentNextActionType =
-  | "none"
-  | "ask_user"
-  | "web.search"
-  | "web.fetch"
-  | "web.extract"
-  | "file.read.range"
-  | "shell.exec"
-  | "process.list"
-  | "process.kill"
-  | "process.start"
-  | "process.wait"
-  | "worker.run";
-
 type AgentNextAction = {
-  type: AgentNextActionType;
+  type: AgentActionType;
   reason?: string;
   query?: string;
   provider?: WebSearchProvider | "auto";
@@ -176,6 +165,19 @@ type AgentNextAction = {
 type AgentTurnDecision = {
   assistantResponse: string;
   nextAction?: AgentNextAction;
+};
+
+const AGENT_ACTION_INPUT_HINTS: Partial<Record<AgentActionType, string[]>> = {
+  "web.search": ["query", "provider", "mode", "reason"],
+  "web.fetch": ["url", "reason"],
+  "web.extract": ["query", "urls", "provider", "reason"],
+  "file.read.range": ["targetPath", "fromLine", "lineCount", "reason"],
+  "shell.exec": ["command", "cwd", "rerunQuery", "reason"],
+  "process.list": ["pattern", "limit", "cwd", "reason"],
+  "process.kill": ["pid", "pattern", "signal", "cwd", "reason"],
+  "process.start": ["command", "cwd", "verifyPattern", "verifyPort", "timeoutSec", "rerunQuery", "reason"],
+  "process.wait": ["pid", "pattern", "verifyPort", "timeoutSec", "cwd", "reason"],
+  "worker.run": ["goal", "query", "provider", "reason"]
 };
 
 type ProcessKillResult = {
@@ -3319,7 +3321,8 @@ export class GatewayService {
     }
 
     try {
-      const decisionPrompt = this.buildAgentTurnDecisionPrompt(prepared.prompt);
+      const availableActions = this.listAvailableAgentActions(channelSessionId, authSessionId);
+      const decisionPrompt = this.buildAgentTurnDecisionPrompt(prepared.prompt, availableActions);
       const result = await this.withLlmTimeout(
         this.llmService.generateText(authSessionId, decisionPrompt, {
           authPreference
@@ -3331,7 +3334,10 @@ export class GatewayService {
       if (!llmText) {
         return this.noModelResponse(authPreference);
       }
-      const decision = this.parseAgentTurnDecision(llmText);
+      const decision = this.parseAgentTurnDecision(
+        llmText,
+        new Set<AgentActionType>(availableActions.map((action) => action.type))
+      );
       const decisionText = decision?.assistantResponse?.trim() || llmText;
       if (decision?.nextAction && decision.nextAction.type !== "none" && decision.nextAction.type !== "ask_user") {
         const actionResult = await this.executeAgentNextAction(
@@ -3357,24 +3363,25 @@ export class GatewayService {
     }
   }
 
-  private buildAgentTurnDecisionPrompt(contextPrompt: string): string {
+  private buildAgentTurnDecisionPrompt(contextPrompt: string, actions: AgentActionSpecV1[]): string {
+    const allowedActionTypes = actions.map((action) => action.type).join("|");
+    const actionDocs = actions
+      .filter((action) => action.type !== "none" && action.type !== "ask_user")
+      .map((action) => {
+        const fields = AGENT_ACTION_INPUT_HINTS[action.type];
+        const fieldText = fields && fields.length > 0 ? ` fields: ${fields.join(", ")}` : "";
+        return `- ${action.type}: ${action.description}${fieldText}`;
+      });
+
     return [
       "You are Alfred, a goal-oriented orchestrator.",
       "Decide whether to answer directly or propose exactly one next action.",
       "Return STRICT JSON only with this shape:",
-      '{"assistant_response":"", "next_action":{"type":"none|ask_user|web.search|web.fetch|web.extract|file.read.range|shell.exec|process.list|process.kill|process.start|process.wait|worker.run","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","pattern":"","pid":0,"signal":"TERM|KILL|INT","limit":10,"cwd":"","rerunQuery":"","goal":"","url":"","urls":[],"targetPath":"","fromLine":1,"lineCount":120,"verifyPattern":"","verifyPort":0,"timeoutSec":20}}',
+      `{"assistant_response":"","next_action":{"type":"${allowedActionTypes}","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","pattern":"","pid":0,"signal":"TERM|KILL|INT","limit":10,"cwd":"","rerunQuery":"","goal":"","url":"","urls":[],"targetPath":"","fromLine":1,"lineCount":120,"verifyPattern":"","verifyPort":0,"timeoutSec":20}}`,
       "Rules:",
       "- Use next_action.type=none for pure conversational replies.",
-      "- Use web.search for live/current web retrieval.",
-      "- Use web.fetch to read the content of a specific URL.",
-      "- Use web.extract to synthesize a grounded summary/recommendation from URLs/search evidence.",
-      "- Use file.read.range to inspect local files before proposing edits or shell changes.",
-      "- Use shell.exec for local machine operations.",
-      "- Use process.list to inspect running processes (optionally with a pattern).",
-      "- Use process.kill to stop a specific PID or processes matching a pattern.",
-      "- Use process.start to launch a local background service/task.",
-      "- Use process.wait to verify readiness after process.start or external startup.",
-      "- Use worker.run for long-running tasks requiring background execution.",
+      "- Available next_action types for this turn are listed below; do not invent unknown types.",
+      ...actionDocs,
       "- If unclear, ask one concise clarification using assistant_response and next_action.type=ask_user.",
       "- Do not invent execution results. Execution happens after this decision.",
       "",
@@ -3382,7 +3389,7 @@ export class GatewayService {
     ].join("\n");
   }
 
-  private parseAgentTurnDecision(raw: string): AgentTurnDecision | null {
+  private parseAgentTurnDecision(raw: string, allowedTypes: Set<AgentActionType>): AgentTurnDecision | null {
     const parsed = this.tryParseJsonObject(raw);
     if (!parsed) {
       return null;
@@ -3396,21 +3403,8 @@ export class GatewayService {
 
     let nextAction: AgentNextAction | undefined;
     if (nextActionRaw) {
-      const type = String(nextActionRaw.type ?? "").trim() as AgentNextActionType;
-      if (
-        type === "none" ||
-        type === "ask_user" ||
-        type === "web.search" ||
-        type === "web.fetch" ||
-        type === "web.extract" ||
-        type === "file.read.range" ||
-        type === "shell.exec" ||
-        type === "process.list" ||
-        type === "process.kill" ||
-        type === "process.start" ||
-        type === "process.wait" ||
-        type === "worker.run"
-      ) {
+      const type = String(nextActionRaw.type ?? "").trim() as AgentActionType;
+      if (allowedTypes.has(type)) {
         const provider = this.normalizeWebSearchProvider(nextActionRaw.provider);
         const modeRaw = String(nextActionRaw.mode ?? "").trim().toLowerCase();
         const mode = modeRaw === "quick" || modeRaw === "deep" ? modeRaw : undefined;
@@ -3470,6 +3464,22 @@ export class GatewayService {
       assistantResponse: assistantResponse || "Understood.",
       nextAction
     };
+  }
+
+  private listAvailableAgentActions(channelSessionId: string, authSessionId: string): AgentActionSpecV1[] {
+    const sandboxEnabled = isSandboxTargetEnabled("shell.exec", this.buildSandboxPolicyConfig());
+    return listAgentActionSpecs({
+      policy: this.buildToolPolicyInput(),
+      context: {
+        hasFileWriteLease: this.hasFileWriteApprovalLease(channelSessionId, authSessionId)
+      },
+      includeToolId: (toolId) => {
+        if (toolId === "shell.exec" || toolId.startsWith("process.")) {
+          return sandboxEnabled;
+        }
+        return true;
+      }
+    });
   }
 
   private async executeAgentNextAction(
@@ -5300,12 +5310,22 @@ export class GatewayService {
       return null;
     }
 
+    const availableActions = this.listAvailableAgentActions(channelSessionId, authSessionId);
+    const allowedActionTypes = availableActions.map((action) => action.type).join("|");
+    const actionDocs = availableActions
+      .filter((action) => action.type !== "none" && action.type !== "ask_user")
+      .map((action) => {
+        const fields = AGENT_ACTION_INPUT_HINTS[action.type];
+        const fieldText = fields && fields.length > 0 ? ` fields: ${fields.join(", ")}` : "";
+        return `- ${action.type}: ${action.description}${fieldText}`;
+      });
+
     const prompt = [
       "You are Alfred, a goal-oriented orchestrator.",
       "A user approved a local shell recovery action, but it failed.",
       "Decide the next best step with minimal friction.",
       "Return STRICT JSON only with this shape:",
-      '{"assistant_response":"", "next_action":{"type":"none|ask_user|web.search|web.fetch|web.extract|file.read.range|shell.exec|process.list|process.kill|process.start|process.wait|worker.run","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","pattern":"","pid":0,"signal":"TERM|KILL|INT","limit":10,"cwd":"","rerunQuery":"","goal":"","url":"","urls":[],"targetPath":"","fromLine":1,"lineCount":120,"verifyPattern":"","verifyPort":0,"timeoutSec":20}}',
+      `{"assistant_response":"","next_action":{"type":"${allowedActionTypes}","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","pattern":"","pid":0,"signal":"TERM|KILL|INT","limit":10,"cwd":"","rerunQuery":"","goal":"","url":"","urls":[],"targetPath":"","fromLine":1,"lineCount":120,"verifyPattern":"","verifyPort":0,"timeoutSec":20}}`,
       "",
       "Rules:",
       "- Do not claim success when shell failed.",
@@ -5313,6 +5333,8 @@ export class GatewayService {
       "- Prefer next_action.type=shell.exec or process.kill only if you can propose a concrete corrective action.",
       "- If proposing shell.exec, set rerunQuery to the original goal so successful recovery can resume it.",
       "- Keep assistant_response concise and action-oriented.",
+      "- Available next_action types for this turn are listed below; do not invent unknown types.",
+      ...actionDocs,
       "",
       `Original goal to resume: ${input.rerunQuery}`,
       `Failed command: ${input.command}`,
@@ -5331,7 +5353,10 @@ export class GatewayService {
       if (!text) {
         return null;
       }
-      const decision = this.parseAgentTurnDecision(text);
+      const decision = this.parseAgentTurnDecision(
+        text,
+        new Set<AgentActionType>(availableActions.map((action) => action.type))
+      );
       if (!decision) {
         return text;
       }
