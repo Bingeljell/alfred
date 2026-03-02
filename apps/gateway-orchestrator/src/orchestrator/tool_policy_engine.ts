@@ -1,13 +1,18 @@
 export type ExternalCapability = "web_search" | "file_read" | "file_write" | "shell_exec" | "wasm_exec";
 export type ToolId =
   | "web.search"
+  | "web.fetch"
+  | "web.extract"
   | "file.read"
+  | "file.read.range"
   | "file.write"
   | "file.edit"
   | "file.send"
   | "shell.exec"
   | "process.list"
   | "process.kill"
+  | "process.start"
+  | "process.wait"
   | "wasm.exec";
 export type ToolSafetyTier = "read_only" | "side_effecting" | "privileged";
 
@@ -49,6 +54,20 @@ export const TOOL_SPECS_V1: Record<ToolId, ToolSpecV1> = {
     safetyTier: "read_only",
     description: "Fetches web search results from configured providers."
   },
+  "web.fetch": {
+    version: 1,
+    toolId: "web.fetch",
+    capability: "web_search",
+    safetyTier: "read_only",
+    description: "Fetches and normalizes web page content from a URL."
+  },
+  "web.extract": {
+    version: 1,
+    toolId: "web.extract",
+    capability: "web_search",
+    safetyTier: "read_only",
+    description: "Extracts structured evidence/summaries from fetched web pages."
+  },
   "file.write": {
     version: 1,
     toolId: "file.write",
@@ -62,6 +81,13 @@ export const TOOL_SPECS_V1: Record<ToolId, ToolSpecV1> = {
     capability: "file_read",
     safetyTier: "read_only",
     description: "Reads file content within configured allowlisted roots."
+  },
+  "file.read.range": {
+    version: 1,
+    toolId: "file.read.range",
+    capability: "file_read",
+    safetyTier: "read_only",
+    description: "Reads bounded line ranges from files within allowlisted roots."
   },
   "file.edit": {
     version: 1,
@@ -97,6 +123,20 @@ export const TOOL_SPECS_V1: Record<ToolId, ToolSpecV1> = {
     capability: "shell_exec",
     safetyTier: "privileged",
     description: "Stops local processes by PID or pattern with post-kill verification."
+  },
+  "process.start": {
+    version: 1,
+    toolId: "process.start",
+    capability: "shell_exec",
+    safetyTier: "privileged",
+    description: "Starts a local process in the background with optional readiness checks."
+  },
+  "process.wait": {
+    version: 1,
+    toolId: "process.wait",
+    capability: "shell_exec",
+    safetyTier: "read_only",
+    description: "Waits for local process readiness by PID/pattern/port."
   },
   "wasm.exec": {
     version: 1,

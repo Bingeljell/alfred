@@ -3,6 +3,7 @@ import { realpathSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
+import net from "node:net";
 import { JobCreateSchema, RunSpecV1Schema } from "../../../packages/contracts/src";
 import type { RunSpecV1 } from "../../../packages/contracts/src";
 import { parseCommand, type ParsedCommand } from "./builtins/command_parser";
@@ -138,9 +139,14 @@ type AgentNextActionType =
   | "none"
   | "ask_user"
   | "web.search"
+  | "web.fetch"
+  | "web.extract"
+  | "file.read.range"
   | "shell.exec"
   | "process.list"
   | "process.kill"
+  | "process.start"
+  | "process.wait"
   | "worker.run";
 
 type AgentNextAction = {
@@ -157,6 +163,14 @@ type AgentNextAction = {
   cwd?: string;
   rerunQuery?: string;
   goal?: string;
+  url?: string;
+  urls?: string[];
+  targetPath?: string;
+  fromLine?: number;
+  lineCount?: number;
+  verifyPattern?: string;
+  verifyPort?: number;
+  timeoutSec?: number;
 };
 
 type AgentTurnDecision = {
@@ -2871,6 +2885,58 @@ export class GatewayService {
       });
       return `Approved action executed: process_kill\n${output}\n\nRerunning prior task as job ${job.id}.`;
     }
+    if (approval.action === "process_start") {
+      const command = String(approval.payload.command ?? "").trim();
+      const requestedCwd = typeof approval.payload.cwd === "string" ? approval.payload.cwd.trim() : undefined;
+      const verifyPattern = typeof approval.payload.verifyPattern === "string" ? approval.payload.verifyPattern.trim() : "";
+      const verifyPortRaw = Number(approval.payload.verifyPort);
+      const verifyPort = Number.isFinite(verifyPortRaw) && verifyPortRaw > 0 ? Math.trunc(verifyPortRaw) : undefined;
+      const timeoutSecRaw = Number(approval.payload.timeoutSec);
+      const timeoutSec = Number.isFinite(timeoutSecRaw) && timeoutSecRaw > 0 ? Math.min(300, Math.trunc(timeoutSecRaw)) : 20;
+      const rerunQuery = typeof approval.payload.rerunQuery === "string" ? approval.payload.rerunQuery.trim() : "";
+      if (!command) {
+        return "Approved action failed: missing process start command.";
+      }
+      const resolvedCwd = this.resolveShellCwd(requestedCwd);
+      if (!resolvedCwd.ok) {
+        return `Approved action failed: ${resolvedCwd.error}`;
+      }
+      const shellPolicy = this.evaluateShellCommandPolicy(command);
+      if (shellPolicy.blocked) {
+        return `Approved action failed: shell command blocked by policy (${shellPolicy.ruleId}).`;
+      }
+      await this.recordToolUsage(channelSessionId, "process.start", {
+        route: "approval_execute",
+        command,
+        cwd: resolvedCwd.cwd,
+        verifyPattern: verifyPattern || undefined,
+        verifyPort,
+        timeoutSec
+      });
+      const launch = await this.startBackgroundProcess(command, resolvedCwd.cwd);
+      if (!launch.ok) {
+        return `Approved action executed: process_start\n${launch.message}`;
+      }
+      const waitResult = await this.waitForProcessReady({
+        cwd: resolvedCwd.cwd,
+        pid: launch.pid ?? undefined,
+        pattern: verifyPattern || undefined,
+        verifyPort,
+        timeoutSec
+      });
+      if (!rerunQuery || !/ready/i.test(waitResult)) {
+        return `Approved action executed: process_start\n${launch.message}\n${waitResult}`;
+      }
+      const job = await this.enqueueLongTaskJob(channelSessionId, {
+        taskType: "agentic_turn",
+        query: rerunQuery,
+        provider: this.capabilityPolicy.webSearchProvider,
+        authSessionId,
+        authPreference,
+        reason: "post_process_start_rerun"
+      });
+      return `Approved action executed: process_start\n${launch.message}\n${waitResult}\n\nRerunning prior task as job ${job.id}.`;
+    }
     if (approval.action === "shell_exec_override") {
       const command = String(approval.payload.command ?? "").trim();
       const requestedCwd = typeof approval.payload.cwd === "string" ? approval.payload.cwd.trim() : undefined;
@@ -3296,13 +3362,18 @@ export class GatewayService {
       "You are Alfred, a goal-oriented orchestrator.",
       "Decide whether to answer directly or propose exactly one next action.",
       "Return STRICT JSON only with this shape:",
-      '{"assistant_response":"", "next_action":{"type":"none|ask_user|web.search|shell.exec|process.list|process.kill|worker.run","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","pattern":"","pid":0,"signal":"TERM|KILL|INT","limit":10,"cwd":"","rerunQuery":"","goal":""}}',
+      '{"assistant_response":"", "next_action":{"type":"none|ask_user|web.search|web.fetch|web.extract|file.read.range|shell.exec|process.list|process.kill|process.start|process.wait|worker.run","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","pattern":"","pid":0,"signal":"TERM|KILL|INT","limit":10,"cwd":"","rerunQuery":"","goal":"","url":"","urls":[],"targetPath":"","fromLine":1,"lineCount":120,"verifyPattern":"","verifyPort":0,"timeoutSec":20}}',
       "Rules:",
       "- Use next_action.type=none for pure conversational replies.",
       "- Use web.search for live/current web retrieval.",
+      "- Use web.fetch to read the content of a specific URL.",
+      "- Use web.extract to synthesize a grounded summary/recommendation from URLs/search evidence.",
+      "- Use file.read.range to inspect local files before proposing edits or shell changes.",
       "- Use shell.exec for local machine operations.",
       "- Use process.list to inspect running processes (optionally with a pattern).",
       "- Use process.kill to stop a specific PID or processes matching a pattern.",
+      "- Use process.start to launch a local background service/task.",
+      "- Use process.wait to verify readiness after process.start or external startup.",
       "- Use worker.run for long-running tasks requiring background execution.",
       "- If unclear, ask one concise clarification using assistant_response and next_action.type=ask_user.",
       "- Do not invent execution results. Execution happens after this decision.",
@@ -3330,9 +3401,14 @@ export class GatewayService {
         type === "none" ||
         type === "ask_user" ||
         type === "web.search" ||
+        type === "web.fetch" ||
+        type === "web.extract" ||
+        type === "file.read.range" ||
         type === "shell.exec" ||
         type === "process.list" ||
         type === "process.kill" ||
+        type === "process.start" ||
+        type === "process.wait" ||
         type === "worker.run"
       ) {
         const provider = this.normalizeWebSearchProvider(nextActionRaw.provider);
@@ -3346,6 +3422,21 @@ export class GatewayService {
         const pid = Number.isFinite(pidRaw) && pidRaw > 0 ? Math.trunc(pidRaw) : undefined;
         const limitRaw = Number(nextActionRaw.limit);
         const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(100, Math.trunc(limitRaw)) : undefined;
+        const fromLineRaw = Number(nextActionRaw.fromLine);
+        const fromLine = Number.isFinite(fromLineRaw) && fromLineRaw > 0 ? Math.trunc(fromLineRaw) : undefined;
+        const lineCountRaw = Number(nextActionRaw.lineCount);
+        const lineCount = Number.isFinite(lineCountRaw) && lineCountRaw > 0 ? Math.min(400, Math.trunc(lineCountRaw)) : undefined;
+        const verifyPortRaw = Number(nextActionRaw.verifyPort);
+        const verifyPort = Number.isFinite(verifyPortRaw) && verifyPortRaw > 0 ? Math.trunc(verifyPortRaw) : undefined;
+        const timeoutSecRaw = Number(nextActionRaw.timeoutSec);
+        const timeoutSec = Number.isFinite(timeoutSecRaw) && timeoutSecRaw > 0 ? Math.min(300, Math.trunc(timeoutSecRaw)) : undefined;
+        const urls =
+          Array.isArray(nextActionRaw.urls) && nextActionRaw.urls.length > 0
+            ? nextActionRaw.urls
+                .map((item) => String(item ?? "").trim())
+                .filter((item) => item.length > 0)
+                .slice(0, 8)
+            : undefined;
         nextAction = {
           type,
           reason: typeof nextActionRaw.reason === "string" ? nextActionRaw.reason.trim() : undefined,
@@ -3359,7 +3450,15 @@ export class GatewayService {
           limit,
           cwd: typeof nextActionRaw.cwd === "string" ? nextActionRaw.cwd.trim() : undefined,
           rerunQuery: typeof nextActionRaw.rerunQuery === "string" ? nextActionRaw.rerunQuery.trim() : undefined,
-          goal: typeof nextActionRaw.goal === "string" ? nextActionRaw.goal.trim() : undefined
+          goal: typeof nextActionRaw.goal === "string" ? nextActionRaw.goal.trim() : undefined,
+          url: typeof nextActionRaw.url === "string" ? nextActionRaw.url.trim() : undefined,
+          urls,
+          targetPath: typeof nextActionRaw.targetPath === "string" ? nextActionRaw.targetPath.trim() : undefined,
+          fromLine,
+          lineCount,
+          verifyPattern: typeof nextActionRaw.verifyPattern === "string" ? nextActionRaw.verifyPattern.trim() : undefined,
+          verifyPort,
+          timeoutSec
         };
       }
     }
@@ -3414,6 +3513,66 @@ export class GatewayService {
         return `Queued web search as job ${job.id}. I’ll share results here.`;
       }
       return `Queued research as job ${job.id}. I’ll share concise progress and final results here.`;
+    }
+
+    if (action.type === "web.fetch") {
+      const toolPolicy = this.evaluateToolPolicy("web.fetch", { sessionId: channelSessionId, authSessionId });
+      if (!toolPolicy.allowed || !this.capabilityPolicy.webSearchEnabled) {
+        return "Web fetch is currently disabled by policy.";
+      }
+      const targetUrl = action.url?.trim() || this.extractFirstUrlFromText(userText) || "";
+      if (!targetUrl) {
+        return "Web fetch action is missing a URL.";
+      }
+      await this.recordToolUsage(channelSessionId, "web.fetch", {
+        route: action.reason ?? "agent_turn_v2_web_fetch",
+        url: targetUrl
+      });
+      return this.fetchWebPageSummary(targetUrl, 16_000);
+    }
+
+    if (action.type === "web.extract") {
+      const toolPolicy = this.evaluateToolPolicy("web.extract", { sessionId: channelSessionId, authSessionId });
+      if (!toolPolicy.allowed || !this.capabilityPolicy.webSearchEnabled) {
+        return "Web extraction is currently disabled by policy.";
+      }
+      const query = action.query?.trim() || userText.trim();
+      const provider = action.provider ?? this.capabilityPolicy.webSearchProvider;
+      const urlHints = (action.urls ?? []).slice(0, 6);
+      await this.recordToolUsage(channelSessionId, "web.extract", {
+        route: action.reason ?? "agent_turn_v2_web_extract",
+        provider,
+        query: query || undefined
+      });
+      return this.executeWebExtractAction({
+        authSessionId,
+        authPreference,
+        query,
+        provider,
+        urlHints
+      });
+    }
+
+    if (action.type === "file.read.range") {
+      const toolPolicy = this.evaluateToolPolicy("file.read.range", { sessionId: channelSessionId, authSessionId });
+      if (!toolPolicy.allowed || !this.capabilityPolicy.fileReadEnabled) {
+        return "File range read is currently disabled by policy.";
+      }
+      const targetPath = action.targetPath?.trim() || this.extractFirstPathFromText(userText) || "";
+      if (!targetPath) {
+        return "File range read action is missing a target path.";
+      }
+      const resolved = this.resolvePathWithinAllowedRoots(targetPath, this.capabilityPolicy.fileReadAllowedDirs, "read");
+      if (!resolved.ok) {
+        return resolved.error;
+      }
+      await this.recordToolUsage(channelSessionId, "file.read.range", {
+        route: action.reason ?? "agent_turn_v2_file_read_range",
+        resolvedPath: resolved.absolutePath,
+        fromLine: action.fromLine,
+        lineCount: action.lineCount
+      });
+      return this.executeFileRead(resolved.absolutePath, action.fromLine, action.lineCount);
     }
 
     if (action.type === "worker.run") {
@@ -3504,6 +3663,94 @@ export class GatewayService {
       ]
         .filter((line) => line.length > 0)
         .join("\n");
+    }
+
+    if (action.type === "process.start") {
+      if (!isSandboxTargetEnabled("shell.exec", this.buildSandboxPolicyConfig())) {
+        return "Process start is disabled by sandbox policy.";
+      }
+      const toolPolicy = this.evaluateToolPolicy("process.start", { sessionId: channelSessionId, authSessionId });
+      if (!toolPolicy.allowed || !this.capabilityPolicy.shellEnabled) {
+        return "Process start is currently disabled by policy.";
+      }
+      const command = action.command?.trim();
+      if (!command) {
+        return "Process start action is missing command text.";
+      }
+      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
+      if (!resolvedCwd.ok) {
+        return resolvedCwd.error;
+      }
+      const shellPolicy = this.evaluateShellCommandPolicy(command);
+      if (shellPolicy.blocked) {
+        return `Proposed process-start command is blocked by shell policy (${shellPolicy.ruleId}).`;
+      }
+      const verifyPattern = action.verifyPattern?.trim() || this.inferProcessPatternFromText(userText) || undefined;
+      const verifyPort = Number.isFinite(action.verifyPort) && (action.verifyPort ?? 0) > 0 ? action.verifyPort : undefined;
+      const timeoutSec = Number.isFinite(action.timeoutSec) && (action.timeoutSec ?? 0) > 0 ? Math.min(300, action.timeoutSec as number) : 20;
+      const rerunQuery = (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || "";
+      if (!this.approvalStore) {
+        return "Process start requires approvals, but approvals are not configured.";
+      }
+      const approval = await this.approvalStore.create(channelSessionId, "process_start", {
+        command,
+        cwd: resolvedCwd.cwd,
+        verifyPattern,
+        verifyPort,
+        timeoutSec,
+        authSessionId,
+        source: "agent_turn_v2",
+        reason: action.reason ?? "agent_process_start_request",
+        rerunQuery: rerunQuery || undefined
+      });
+      return [
+        "Process start ready for approval.",
+        `- cwd: ${resolvedCwd.cwd}`,
+        `- command: ${command}`,
+        verifyPattern ? `- verifyPattern: ${verifyPattern}` : "",
+        verifyPort ? `- verifyPort: ${verifyPort}` : "",
+        `- timeoutSec: ${timeoutSec}`,
+        "Reply yes/no to approve or reject.",
+        `Optional explicit token: approve ${approval.token}`
+      ]
+        .filter((line) => line.length > 0)
+        .join("\n");
+    }
+
+    if (action.type === "process.wait") {
+      if (!isSandboxTargetEnabled("shell.exec", this.buildSandboxPolicyConfig())) {
+        return "Process wait is disabled by sandbox policy.";
+      }
+      const toolPolicy = this.evaluateToolPolicy("process.wait", { sessionId: channelSessionId, authSessionId });
+      if (!toolPolicy.allowed || !this.capabilityPolicy.shellEnabled) {
+        return "Process wait is currently disabled by policy.";
+      }
+      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
+      if (!resolvedCwd.ok) {
+        return resolvedCwd.error;
+      }
+      const pid = Number.isFinite(action.pid) && (action.pid ?? 0) > 0 ? Math.trunc(action.pid as number) : undefined;
+      const pattern = action.pattern?.trim() || this.inferProcessPatternFromText(userText) || undefined;
+      const verifyPort = Number.isFinite(action.verifyPort) && (action.verifyPort ?? 0) > 0 ? Math.trunc(action.verifyPort as number) : undefined;
+      const timeoutSec = Number.isFinite(action.timeoutSec) && (action.timeoutSec ?? 0) > 0 ? Math.min(300, Math.trunc(action.timeoutSec as number)) : 20;
+      if (!pid && !pattern && !verifyPort) {
+        return "Process wait requires at least one selector: pid, pattern, or verifyPort.";
+      }
+      await this.recordToolUsage(channelSessionId, "process.wait", {
+        route: action.reason ?? "agent_turn_v2_process_wait",
+        pid,
+        pattern,
+        verifyPort,
+        timeoutSec,
+        cwd: resolvedCwd.cwd
+      });
+      return this.waitForProcessReady({
+        cwd: resolvedCwd.cwd,
+        pid,
+        pattern,
+        verifyPort,
+        timeoutSec
+      });
     }
 
     if (action.type === "shell.exec") {
@@ -4335,6 +4582,326 @@ export class GatewayService {
     return null;
   }
 
+  private extractFirstUrlFromText(rawText: string): string | null {
+    const match = String(rawText ?? "").match(/https?:\/\/[^\s"'`<>]+/i);
+    return match ? match[0] : null;
+  }
+
+  private extractFirstPathFromText(rawText: string): string | null {
+    const candidates = String(rawText ?? "").match(/(?:~\/|\/)[^\s"'`]+/g) ?? [];
+    if (candidates.length === 0) {
+      return null;
+    }
+    return candidates[0] ?? null;
+  }
+
+  private normalizeHttpUrl(input: string): string | null {
+    const trimmed = input.trim();
+    if (!trimmed) {
+      return null;
+    }
+    try {
+      const url = new URL(trimmed);
+      if (url.protocol !== "http:" && url.protocol !== "https:") {
+        return null;
+      }
+      return url.toString();
+    } catch {
+      return null;
+    }
+  }
+
+  private async fetchWebPageContent(
+    url: string,
+    maxChars = 18_000
+  ): Promise<{ ok: true; url: string; status: number; title: string; text: string } | { ok: false; error: string }> {
+    const normalized = this.normalizeHttpUrl(url);
+    if (!normalized) {
+      return { ok: false, error: `Invalid URL: ${url}` };
+    }
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    try {
+      const response = await fetch(normalized, {
+        method: "GET",
+        signal: controller.signal,
+        headers: {
+          "user-agent": "AlfredAgent/0.1"
+        }
+      });
+      const status = response.status;
+      const raw = await response.text();
+      if (!response.ok) {
+        return { ok: false, error: `Fetch failed for ${normalized}: HTTP ${status}` };
+      }
+      const titleMatch = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+      const title = titleMatch ? this.decodeHtmlEntities(titleMatch[1]).replace(/\s+/g, " ").trim() : normalized;
+      const text = raw
+        .replace(/<script[\s\S]*?<\/script>/gi, " ")
+        .replace(/<style[\s\S]*?<\/style>/gi, " ")
+        .replace(/<[^>]+>/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, maxChars);
+      return {
+        ok: true,
+        url: normalized,
+        status,
+        title: title || normalized,
+        text
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, error: `Fetch failed for ${normalized}: ${message}` };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  private decodeHtmlEntities(input: string): string {
+    return input
+      .replace(/&amp;/g, "&")
+      .replace(/&lt;/g, "<")
+      .replace(/&gt;/g, ">")
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'");
+  }
+
+  private async fetchWebPageSummary(url: string, maxChars = 12_000): Promise<string> {
+    const fetched = await this.fetchWebPageContent(url, maxChars);
+    if (!fetched.ok) {
+      return fetched.error;
+    }
+    const excerpt = fetched.text.slice(0, 1600).trim();
+    return [
+      `Web page fetched successfully.`,
+      `URL: ${fetched.url}`,
+      `Status: ${fetched.status}`,
+      `Title: ${fetched.title}`,
+      "",
+      excerpt || "(No readable text extracted)"
+    ].join("\n");
+  }
+
+  private extractUrlsFromSearchText(rawText: string, limit = 6): string[] {
+    const urls = Array.from(new Set((String(rawText ?? "").match(/https?:\/\/[^\s"'`<>]+/gi) ?? []).map((item) => item.trim())));
+    const normalized = urls
+      .map((item) => this.normalizeHttpUrl(item))
+      .filter((item): item is string => Boolean(item))
+      .slice(0, limit);
+    return normalized;
+  }
+
+  private async executeWebExtractAction(input: {
+    authSessionId: string;
+    authPreference: LlmAuthPreference;
+    query: string;
+    provider: WebSearchProvider;
+    urlHints: string[];
+  }): Promise<string> {
+    const query = input.query.trim();
+    const hints = input.urlHints.map((url) => this.normalizeHttpUrl(url)).filter((url): url is string => Boolean(url));
+    let workingUrls = hints.slice(0, 6);
+    let providerSummary = input.provider;
+    let searchText = "";
+
+    if (workingUrls.length === 0 && query) {
+      const search = await this.webSearchService?.search(query, {
+        provider: input.provider,
+        authSessionId: input.authSessionId,
+        authPreference: input.authPreference
+      });
+      if (search?.text) {
+        providerSummary = search.provider;
+        searchText = search.text;
+        workingUrls = this.extractUrlsFromSearchText(search.text, 6);
+      }
+    }
+
+    if (workingUrls.length === 0) {
+      return "Web extract could not find source URLs. Provide explicit URLs or a clearer query.";
+    }
+
+    const evidence: Array<{ url: string; title: string; text: string }> = [];
+    const failures: string[] = [];
+    for (const url of workingUrls.slice(0, 4)) {
+      const fetched = await this.fetchWebPageContent(url, 14_000);
+      if (!fetched.ok) {
+        failures.push(fetched.error);
+        continue;
+      }
+      evidence.push({
+        url: fetched.url,
+        title: fetched.title,
+        text: fetched.text
+      });
+    }
+
+    if (evidence.length === 0) {
+      const failurePreview = failures.slice(0, 2).join(" | ");
+      return `Web extract could not fetch any candidate pages.${failurePreview ? ` ${failurePreview}` : ""}`;
+    }
+
+    const packedEvidence = evidence
+      .map((item, idx) => `Source ${idx + 1}\nURL: ${item.url}\nTitle: ${item.title}\nContent:\n${item.text.slice(0, 4000)}`)
+      .join("\n\n");
+
+    if (!this.llmService) {
+      const preview = evidence
+        .map((item, idx) => `${idx + 1}. ${item.title} - ${item.url}`)
+        .join("\n");
+      return `Extracted ${evidence.length} sources (provider: ${providerSummary}).\n${preview}`;
+    }
+
+    const synthesisPrompt = [
+      "You are Alfred's web extraction tool.",
+      "Use only the provided evidence to answer the user's goal.",
+      "Return concise markdown with this structure:",
+      "1) Direct answer",
+      "2) Top recommendation with rationale",
+      "3) Alternatives (2-4 bullets)",
+      "4) Evidence quality caveats",
+      "5) Sources (URL list)",
+      "",
+      `Goal: ${query || "Summarize and extract the key recommendation from evidence."}`,
+      `Search provider: ${providerSummary}`,
+      searchText ? `Search context: ${searchText.slice(0, 2000)}` : "",
+      "",
+      packedEvidence
+    ]
+      .filter((line) => line.length > 0)
+      .join("\n");
+
+    try {
+      const result = await this.withLlmTimeout(
+        this.llmService.generateText(input.authSessionId, synthesisPrompt, {
+          authPreference: input.authPreference,
+          executionMode: "reasoning_only"
+        }),
+        45_000,
+        "web_extract_timeout"
+      );
+      const text = result?.text?.trim();
+      if (!text) {
+        return "Web extract did not return synthesized output.";
+      }
+      return text;
+    } catch (error) {
+      return this.humanizeLlmError(error);
+    }
+  }
+
+  private async startBackgroundProcess(
+    command: string,
+    cwd: string
+  ): Promise<{ ok: true; pid: number | null; message: string } | { ok: false; message: string }> {
+    const trimmed = command.trim();
+    if (!trimmed) {
+      return { ok: false, message: "Process start failed: empty command." };
+    }
+    try {
+      const child = spawn(trimmed, {
+        cwd,
+        shell: true,
+        env: process.env,
+        detached: true,
+        stdio: "ignore"
+      });
+      child.unref();
+      const pid = child.pid ?? null;
+      return {
+        ok: true,
+        pid,
+        message: `Process start dispatched in ${path.relative(process.cwd(), cwd) || "."}${pid ? ` (pid=${pid})` : ""}.`
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        message: `Process start failed: ${message}`
+      };
+    }
+  }
+
+  private async waitForProcessReady(input: {
+    cwd: string;
+    pid?: number;
+    pattern?: string;
+    verifyPort?: number;
+    timeoutSec: number;
+  }): Promise<string> {
+    const timeoutMs = Math.max(1_000, Math.min(300_000, input.timeoutSec * 1_000));
+    const intervalMs = 1_000;
+    const startedAt = Date.now();
+    const deadline = startedAt + timeoutMs;
+    let lastObserved = "waiting";
+
+    while (Date.now() <= deadline) {
+      const checks: string[] = [];
+      let allReady = true;
+
+      if (typeof input.pid === "number" && input.pid > 0) {
+        const probe = await this.runShellVerificationCommand(`kill -0 ${input.pid}`, input.cwd);
+        const ready = probe.exitCode === 0;
+        checks.push(`pid=${input.pid}:${ready ? "up" : "down"}`);
+        lastObserved = checks[checks.length - 1] ?? lastObserved;
+        if (!ready) {
+          allReady = false;
+        }
+      }
+
+      if (input.pattern && input.pattern.trim()) {
+        const escaped = this.shellEscapeSingleQuoted(input.pattern.trim());
+        const probe = await this.runShellVerificationCommand(`pgrep -f -- ${escaped}`, input.cwd);
+        const ready = probe.exitCode === 0 && Boolean(probe.stdout.trim());
+        checks.push(`pattern=${input.pattern}:${ready ? "matched" : "none"}`);
+        lastObserved = checks[checks.length - 1] ?? lastObserved;
+        if (!ready) {
+          allReady = false;
+        }
+      }
+
+      if (typeof input.verifyPort === "number" && input.verifyPort > 0) {
+        const ready = await this.isLocalPortOpen(input.verifyPort);
+        checks.push(`port=${input.verifyPort}:${ready ? "open" : "closed"}`);
+        lastObserved = checks[checks.length - 1] ?? lastObserved;
+        if (!ready) {
+          allReady = false;
+        }
+      }
+
+      if (allReady) {
+        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        return `Process readiness verified in ${elapsed}s (${checks.join(", ")}).`;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    return `Process readiness timed out after ${elapsed}s (last observed: ${lastObserved}).`;
+  }
+
+  private async isLocalPortOpen(port: number): Promise<boolean> {
+    if (!Number.isFinite(port) || port <= 0 || port > 65535) {
+      return false;
+    }
+    return await new Promise<boolean>((resolve) => {
+      const socket = net.createConnection({ host: "127.0.0.1", port }, () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.setTimeout(800);
+      socket.on("timeout", () => {
+        socket.destroy();
+        resolve(false);
+      });
+      socket.on("error", () => {
+        resolve(false);
+      });
+    });
+  }
+
   private isPathInsideRoot(targetPath: string, rootPath: string): boolean {
     const normalizedRoot = this.canonicalizePathForScope(rootPath);
     const normalizedTarget = this.canonicalizePathForScope(targetPath);
@@ -4738,7 +5305,7 @@ export class GatewayService {
       "A user approved a local shell recovery action, but it failed.",
       "Decide the next best step with minimal friction.",
       "Return STRICT JSON only with this shape:",
-      '{"assistant_response":"", "next_action":{"type":"none|ask_user|web.search|shell.exec|process.list|process.kill|worker.run","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","pattern":"","pid":0,"signal":"TERM|KILL|INT","limit":10,"cwd":"","rerunQuery":"","goal":""}}',
+      '{"assistant_response":"", "next_action":{"type":"none|ask_user|web.search|web.fetch|web.extract|file.read.range|shell.exec|process.list|process.kill|process.start|process.wait|worker.run","reason":"","query":"","provider":"auto|searxng|openai|brave|perplexity|brightdata","mode":"quick|deep","command":"","pattern":"","pid":0,"signal":"TERM|KILL|INT","limit":10,"cwd":"","rerunQuery":"","goal":"","url":"","urls":[],"targetPath":"","fromLine":1,"lineCount":120,"verifyPattern":"","verifyPort":0,"timeoutSec":20}}',
       "",
       "Rules:",
       "- Do not claim success when shell failed.",

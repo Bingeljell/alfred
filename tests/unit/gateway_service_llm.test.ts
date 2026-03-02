@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { spawn } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import { GatewayService } from "../../apps/gateway-orchestrator/src/gateway_service";
 import { FileBackedQueueStore } from "../../apps/gateway-orchestrator/src/local_queue_store";
@@ -1444,6 +1445,340 @@ describe("GatewayService llm path", () => {
     expect(proposed.response).toContain("- cwd:");
     expect(proposed.response).toContain("searXNG");
   });
+
+  it("runs web.fetch next_action and returns normalized page content", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-web-fetch-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          assistant_response: "I’ll fetch that page now.",
+          next_action: {
+            type: "web.fetch",
+            url: "https://example.com",
+            reason: "fetch_page_context"
+          }
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response("<html><head><title>Example Domain</title></head><body>hello from example</body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    try {
+      const service = new GatewayService(
+        queueStore,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        llm,
+        undefined,
+        "chatgpt",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {
+          webSearchEnabled: true
+        }
+      );
+      const response = await service.handleInbound({
+        sessionId: "owner@s.whatsapp.net",
+        text: "Fetch this URL for me: https://example.com",
+        requestJob: false
+      });
+      expect(response.response).toContain("Web page fetched successfully.");
+      expect(response.response).toContain("Title: Example Domain");
+      expect(fetchMock).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("runs web.extract next_action and returns synthesized recommendation", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-web-extract-unit-"));
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const llm = {
+      generateText: vi
+        .fn()
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            assistant_response: "I’ll extract grounded recommendations.",
+            next_action: {
+              type: "web.extract",
+              query: "best coding terminal for mac",
+              provider: "searxng",
+              reason: "grounded_recommendation"
+            }
+          }),
+          model: "gpt-4.1-mini",
+          authMode: "api_key"
+        })
+        .mockResolvedValueOnce({
+          text: "1) Direct answer\nUse iTerm2 for a free, stable baseline.\n\n2) Top recommendation with rationale\niTerm2 balances reliability and ecosystem support.\n\n5) Sources\n- https://example.com/a\n- https://example.com/b",
+          model: "gpt-4.1-mini",
+          authMode: "api_key"
+        })
+    } as unknown as OpenAIResponsesService;
+
+    const webSearchService = {
+      search: vi.fn().mockResolvedValue({
+        provider: "searxng",
+        text: "1) https://example.com/a\n2) https://example.com/b"
+      })
+    };
+
+    const fetchMock = vi
+      .fn()
+      .mockImplementation(async (url: string) =>
+        new Response(
+          `<html><head><title>${url.includes("/a") ? "Source A" : "Source B"}</title></head><body>evidence for ${url}</body></html>`,
+          { status: 200, headers: { "content-type": "text/html" } }
+        )
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    try {
+      const service = new GatewayService(
+        queueStore,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        llm,
+        undefined,
+        "chatgpt",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {
+          webSearchEnabled: true
+        },
+        webSearchService as never
+      );
+
+      const response = await service.handleInbound({
+        sessionId: "owner@s.whatsapp.net",
+        text: "Recommend the best coding terminal on macOS",
+        requestJob: false
+      });
+      expect(response.response).toContain("Direct answer");
+      expect(response.response).toContain("iTerm2");
+      expect(webSearchService.search).toHaveBeenCalled();
+      expect(fetchMock).toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("runs file.read.range next_action within allowed roots", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-file-read-range-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const targetFile = path.join(workspaceDir, "notes", "sample.md");
+    await fs.mkdir(path.dirname(targetFile), { recursive: true });
+    await fs.writeFile(targetFile, ["line1", "line2", "line3", "line4"].join("\n"), "utf8");
+
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          assistant_response: "I’ll inspect that file range.",
+          next_action: {
+            type: "file.read.range",
+            targetPath: targetFile,
+            fromLine: 2,
+            lineCount: 2,
+            reason: "inspect_file_context"
+          }
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        fileReadEnabled: true,
+        fileReadAllowedDirs: [workspaceDir]
+      }
+    );
+
+    const response = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Read lines 2-3 from notes/sample.md",
+      requestJob: false
+    });
+    expect(response.response).toContain("Range: lines 2-3");
+    expect(response.response).toContain("2| line2");
+    expect(response.response).toContain("3| line3");
+  });
+
+  it("runs process.start with approval and reports launch", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-process-start-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+    const approvalStore = new ApprovalStore(stateDir);
+    await approvalStore.ensureReady();
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          assistant_response: "I’ll start that process.",
+          next_action: {
+            type: "process.start",
+            command: "sleep 1",
+            cwd: workspaceDir,
+            timeoutSec: 5,
+            reason: "start_background_task"
+          }
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      approvalStore,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        shellEnabled: true,
+        shellAllowedDirs: [workspaceDir]
+      }
+    );
+
+    const proposed = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "Start the local helper process",
+      requestJob: false
+    });
+    expect(proposed.response).toContain("Process start ready for approval.");
+
+    const approved = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "yes",
+      requestJob: false
+    });
+    expect(approved.response).toContain("Approved action executed: process_start");
+    expect(approved.response).toContain("Process start dispatched");
+  });
+
+  it("runs process.wait and reports readiness", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-process-wait-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const marker = `alfred_wait_${Date.now()}`;
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 4000)", marker], {
+      cwd: workspaceDir,
+      stdio: "ignore"
+    });
+
+    const llm = {
+      generateText: vi.fn().mockResolvedValue({
+        text: JSON.stringify({
+          assistant_response: "I’ll wait for the process to be visible.",
+          next_action: {
+            type: "process.wait",
+            pid: child.pid,
+            cwd: workspaceDir,
+            timeoutSec: 8,
+            reason: "wait_for_process_visibility"
+          }
+        }),
+        model: "gpt-4.1-mini",
+        authMode: "api_key"
+      })
+    } as unknown as OpenAIResponsesService;
+
+    try {
+      const service = new GatewayService(
+        queueStore,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        llm,
+        undefined,
+        "chatgpt",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {
+          workspaceDir,
+          shellEnabled: true,
+          shellAllowedDirs: [workspaceDir]
+        }
+      );
+
+      const response = await service.handleInbound({
+        sessionId: "owner@s.whatsapp.net",
+        text: `Wait for process marker ${marker}`,
+        requestJob: false
+      });
+      expect(response.response).toContain("Process readiness verified");
+    } finally {
+      if (child.pid) {
+        try {
+          process.kill(child.pid, "SIGKILL");
+        } catch {
+          // ignore if already exited
+        }
+      }
+    }
+  }, 15_000);
 
   it("reruns latest failed search query after approved local shell recovery action", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-local-ops-rerun-unit-"));
