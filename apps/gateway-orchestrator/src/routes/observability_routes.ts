@@ -45,6 +45,17 @@ type ConversationStoreLike = {
     until?: string;
   }) => Promise<ConversationEvent[]>;
   subscribe: (handler: (event: ConversationEvent) => void) => () => void;
+  listSessions?: (limit?: number) => Promise<
+    Array<{
+      sessionId: string;
+      lastAt: string;
+      lastDirection: string;
+      lastKind: string;
+      lastSource: string;
+      preview: string;
+      eventCount: number;
+    }>
+  >;
 };
 
 type RunLedgerLike = {
@@ -101,6 +112,54 @@ function clampLimit(raw: unknown, defaults: { fallback: number; min: number; max
   return Math.max(defaults.min, Math.min(defaults.max, Math.floor(parsed)));
 }
 
+function extractRunSpecArtifacts(runSpec: unknown): Array<{
+  type: "file";
+  path: string;
+  name: string;
+  mimeType?: string;
+}> {
+  if (!runSpec || typeof runSpec !== "object") {
+    return [];
+  }
+  const value = runSpec as Record<string, unknown>;
+  const stepStates = value.stepStates;
+  if (!stepStates || typeof stepStates !== "object" || Array.isArray(stepStates)) {
+    return [];
+  }
+  const rows: Array<{ type: "file"; path: string; name: string; mimeType?: string }> = [];
+  for (const item of Object.values(stepStates as Record<string, unknown>)) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const output = (item as Record<string, unknown>).output;
+    if (!output || typeof output !== "object" || Array.isArray(output)) {
+      continue;
+    }
+    const outputRecord = output as Record<string, unknown>;
+    const filePath = typeof outputRecord.filePath === "string" ? outputRecord.filePath.trim() : "";
+    if (!filePath) {
+      continue;
+    }
+    const fileName = typeof outputRecord.fileName === "string" && outputRecord.fileName.trim() ? outputRecord.fileName.trim() : filePath;
+    const mimeType = typeof outputRecord.mimeType === "string" && outputRecord.mimeType.trim() ? outputRecord.mimeType.trim() : undefined;
+    rows.push({
+      type: "file",
+      path: filePath,
+      name: fileName,
+      mimeType
+    });
+  }
+  const seen = new Set<string>();
+  return rows.filter((item) => {
+    const key = `${item.path}:${item.name}`;
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+}
+
 export function registerObservabilityRoutes(
   app: Express,
   deps: {
@@ -112,6 +171,98 @@ export function registerObservabilityRoutes(
     executionPolicyService?: ExecutionPolicyServiceLike;
   }
 ) {
+  app.get("/v1/agent/sessions", async (req, res) => {
+    if (!deps.conversationStore) {
+      res.status(404).json({ error: "stream_not_configured" });
+      return;
+    }
+    const limit = clampLimit(req.query.limit, { fallback: 100, min: 1, max: 500 });
+    if (deps.conversationStore.listSessions) {
+      const sessions = await deps.conversationStore.listSessions(limit);
+      res.status(200).json({ sessions });
+      return;
+    }
+    const events = await deps.conversationStore.query({
+      limit: Math.min(500, Math.max(100, limit * 10))
+    });
+    const bySession = new Map<string, ConversationEvent>();
+    for (const event of events) {
+      const previous = bySession.get(event.sessionId);
+      if (!previous || Date.parse(event.createdAt) >= Date.parse(previous.createdAt)) {
+        bySession.set(event.sessionId, event);
+      }
+    }
+    const sessions = Array.from(bySession.values())
+      .map((event) => ({
+        sessionId: event.sessionId,
+        lastAt: event.createdAt,
+        lastDirection: event.direction,
+        lastKind: event.kind,
+        lastSource: event.source,
+        preview: event.text.slice(0, 160)
+      }))
+      .sort((a, b) => Date.parse(b.lastAt) - Date.parse(a.lastAt))
+      .slice(0, limit);
+    res.status(200).json({ sessions });
+  });
+
+  app.get("/v1/agent/runs", async (req, res) => {
+    if (!deps.runLedger) {
+      res.status(404).json({ error: "run_ledger_not_configured" });
+      return;
+    }
+    const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
+    const limit = clampLimit(req.query.limit, { fallback: 100, min: 1, max: 500 });
+    const runs = await deps.runLedger.listRuns({
+      sessionKey: sessionId || undefined,
+      limit
+    });
+    res.status(200).json({ runs });
+  });
+
+  app.get("/v1/agent/runs/:runId/events", async (req, res) => {
+    if (!deps.conversationStore) {
+      res.status(404).json({ error: "stream_not_configured" });
+      return;
+    }
+    const runId = String(req.params.runId ?? "").trim();
+    if (!runId) {
+      res.status(400).json({ error: "runId_required" });
+      return;
+    }
+    const limit = clampLimit(req.query.limit, { fallback: 200, min: 1, max: 1000 });
+    const events = await deps.conversationStore.query({
+      limit: Math.max(500, limit)
+    });
+    const filtered = events
+      .filter((event) => {
+        const metadata =
+          event && typeof event === "object" && "metadata" in event
+            ? ((event as unknown as { metadata?: Record<string, unknown> }).metadata ?? {})
+            : {};
+        const eventRunId = typeof metadata.runId === "string" ? metadata.runId : "";
+        const eventJobId = typeof metadata.jobId === "string" ? metadata.jobId : "";
+        return eventRunId === runId || eventJobId === runId;
+      })
+      .slice(-limit);
+    res.status(200).json({ runId, events: filtered });
+  });
+
+  app.get("/v1/agent/runs/:runId/artifacts", async (req, res) => {
+    if (!deps.runSpecStore) {
+      res.status(200).json({ runId: req.params.runId, artifacts: [] });
+      return;
+    }
+    const runId = String(req.params.runId ?? "").trim();
+    if (!runId) {
+      res.status(400).json({ error: "runId_required" });
+      return;
+    }
+    const runSpec = await deps.runSpecStore.get(runId);
+    const artifacts = extractRunSpecArtifacts(runSpec);
+    res.status(200).json({ runId, artifacts });
+  });
+
   app.get("/v1/stream/events", async (req, res) => {
     if (!deps.conversationStore) {
       res.status(404).json({ error: "stream_not_configured" });

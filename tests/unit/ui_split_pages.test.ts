@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderUiHomeHtml } from "../../apps/gateway-orchestrator/src/ui/render_ui_home";
 import { renderUiTranscriptsHtml } from "../../apps/gateway-orchestrator/src/ui/render_ui_transcripts";
+import { renderUiWorkspaceHtml } from "../../apps/gateway-orchestrator/src/ui/render_ui_workspace";
 
 describe("ui split pages", () => {
   it("renders dashboard page with status cards and binding controls", () => {
@@ -16,6 +17,7 @@ describe("ui split pages", () => {
     expect(html).toContain("id=\"mapResolve\"");
     expect(html).toContain("id=\"mapList\"");
     expect(html).toContain("href=\"/ui/transcripts\"");
+    expect(html).toContain("href=\"/ui/workspace\"");
     expect(html).toContain("href=\"/ui/console\"");
   });
 
@@ -33,6 +35,25 @@ describe("ui split pages", () => {
     expect(html).toContain("/v1/stream/events");
     expect(html).toContain("limit=500");
     expect(html).toContain("href=\"/ui\"");
+    expect(html).toContain("href=\"/ui/workspace\"");
+    expect(html).toContain("href=\"/ui/console\"");
+  });
+
+  it("renders workspace page with sessions, chat, and trace panes", () => {
+    const html = renderUiWorkspaceHtml();
+    expect(html).toContain("Alfred Workspace");
+    expect(html).toContain("id=\"sessionList\"");
+    expect(html).toContain("id=\"runList\"");
+    expect(html).toContain("id=\"chatLog\"");
+    expect(html).toContain("id=\"eventLog\"");
+    expect(html).toContain("id=\"approvals\"");
+    expect(html).toContain("id=\"artifacts\"");
+    expect(html).toContain("/v1/agent/sessions");
+    expect(html).toContain("/v1/agent/runs");
+    expect(html).toContain("/v1/approvals/pending");
+    expect(html).toContain("/v1/messages/inbound");
+    expect(html).toContain("href=\"/ui\"");
+    expect(html).toContain("href=\"/ui/transcripts\"");
     expect(html).toContain("href=\"/ui/console\"");
   });
 });

@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-03-02: Added a new desktop `/ui/workspace` (3-pane) for agent workflows and shipped supporting `/v1/agent/*` APIs (`sessions`, `runs`, `run events`, `artifacts`) plus conversation-session summaries to improve non-WhatsApp operator control loops.
 - 2026-03-02: Cut over agent turn action exposure to a runtime registry path (`listAgentActionSpecs`) so prompt-visible next actions are now derived from ToolSpec + capability policy + sandbox availability per session, and gateway decision parsing now validates against that exposed action set instead of a static hardcoded enum.
 - 2026-03-02: Added the next execution tool set for agentic turns: `web.fetch` (URL content fetch), `web.extract` (grounded synthesis from fetched/search evidence), `file.read.range` (bounded file context reads), `process.start` (approval-gated background launch), and `process.wait` (PID/pattern/port readiness checks), with policy metadata and unit coverage.
 - 2026-03-01: Fixed agentic local-ops approval/action continuity by handling standalone `approved/rejected` without falling through to new LLM actions, inferring process-action cwd from user text paths when model cwd is missing, and requiring explicit rerun intent before auto-rerunning prior search goals after shell/process actions.

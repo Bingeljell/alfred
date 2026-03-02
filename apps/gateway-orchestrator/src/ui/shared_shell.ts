@@ -1,8 +1,9 @@
-type UiSection = "status" | "transcripts" | "console";
+type UiSection = "status" | "workspace" | "transcripts" | "console";
 
 function renderUiNav(current: UiSection): string {
   const links: Array<{ href: string; label: string; section: UiSection }> = [
     { href: "/ui", label: "Status", section: "status" },
+    { href: "/ui/workspace", label: "Workspace", section: "workspace" },
     { href: "/ui/transcripts", label: "Transcripts", section: "transcripts" },
     { href: "/ui/console", label: "Console", section: "console" }
   ];
@@ -28,4 +29,3 @@ export function renderUiHeader(input: {
       ${renderUiNav(input.current)}
     </header>`;
 }
-

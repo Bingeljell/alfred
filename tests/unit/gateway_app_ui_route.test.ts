@@ -20,6 +20,7 @@ describe("gateway web console routes", () => {
 
     expect(routes).toContain("GET /");
     expect(routes).toContain("GET /ui");
+    expect(routes).toContain("GET /ui/workspace");
     expect(routes).toContain("GET /ui/transcripts");
     expect(routes).toContain("GET /ui/console");
     expect(routes).toContain("POST /v1/auth/openai/start");
@@ -37,6 +38,10 @@ describe("gateway web console routes", () => {
     expect(routes).toContain("GET /v1/memory/checkpoints/status");
     expect(routes).toContain("GET /v1/stream/events");
     expect(routes).toContain("GET /v1/stream/events/subscribe");
+    expect(routes).toContain("GET /v1/agent/sessions");
+    expect(routes).toContain("GET /v1/agent/runs");
+    expect(routes).toContain("GET /v1/agent/runs/:runId/events");
+    expect(routes).toContain("GET /v1/agent/runs/:runId/artifacts");
     expect(routes).toContain("GET /v1/runs");
     expect(routes).toContain("GET /v1/runs/:runId");
     expect(routes).toContain("GET /v1/supervisors");

@@ -5,6 +5,7 @@ import { MessageDedupeStore } from "./whatsapp/dedupe_store";
 import { renderWebConsoleHtml } from "./ui/render_web_console";
 import { renderUiHomeHtml } from "./ui/render_ui_home";
 import { renderUiTranscriptsHtml } from "./ui/render_ui_transcripts";
+import { renderUiWorkspaceHtml } from "./ui/render_ui_workspace";
 import type { CreateGatewayAppOptions } from "./app_types";
 import { registerAuthRoutes } from "./routes/auth_routes";
 import { registerChannelRoutes } from "./routes/channel_routes";
@@ -116,6 +117,7 @@ export function createGatewayApp(
   registerCoreRoutes(app, {
     health: () => service.health(),
     renderUiHome: () => renderUiHomeHtml(),
+    renderUiWorkspace: () => renderUiWorkspaceHtml(),
     renderUiTranscripts: () => renderUiTranscriptsHtml(),
     renderUiConsole: () => renderWebConsoleHtml()
   });

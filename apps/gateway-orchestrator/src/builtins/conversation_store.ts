@@ -35,6 +35,16 @@ export type ConversationQuery = {
   until?: string;
 };
 
+export type ConversationSessionSummary = {
+  sessionId: string;
+  lastAt: string;
+  lastDirection: ConversationDirection;
+  lastKind: ConversationKind;
+  lastSource: ConversationSource;
+  preview: string;
+  eventCount: number;
+};
+
 export class ConversationStore {
   private readonly filePath: string;
   private readonly maxEvents: number;
@@ -127,6 +137,49 @@ export class ConversationStore {
     return this.query({
       limit
     });
+  }
+
+  async listSessions(limit = 100): Promise<ConversationSessionSummary[]> {
+    const bounded = Number.isFinite(limit) ? Math.max(1, Math.min(500, Math.floor(limit))) : 100;
+    const { state, changed } = await this.readAndPrune();
+    if (changed) {
+      await this.write(state);
+    }
+
+    const bySession = new Map<
+      string,
+      {
+        last: ConversationRecord;
+        eventCount: number;
+      }
+    >();
+    for (const event of state.events) {
+      const existing = bySession.get(event.sessionId);
+      if (!existing) {
+        bySession.set(event.sessionId, {
+          last: event,
+          eventCount: 1
+        });
+        continue;
+      }
+      existing.eventCount += 1;
+      if (Date.parse(event.createdAt) >= Date.parse(existing.last.createdAt)) {
+        existing.last = event;
+      }
+    }
+
+    const rows: ConversationSessionSummary[] = Array.from(bySession.entries())
+      .map(([sessionId, value]) => ({
+        sessionId,
+        lastAt: value.last.createdAt,
+        lastDirection: value.last.direction,
+        lastKind: value.last.kind,
+        lastSource: value.last.source,
+        preview: value.last.text.slice(0, 160),
+        eventCount: value.eventCount
+      }))
+      .sort((a, b) => Date.parse(b.lastAt) - Date.parse(a.lastAt));
+    return rows.slice(0, bounded);
   }
 
   async query(query: ConversationQuery): Promise<ConversationRecord[]> {

@@ -3,6 +3,7 @@ import type { Express } from "express";
 type CoreRouteDeps = {
   health: () => Promise<unknown>;
   renderUiHome: () => string;
+  renderUiWorkspace: () => string;
   renderUiTranscripts: () => string;
   renderUiConsole: () => string;
 };
@@ -18,6 +19,10 @@ export function registerCoreRoutes(app: Express, deps: CoreRouteDeps) {
 
   app.get("/ui/transcripts", (_req, res) => {
     res.status(200).type("html").send(deps.renderUiTranscripts());
+  });
+
+  app.get("/ui/workspace", (_req, res) => {
+    res.status(200).type("html").send(deps.renderUiWorkspace());
   });
 
   app.get("/ui/console", (_req, res) => {

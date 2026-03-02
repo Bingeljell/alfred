@@ -7,6 +7,7 @@ describe("renderWebConsoleHtml", () => {
 
     expect(html).toContain("Alfred Test Console");
     expect(html).toContain("href=\"/ui\"");
+    expect(html).toContain("href=\"/ui/workspace\"");
     expect(html).toContain("href=\"/ui/transcripts\"");
     expect(html).toContain("href=\"/ui/console\"");
     expect(html).toContain("/v1/messages/inbound");
