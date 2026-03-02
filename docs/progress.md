@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-03-02: Extended worker `agentic_turn` output with CSV artifact delivery for contact/list goals: parses CSV intent from natural-language requests, extracts public email/source evidence into rows, writes artifacts under `workspace/alfred/artifacts`, enqueues file notifications for delivery, and includes artifact notes in both fallback and synthesized responses.
 - 2026-03-02: Added a new desktop `/ui/workspace` (3-pane) for agent workflows and shipped supporting `/v1/agent/*` APIs (`sessions`, `runs`, `run events`, `artifacts`) plus conversation-session summaries to improve non-WhatsApp operator control loops.
 - 2026-03-02: Cut over agent turn action exposure to a runtime registry path (`listAgentActionSpecs`) so prompt-visible next actions are now derived from ToolSpec + capability policy + sandbox availability per session, and gateway decision parsing now validates against that exposed action set instead of a static hardcoded enum.
 - 2026-03-02: Added the next execution tool set for agentic turns: `web.fetch` (URL content fetch), `web.extract` (grounded synthesis from fetched/search evidence), `file.read.range` (bounded file context reads), `process.start` (approval-gated background launch), and `process.wait` (PID/pattern/port readiness checks), with policy metadata and unit coverage.

@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import type { RunSpecV1 } from "../../../../packages/contracts/src";
 import type { WorkerProcessor } from "../worker";
 import { executeRunSpec } from "../run_spec_executor";
@@ -47,6 +49,24 @@ type AgenticObjective = {
   mode: AgenticObjectiveMode;
   reason: string;
   searchQuery?: string;
+};
+
+type CsvArtifactRequest = {
+  requested: boolean;
+  rowTarget: number;
+  columns: string[] | null;
+};
+
+type CsvLeadRow = {
+  name: string;
+  designation: string;
+  email: string;
+  company_name: string;
+  website: string;
+  source_url: string;
+  contact_type: string;
+  confidence_score: string;
+  notes: string;
 };
 
 export function createWorkerProcessor(input: {
@@ -525,6 +545,53 @@ export function createWorkerProcessor(input: {
       }
 
       const compactEvidence = compactSearchHitsForSynthesis(mergedHits, 14);
+      const csvRequest = parseCsvArtifactRequest(goal);
+      let csvArtifactNote = "";
+      if (csvRequest.requested) {
+        await context.reportProgress({
+          step: "artifact",
+          phase: "persist",
+          message: "Building CSV artifact from extracted public evidence..."
+        });
+        let leads = extractCsvLeadsFromEvidence(mergedHits, pageEvidence, csvRequest.rowTarget);
+        let usedFallbackRows = false;
+        if (leads.length === 0) {
+          leads = buildFallbackCsvRowsFromHits(mergedHits, csvRequest.rowTarget);
+          usedFallbackRows = leads.length > 0;
+        }
+        if (leads.length > 0) {
+          const columns = csvRequest.columns ?? ["company_name", "email", "website", "source_url", "contact_type", "confidence_score"];
+          try {
+            const artifact = await writeCsvArtifact({
+              workspaceDir: input.config.alfredWorkspaceDir,
+              goal,
+              columns,
+              rows: leads
+            });
+            if (sessionId) {
+              await input.notificationStore.enqueue({
+                sessionId,
+                status: "succeeded",
+                jobId: job.id,
+                kind: "file",
+                filePath: artifact.filePath,
+                fileName: artifact.fileName,
+                mimeType: "text/csv",
+                caption: `CSV artifact generated (${artifact.rowCount} rows)`
+              });
+            }
+            csvArtifactNote = `CSV artifact generated with ${artifact.rowCount} rows at ${artifact.relativePath}.`;
+            if (usedFallbackRows) {
+              csvArtifactNote = `${csvArtifactNote}\nNote: direct public emails were sparse, so fallback source rows were included for manual enrichment.`;
+            }
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            csvArtifactNote = `I could not write the requested CSV artifact: ${detail}`;
+          }
+        } else {
+          csvArtifactNote = "I could not extract enough public source rows to create the requested CSV yet.";
+        }
+      }
       await context.reportProgress({
         step: "ranking",
         phase: "rank",
@@ -569,7 +636,7 @@ export function createWorkerProcessor(input: {
       }
 
       if (!ranking) {
-        const fallbackText = renderNoRankingFallback(goal, mergedHits, providersUsed);
+        const fallbackText = appendArtifactNote(renderNoRankingFallback(goal, mergedHits, providersUsed), csvArtifactNote);
         return finalizePagedAgenticResponse({
           sessionId,
           fullText: fallbackText,
@@ -584,7 +651,7 @@ export function createWorkerProcessor(input: {
       }
 
       if (ranking.ambiguityReasons.length > 0 && ranking.followUpQuestions.length > 0) {
-        const clarify = renderClarificationRequest(goal, ranking);
+        const clarify = appendArtifactNote(renderClarificationRequest(goal, ranking), csvArtifactNote);
         return {
           summary: "agentic_turn_needs_clarification",
           responseText: clarify,
@@ -598,7 +665,7 @@ export function createWorkerProcessor(input: {
 
       const quality = evaluateRecommendationQuality(mergedHits, ranking);
       if (!quality.passed) {
-        const gated = renderQualityGateFallback(goal, ranking, mergedHits, quality);
+        const gated = appendArtifactNote(renderQualityGateFallback(goal, ranking, mergedHits, quality), csvArtifactNote);
         return finalizePagedAgenticResponse({
           sessionId,
           fullText: gated,
@@ -676,7 +743,8 @@ export function createWorkerProcessor(input: {
         }
       }
 
-      const fullText = synthesisText || renderRankOnlyRecommendation(goal, ranking, mergedHits, providersUsed);
+      let fullText = synthesisText || renderRankOnlyRecommendation(goal, ranking, mergedHits, providersUsed);
+      fullText = appendArtifactNote(fullText, csvArtifactNote);
       return finalizePagedAgenticResponse({
         sessionId,
         fullText,
@@ -1815,6 +1883,260 @@ function looksLikeSourceTitle(value: string, hits: SearchHit[]): boolean {
     const title = hit.title.trim().toLowerCase();
     return title === normalized || normalized.includes(title);
   });
+}
+
+function appendArtifactNote(text: string, note: string): string {
+  const body = text.trim();
+  const suffix = note.trim();
+  if (!suffix) {
+    return body;
+  }
+  if (!body) {
+    return suffix;
+  }
+  return `${body}\n\n${suffix}`;
+}
+
+function parseCsvArtifactRequest(goal: string): CsvArtifactRequest {
+  const normalized = goal.toLowerCase();
+  const requested = /\b(csv|spreadsheet|sheet|table)\b/.test(normalized) || /\b\d+\s+emails?\b/.test(normalized);
+  if (!requested) {
+    return {
+      requested: false,
+      rowTarget: 0,
+      columns: null
+    };
+  }
+
+  const countMatch = normalized.match(/\b(\d{1,4})\s+(?:emails?|contacts?|rows?)\b/);
+  const rowTarget = countMatch ? clampInt(Number.parseInt(countMatch[1] ?? "0", 10), 1, 500, 50) : 50;
+
+  const requestedColumns: string[] = [];
+  const addColumn = (value: string) => {
+    if (!requestedColumns.includes(value)) {
+      requestedColumns.push(value);
+    }
+  };
+  if (/\bname(s)?\b/.test(normalized)) {
+    addColumn("name");
+  }
+  if (/\bdesignation|title|role\b/.test(normalized)) {
+    addColumn("designation");
+  }
+  if (/\bemail(s)?\b/.test(normalized)) {
+    addColumn("email");
+  }
+  if (/\bcompany|organization|org\b/.test(normalized)) {
+    addColumn("company_name");
+  }
+  if (/\bwebsite|url|source\b/.test(normalized)) {
+    addColumn("website");
+    addColumn("source_url");
+  }
+
+  return {
+    requested: true,
+    rowTarget,
+    columns: requestedColumns.length > 0 ? requestedColumns : null
+  };
+}
+
+function extractCsvLeadsFromEvidence(hits: SearchHit[], pages: PageEvidence[], rowTarget: number): CsvLeadRow[] {
+  const rows: CsvLeadRow[] = [];
+  const byEmail = new Set<string>();
+  const sources: Array<{ url: string; text: string; confidence: number }> = [];
+
+  for (const page of pages) {
+    sources.push({
+      url: page.url,
+      text: `${page.title}\n${page.excerpt}`,
+      confidence: 0.88
+    });
+  }
+  for (const hit of hits) {
+    sources.push({
+      url: hit.url,
+      text: `${hit.title}\n${hit.snippet}`,
+      confidence: 0.7
+    });
+  }
+
+  for (const source of sources) {
+    const emails = extractEmails(source.text);
+    if (emails.length === 0) {
+      continue;
+    }
+    const website = normalizeWebsite(source.url);
+    const company = inferCompanyFromUrl(source.url);
+    for (const email of emails) {
+      const key = email.toLowerCase();
+      if (byEmail.has(key)) {
+        continue;
+      }
+      byEmail.add(key);
+      rows.push({
+        name: "",
+        designation: "",
+        email,
+        company_name: company,
+        website,
+        source_url: source.url,
+        contact_type: inferContactTypeFromEmail(email),
+        confidence_score: source.confidence.toFixed(2),
+        notes: "Extracted from public web evidence."
+      });
+      if (rows.length >= rowTarget) {
+        return rows;
+      }
+    }
+  }
+
+  return rows;
+}
+
+function buildFallbackCsvRowsFromHits(hits: SearchHit[], rowTarget: number): CsvLeadRow[] {
+  const rows: CsvLeadRow[] = [];
+  const seen = new Set<string>();
+  for (const hit of hits) {
+    const sourceUrl = hit.url;
+    if (!sourceUrl || seen.has(sourceUrl)) {
+      continue;
+    }
+    seen.add(sourceUrl);
+    rows.push({
+      name: "",
+      designation: "",
+      email: "",
+      company_name: inferCompanyFromUrl(sourceUrl),
+      website: normalizeWebsite(sourceUrl),
+      source_url: sourceUrl,
+      contact_type: "unknown",
+      confidence_score: "0.45",
+      notes: "No direct public email extracted from this source snippet."
+    });
+    if (rows.length >= rowTarget) {
+      break;
+    }
+  }
+  return rows;
+}
+
+function extractEmails(text: string): string[] {
+  const matches = text.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-z]{2,}/g) ?? [];
+  const blockedLocals = new Set(["example", "test", "yourname", "name"]);
+  const output: string[] = [];
+  const seen = new Set<string>();
+  for (const match of matches) {
+    const normalized = match.trim().replace(/[),.;]+$/, "");
+    const parts = normalized.split("@");
+    if (parts.length !== 2) {
+      continue;
+    }
+    const local = parts[0]?.toLowerCase() ?? "";
+    if (!local || blockedLocals.has(local)) {
+      continue;
+    }
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    output.push(normalized);
+  }
+  return output;
+}
+
+function normalizeWebsite(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return "";
+  }
+}
+
+function inferCompanyFromUrl(url: string): string {
+  const domain = safeDomain(url);
+  if (!domain) {
+    return "";
+  }
+  const base = domain.split(".")[0] ?? domain;
+  return base
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase())
+    .trim();
+}
+
+function inferContactTypeFromEmail(email: string): string {
+  const local = email.split("@")[0]?.toLowerCase() ?? "";
+  if (local.startsWith("sales")) {
+    return "sales";
+  }
+  if (local.startsWith("info") || local.startsWith("contact")) {
+    return "general";
+  }
+  if (local.startsWith("support") || local.startsWith("help")) {
+    return "support";
+  }
+  return "unknown";
+}
+
+async function writeCsvArtifact(input: {
+  workspaceDir: string;
+  goal: string;
+  columns: string[];
+  rows: CsvLeadRow[];
+}): Promise<{
+  filePath: string;
+  fileName: string;
+  relativePath: string;
+  rowCount: number;
+}> {
+  const dirPath = path.join(input.workspaceDir, "artifacts");
+  await fs.mkdir(dirPath, { recursive: true });
+  const slug = input.goal
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 48);
+  const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const fileName = `${slug || "contacts"}_${timestamp}.csv`;
+  const filePath = path.join(dirPath, fileName);
+  const csv = buildCsv(input.columns, input.rows);
+  await fs.writeFile(filePath, csv, "utf8");
+  return {
+    filePath,
+    fileName,
+    relativePath: path.relative(input.workspaceDir, filePath).replace(/\\/g, "/"),
+    rowCount: input.rows.length
+  };
+}
+
+function buildCsv(columns: string[], rows: CsvLeadRow[]): string {
+  const normalizedColumns = columns.filter((item) => item.trim().length > 0);
+  const headers = normalizedColumns.length > 0 ? normalizedColumns : ["company_name", "email", "website", "source_url"];
+  const lines = [headers.map(escapeCsvCell).join(",")];
+  for (const row of rows) {
+    const record = row as unknown as Record<string, unknown>;
+    lines.push(
+      headers
+        .map((header) => {
+          const value = record[header];
+          if (typeof value === "number") {
+            return escapeCsvCell(String(value));
+          }
+          return escapeCsvCell(typeof value === "string" ? value : "");
+        })
+        .join(",")
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function escapeCsvCell(value: string): string {
+  const needsQuotes = /[",\n]/.test(value);
+  const escaped = value.replace(/"/g, "\"\"");
+  return needsQuotes ? `"${escaped}"` : escaped;
 }
 
 function buildLegacyWebToFileRunSpec(input: {

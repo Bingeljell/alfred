@@ -591,4 +591,104 @@ describe("worker execution modules", () => {
     expect(result.summary).toBe("web_search_missing_query");
     expect(search).not.toHaveBeenCalled();
   });
+
+  it("generates CSV artifact for contact/email goals and enqueues attachment", async () => {
+    const search = vi.fn(async () => ({
+      provider: "searxng" as const,
+      text:
+        "1. MSP Directory - https://example.com/partners | Contact us at sales@example.com for onboarding\n" +
+        "2. SI Listing - https://example.net/integrators | Reach info@example.net for details"
+    }));
+    const generateText = vi
+      .fn()
+      .mockResolvedValueOnce({
+        text: JSON.stringify({
+          confidence: "medium",
+          topPick: "Partner Contact Hub",
+          summary: "Best broad source from evidence.",
+          ambiguityReasons: [],
+          followUpQuestions: [],
+          candidates: [
+            {
+              name: "Partner Contact Hub",
+              category: "directory",
+              score: 86,
+              pros: ["coverage"],
+              cons: ["mixed quality"],
+              rationale: "Broadest coverage for first pass.",
+              evidenceUrls: ["https://example.com/partners"]
+            },
+            {
+              name: "Integrator Contact Index",
+              category: "directory",
+              score: 79,
+              pros: ["niche relevance"],
+              cons: ["lower volume"],
+              rationale: "Useful secondary source for SI contacts.",
+              evidenceUrls: ["https://example.net/integrators"]
+            }
+          ]
+        })
+      })
+      .mockResolvedValueOnce({
+        text: "Recommendation: MSP Directory"
+      });
+    const enqueue = vi.fn(async () => undefined);
+
+    const processor = createWorkerProcessor({
+      config: {
+        alfredWorkspaceDir: "/tmp/alfred-worker-csv-test",
+        alfredWebSearchProvider: "searxng"
+      },
+      webSearchService: {
+        search
+      },
+      llmService: {
+        generateText
+      },
+      pagedResponseStore: {
+        setPages: async () => undefined,
+        clear: async () => undefined
+      },
+      notificationStore: {
+        enqueue
+      },
+      runSpecStore: {
+        put: async () => undefined,
+        setStatus: async () => null,
+        updateStep: async () => null
+      }
+    });
+
+    const result = await processor(
+      {
+        id: "j-agentic-csv",
+        type: "stub_task",
+        payload: {
+          taskType: "agentic_turn",
+          query: "Search and find 50 emails for MSPs and export csv with company_name,email,website,source_url",
+          sessionId: "owner@s.whatsapp.net",
+          authSessionId: "owner@s.whatsapp.net"
+        },
+        priority: 5,
+        status: "queued",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      {
+        reportProgress: async () => undefined
+      }
+    );
+
+    expect(enqueue).toHaveBeenCalled();
+    const calls = enqueue.mock.calls as Array<Array<unknown>>;
+    const fileNotif = calls.find((call) => {
+      const payload = call[0] as Record<string, unknown> | undefined;
+      return payload?.kind === "file";
+    });
+    expect(fileNotif).toBeTruthy();
+    const payload = fileNotif?.[0] as Record<string, unknown> | undefined;
+    expect(payload?.mimeType).toBe("text/csv");
+    expect(String(result.responseText)).toContain("CSV artifact generated");
+  });
 });
