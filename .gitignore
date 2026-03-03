@@ -7,3 +7,4 @@ artifacts/
 workspace/
 memory/
 *.log
+debug/
