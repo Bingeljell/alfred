@@ -22,6 +22,7 @@ export type WorkerProcessor = (
 
 export type WorkerStatusEvent = {
   jobId: string;
+  runId?: string;
   workerId?: string;
   sessionId?: string;
   status: "running" | "progress" | "succeeded" | "failed" | "cancelled";
@@ -68,6 +69,12 @@ export function startWorker(options: {
 
   const sessionFromJob = (job: Job): string | undefined =>
     typeof job.payload.sessionId === "string" ? job.payload.sessionId : undefined;
+  const runFromJob = (job: Job): string | undefined =>
+    typeof job.payload.runId === "string"
+      ? job.payload.runId
+      : typeof job.payload.runSpecRunId === "string"
+        ? job.payload.runSpecRunId
+        : undefined;
 
   let active = true;
 
@@ -80,6 +87,7 @@ export function startWorker(options: {
       for (const stale of recovered) {
         await onStatusChange?.({
           jobId: stale.id,
+          runId: runFromJob(stale),
           workerId,
           sessionId: sessionFromJob(stale),
           status: "failed",
@@ -104,6 +112,7 @@ export function startWorker(options: {
           await store.updateJobProgress(claimed.job.id, progress);
           await onStatusChange?.({
             jobId: claimed.job.id,
+            runId: runFromJob(claimed.job),
             workerId,
             sessionId: sessionFromJob(claimed.job),
             status: "progress",
@@ -117,6 +126,7 @@ export function startWorker(options: {
 
         await onStatusChange?.({
           jobId: claimed.job.id,
+          runId: runFromJob(claimed.job),
           workerId,
           sessionId: sessionFromJob(claimed.job),
           status: "running"
@@ -129,6 +139,7 @@ export function startWorker(options: {
           const cancelled = await store.markCancelledAfterRun(claimed.job.id, result);
           await onStatusChange?.({
             jobId: claimed.job.id,
+            runId: runFromJob(claimed.job),
             workerId,
             sessionId: sessionFromJob(claimed.job),
             status: "cancelled",
@@ -138,6 +149,7 @@ export function startWorker(options: {
           const completed = await store.completeJob(claimed.job.id, result);
           await onStatusChange?.({
             jobId: claimed.job.id,
+            runId: runFromJob(claimed.job),
             workerId,
             sessionId: sessionFromJob(claimed.job),
             status: "succeeded",
@@ -162,6 +174,7 @@ export function startWorker(options: {
           const retried = await store.retryJob(claimed.job.id);
           await onStatusChange?.({
             jobId: claimed.job.id,
+            runId: runFromJob(claimed.job),
             workerId,
             sessionId: sessionFromJob(claimed.job),
             status: "progress",
@@ -179,6 +192,7 @@ export function startWorker(options: {
         } else {
           await onStatusChange?.({
             jobId: claimed.job.id,
+            runId: runFromJob(claimed.job),
             workerId,
             sessionId: sessionFromJob(claimed.job),
             status: "failed",

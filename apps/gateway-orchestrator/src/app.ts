@@ -139,6 +139,10 @@ export function createGatewayApp(
     },
     executionPolicyService: {
       previewExecutionPolicy: (input) => service.previewExecutionPolicy(input)
+    },
+    toolManifestService: {
+      manifest: (input) => service.getRuntimeToolManifest(input),
+      compact: (input) => service.getRuntimeToolManifestCompact(input)
     }
   });
 

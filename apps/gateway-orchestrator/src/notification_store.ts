@@ -12,6 +12,7 @@ export type OutboundNotification = {
   mimeType?: string;
   caption?: string;
   jobId?: string;
+  runId?: string;
   status?: string;
   createdAt: string;
   deliveredAt?: string;

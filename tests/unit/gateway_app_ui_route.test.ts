@@ -42,6 +42,8 @@ describe("gateway web console routes", () => {
     expect(routes).toContain("GET /v1/agent/runs");
     expect(routes).toContain("GET /v1/agent/runs/:runId/events");
     expect(routes).toContain("GET /v1/agent/runs/:runId/artifacts");
+    expect(routes).toContain("GET /v1/tools/manifest");
+    expect(routes).toContain("GET /v1/tools/manifest/compact");
     expect(routes).toContain("GET /v1/runs");
     expect(routes).toContain("GET /v1/runs/:runId");
     expect(routes).toContain("GET /v1/supervisors");

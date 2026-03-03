@@ -7,6 +7,7 @@ export function createWorkerStatusHandler(input: {
       status: "queued" | "running" | "succeeded" | "failed" | "cancelled";
       text?: string;
       jobId?: string;
+      runId?: string;
       type?: "text" | "file";
       filePath?: string;
       fileName?: string;
@@ -90,6 +91,7 @@ export function createWorkerStatusHandler(input: {
       await input.notificationStore.enqueue({
         sessionId: event.sessionId,
         jobId: event.jobId,
+        runId: event.runId,
         status,
         text
       });
@@ -120,6 +122,7 @@ export function createWorkerStatusHandler(input: {
           sessionId: runSessionId,
           status: runStatus === "completed" ? "succeeded" : "failed",
           jobId: event.jobId,
+          runId: event.runId,
           text: input.supervisorStore.summarize(update.run)
         });
       }

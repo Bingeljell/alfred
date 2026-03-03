@@ -89,6 +89,7 @@ export function startNotificationDispatcher(options: {
                 metadata: {
                   notificationId: message.id,
                   jobId: message.jobId,
+                  runId: message.runId,
                   status: message.status ?? "unknown",
                   type: message.kind ?? "text"
                 }

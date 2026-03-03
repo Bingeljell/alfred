@@ -30,6 +30,7 @@ type ConversationEvent = {
   kind: (typeof ConversationKindValues)[number];
   text: string;
   createdAt: string;
+  metadata?: Record<string, unknown>;
 };
 
 type ConversationStoreLike = {
@@ -91,6 +92,11 @@ type ExecutionPolicyServiceLike = {
   }) => Promise<unknown>;
 };
 
+type ToolManifestServiceLike = {
+  manifest: (input?: { sessionId?: string; authSessionId?: string }) => unknown[];
+  compact: (input?: { sessionId?: string; authSessionId?: string }) => unknown[];
+};
+
 function parseCsvFilter<T extends string>(raw: unknown, allowed: readonly T[]): T[] | undefined {
   if (typeof raw !== "string") {
     return undefined;
@@ -110,6 +116,17 @@ function clampLimit(raw: unknown, defaults: { fallback: number; min: number; max
     return defaults.fallback;
   }
   return Math.max(defaults.min, Math.min(defaults.max, Math.floor(parsed)));
+}
+
+function getEventMetadata(event: unknown): Record<string, unknown> {
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    return {};
+  }
+  const maybe = (event as { metadata?: unknown }).metadata;
+  if (!maybe || typeof maybe !== "object" || Array.isArray(maybe)) {
+    return {};
+  }
+  return maybe as Record<string, unknown>;
 }
 
 function extractRunSpecArtifacts(runSpec: unknown): Array<{
@@ -169,6 +186,7 @@ export function registerObservabilityRoutes(
     supervisorStore?: SupervisorStoreLike;
     approvalService: ApprovalServiceLike;
     executionPolicyService?: ExecutionPolicyServiceLike;
+    toolManifestService?: ToolManifestServiceLike;
   }
 ) {
   app.get("/v1/agent/sessions", async (req, res) => {
@@ -213,10 +231,50 @@ export function registerObservabilityRoutes(
     }
     const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
     const limit = clampLimit(req.query.limit, { fallback: 100, min: 1, max: 500 });
-    const runs = await deps.runLedger.listRuns({
+    let runs = await deps.runLedger.listRuns({
       sessionKey: sessionId || undefined,
       limit
     });
+    if (runs.length === 0 && sessionId && deps.conversationStore) {
+      const observed = await deps.conversationStore.query({
+        sessionId,
+        limit: Math.max(200, limit * 4)
+      });
+      const authSessionIds = Array.from(
+        new Set(
+          observed
+            .map((event) => {
+              const metadata = getEventMetadata(event);
+              return typeof metadata.authSessionId === "string" ? metadata.authSessionId.trim() : "";
+            })
+            .filter((value) => value.length > 0)
+        )
+      );
+      if (authSessionIds.length > 0) {
+        const merged = await Promise.all(
+          authSessionIds.map((authSessionId) =>
+            deps.runLedger!.listRuns({
+              sessionKey: authSessionId,
+              limit
+            })
+          )
+        );
+        const deduped = new Map<string, unknown>();
+        for (const row of merged.flat()) {
+          const runId = typeof (row as { runId?: unknown }).runId === "string" ? (row as { runId: string }).runId : "";
+          if (runId && !deduped.has(runId)) {
+            deduped.set(runId, row);
+          }
+        }
+        runs = Array.from(deduped.values())
+          .sort((a, b) => {
+            const aAt = Date.parse(String((a as { createdAt?: unknown }).createdAt ?? ""));
+            const bAt = Date.parse(String((b as { createdAt?: unknown }).createdAt ?? ""));
+            return (Number.isFinite(bAt) ? bAt : 0) - (Number.isFinite(aAt) ? aAt : 0);
+          })
+          .slice(0, limit);
+      }
+    }
     res.status(200).json({ runs });
   });
 
@@ -293,7 +351,53 @@ export function registerObservabilityRoutes(
       since: since || undefined,
       until: until || undefined
     });
-    res.status(200).json({ events });
+    if (events.length > 0 || !sessionId) {
+      res.status(200).json({ events });
+      return;
+    }
+    const fallback = await deps.conversationStore.query({
+      limit: Math.max(500, limit * 3),
+      kinds,
+      sources,
+      channels,
+      directions,
+      text: text || undefined,
+      since: since || undefined,
+      until: until || undefined
+    });
+    const byAuthSession = fallback.filter((event) => {
+      const metadata = getEventMetadata(event);
+      return metadata.authSessionId === sessionId;
+    });
+    res.status(200).json({ events: byAuthSession.slice(-limit) });
+  });
+
+  app.get("/v1/tools/manifest", async (req, res) => {
+    if (!deps.toolManifestService) {
+      res.status(404).json({ error: "tool_manifest_not_configured" });
+      return;
+    }
+    const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
+    const authSessionId = typeof req.query.authSessionId === "string" ? req.query.authSessionId.trim() : "";
+    const manifest = deps.toolManifestService.manifest({
+      sessionId: sessionId || undefined,
+      authSessionId: authSessionId || undefined
+    });
+    res.status(200).json({ tools: manifest });
+  });
+
+  app.get("/v1/tools/manifest/compact", async (req, res) => {
+    if (!deps.toolManifestService) {
+      res.status(404).json({ error: "tool_manifest_not_configured" });
+      return;
+    }
+    const sessionId = typeof req.query.sessionId === "string" ? req.query.sessionId.trim() : "";
+    const authSessionId = typeof req.query.authSessionId === "string" ? req.query.authSessionId.trim() : "";
+    const manifest = deps.toolManifestService.compact({
+      sessionId: sessionId || undefined,
+      authSessionId: authSessionId || undefined
+    });
+    res.status(200).json({ tools: manifest });
   });
 
   app.get("/v1/runs", async (req, res) => {

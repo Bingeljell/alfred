@@ -1319,6 +1319,81 @@ describe("GatewayService llm path", () => {
     expect(response.response).toContain("No running process matched pattern");
   });
 
+  it("feeds read-only tool output back into the loop before final response", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-process-loop-output-unit-"));
+    const workspaceDir = path.join(stateDir, "workspace", "alfred");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const queueStore = new FileBackedQueueStore(stateDir);
+    await queueStore.ensureReady();
+
+    const llm = {
+      generateText: vi
+        .fn()
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            assistant_response: "I'll inspect matching processes first.",
+            next_action: {
+              type: "process.list",
+              pattern: "alfred_no_match_pattern_12345",
+              cwd: workspaceDir,
+              limit: 10,
+              reason: "inspect_processes"
+            }
+          }),
+          model: "gpt-4.1-mini",
+          authMode: "api_key"
+        })
+        .mockResolvedValueOnce({
+          text: JSON.stringify({
+            assistant_response: "No matching process is running right now.",
+            next_action: {
+              type: "none",
+              reason: "done"
+            }
+          }),
+          model: "gpt-4.1-mini",
+          authMode: "api_key"
+        })
+    } as unknown as OpenAIResponsesService;
+
+    const service = new GatewayService(
+      queueStore,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      llm,
+      undefined,
+      "chatgpt",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      {
+        workspaceDir,
+        approvalMode: "relaxed",
+        approvalDefault: false,
+        shellEnabled: true,
+        shellAllowedDirs: [workspaceDir]
+      }
+    );
+
+    const response = await service.handleInbound({
+      sessionId: "owner@s.whatsapp.net",
+      text: "is searx running locally?",
+      requestJob: false
+    });
+
+    expect(response.mode).toBe("chat");
+    expect(response.response).toContain("No matching process is running right now.");
+    const calls = (llm.generateText as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    expect(calls.length).toBe(2);
+    expect(String(calls[1]?.[1] ?? "")).toContain("output_preview");
+    expect(String(calls[1]?.[1] ?? "")).toContain("No running process matched pattern");
+  });
+
   it("asks confirmation to correct disallowed cwd and proceeds after yes", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-process-list-cwd-correct-unit-"));
     const workspaceDir = path.join(stateDir, "workspace", "alfred");

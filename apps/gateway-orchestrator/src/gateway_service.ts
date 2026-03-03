@@ -47,6 +47,11 @@ import {
   type ToolPolicyInput
 } from "./orchestrator/tool_policy_engine";
 import {
+  buildCompactRuntimeToolManifest,
+  buildRuntimeToolManifest,
+  type RuntimeToolManifestEntry
+} from "../../../tools/_core/manifest";
+import {
   evaluateShellCommandPolicy as evaluateSandboxShellCommandPolicy,
   isSandboxTargetEnabled
 } from "./orchestrator/sandbox_policy";
@@ -173,6 +178,7 @@ type AgentToolObservationV1 = {
   errorClass?: "connectivity" | "timeout" | "auth" | "policy" | "validation" | "unknown";
   message: string;
   retryable: boolean;
+  outputPreview?: string;
   data?: Record<string, unknown>;
 };
 
@@ -180,19 +186,6 @@ type AgentActionExecutionResult = {
   text: string;
   continueLoop: boolean;
   observation: AgentToolObservationV1;
-};
-
-const AGENT_ACTION_INPUT_HINTS: Partial<Record<AgentActionType, string[]>> = {
-  "web.search": ["query", "provider", "mode", "reason"],
-  "web.fetch": ["url", "reason"],
-  "web.extract": ["query", "urls", "provider", "reason"],
-  "file.read.range": ["targetPath", "fromLine", "lineCount", "reason"],
-  "shell.exec": ["command", "cwd", "rerunQuery", "reason"],
-  "process.list": ["pattern", "limit", "cwd", "reason"],
-  "process.kill": ["pid", "pattern", "signal", "cwd", "reason"],
-  "process.start": ["command", "cwd", "verifyPattern", "verifyPort", "timeoutSec", "rerunQuery", "reason"],
-  "process.wait": ["pid", "pattern", "verifyPort", "timeoutSec", "cwd", "reason"],
-  "worker.run": ["goal", "query", "provider", "reason"]
 };
 
 type ProcessKillResult = {
@@ -1029,7 +1022,8 @@ export class GatewayService {
           reason: `planner_${plan.reason}`,
           fileFormat: plan.fileFormat ?? "md",
           fileName: plan.fileName,
-          runSpecRunId
+          runSpecRunId,
+          runId: input.runId
         });
         await input.recordPlannerTrace("enqueue_worker_web_to_file", { jobId: job.id, taskType: "web_to_file" });
         await input.markRunNote("Planner delegated research-to-file to worker", { jobId: job.id, reason: plan.reason });
@@ -1063,7 +1057,8 @@ export class GatewayService {
         provider: plan.provider ?? this.capabilityPolicy.webSearchProvider,
         authSessionId: input.authSessionId,
         authPreference: input.authPreference,
-        reason: `planner_${plan.reason}`
+        reason: `planner_${plan.reason}`,
+        runId: input.runId
       });
       await input.recordPlannerTrace("enqueue_worker_agentic_turn", {
         jobId: job.id,
@@ -1245,7 +1240,8 @@ export class GatewayService {
         input.inbound.sessionId,
         input.authSessionId,
         input.inbound.text,
-        input.authPreference
+        input.authPreference,
+        input.runId
       );
       await runPersistPhase({ markPhase: input.markPhase }, "Persisting chat response");
       await this.recordConversation(input.inbound.sessionId, "outbound", response, {
@@ -1302,7 +1298,8 @@ export class GatewayService {
       input.inbound.sessionId,
       input.inbound.text,
       input.authSessionId,
-      input.authPreference
+      input.authPreference,
+      input.runId
     );
     if (routed) {
       const routedToWorker = Boolean(routed.jobId);
@@ -1352,6 +1349,29 @@ export class GatewayService {
 
   async getJob(jobId: string) {
     return this.store.getJob(jobId);
+  }
+
+  getRuntimeToolManifest(input?: { sessionId?: string; authSessionId?: string }): RuntimeToolManifestEntry[] {
+    const channelSessionId = input?.sessionId?.trim() ?? "";
+    const authSessionId = input?.authSessionId?.trim() ?? "";
+    const sandboxEnabled = isSandboxTargetEnabled("shell.exec", this.buildSandboxPolicyConfig());
+    return buildRuntimeToolManifest({
+      includeToolId: (toolId) => {
+        if (toolId === "shell.exec" || toolId.startsWith("process.")) {
+          return sandboxEnabled;
+        }
+        return true;
+      },
+      evaluateToolPolicy: (toolId) =>
+        this.evaluateToolPolicy(toolId, {
+          sessionId: channelSessionId,
+          authSessionId
+        })
+    });
+  }
+
+  getRuntimeToolManifestCompact(input?: { sessionId?: string; authSessionId?: string }) {
+    return buildCompactRuntimeToolManifest(this.getRuntimeToolManifest(input));
   }
 
   async cancelJob(jobId: string) {
@@ -2362,7 +2382,8 @@ export class GatewayService {
     sessionId: string,
     rawText: string,
     authSessionId: string,
-    authPreference: LlmAuthPreference
+    authPreference: LlmAuthPreference,
+    runId?: string
   ): Promise<{ jobId: string; response: string; reason: string; taskType: string } | null> {
     if (!this.capabilityPolicy.webSearchEnabled) {
       return null;
@@ -2407,7 +2428,8 @@ export class GatewayService {
       authPreference,
       reason: routed.reason,
       fileFormat: routed.fileFormat,
-      runSpecRunId: routed.taskType === "web_to_file" ? randomUUID() : undefined
+      runSpecRunId: routed.taskType === "web_to_file" ? randomUUID() : undefined,
+      runId
     });
 
     return {
@@ -2547,6 +2569,7 @@ export class GatewayService {
       fileName?: string;
       runSpecRunId?: string;
       runSpecApprovedStepIds?: string[];
+      runId?: string;
     }
   ) {
     if (this.pagedResponseStore) {
@@ -2593,7 +2616,8 @@ export class GatewayService {
         provider: input.provider ?? this.capabilityPolicy.webSearchProvider,
         authSessionId: input.authSessionId,
         authPreference: input.authPreference,
-        routeReason: input.reason
+        routeReason: input.reason,
+        runId: input.runId
       },
       priority: 5
     });
@@ -2835,7 +2859,8 @@ export class GatewayService {
         provider: provider ?? this.capabilityPolicy.webSearchProvider,
         authSessionId: targetAuthSessionId,
         authPreference: requestedAuthPreference,
-        reason: "approved_web_search"
+        reason: "approved_web_search",
+        runId: typeof approval.payload.runId === "string" ? approval.payload.runId : undefined
       });
       await this.recordMemoryCheckpoint(channelSessionId, {
         class: "decision",
@@ -2859,7 +2884,8 @@ export class GatewayService {
         targetAuthSessionId,
         requestedAuthPreference,
         nextAction,
-        sourceText
+        sourceText,
+        typeof approval.payload.runId === "string" ? approval.payload.runId : undefined
       );
       if (!actionResult) {
         return `Approved action executed: ${nextAction.type}`;
@@ -2918,7 +2944,8 @@ export class GatewayService {
         provider: this.capabilityPolicy.webSearchProvider,
         authSessionId,
         authPreference,
-        reason: "post_process_kill_rerun"
+        reason: "post_process_kill_rerun",
+        runId: typeof approval.payload.runId === "string" ? approval.payload.runId : undefined
       });
       return `Approved action executed: process_kill\n${output}\n\nRerunning prior task as job ${job.id}.`;
     }
@@ -2970,7 +2997,8 @@ export class GatewayService {
         provider: this.capabilityPolicy.webSearchProvider,
         authSessionId,
         authPreference,
-        reason: "post_process_start_rerun"
+        reason: "post_process_start_rerun",
+        runId: typeof approval.payload.runId === "string" ? approval.payload.runId : undefined
       });
       return `Approved action executed: process_start\n${launch.message}\n${waitResult}\n\nRerunning prior task as job ${job.id}.`;
     }
@@ -3032,7 +3060,8 @@ export class GatewayService {
         provider: this.capabilityPolicy.webSearchProvider,
         authSessionId,
         authPreference,
-        reason: "post_shell_override_rerun"
+        reason: "post_shell_override_rerun",
+        runId: typeof approval.payload.runId === "string" ? approval.payload.runId : undefined
       });
       return `Approved risky shell override (${blockedRuleId}).\n${output}\n\nRerunning prior task as job ${job.id}.`;
     }
@@ -3096,7 +3125,8 @@ export class GatewayService {
         provider: this.capabilityPolicy.webSearchProvider,
         authSessionId,
         authPreference,
-        reason: "post_shell_exec_rerun"
+        reason: "post_shell_exec_rerun",
+        runId: typeof approval.payload.runId === "string" ? approval.payload.runId : undefined
       });
       return `Approved action executed: shell_exec\n${output}\n\nRerunning prior task as job ${job.id}.`;
     }
@@ -3124,7 +3154,8 @@ export class GatewayService {
         authPreference: requestedAuthPreference,
         reason: "approved_web_to_file_send",
         fileFormat,
-        fileName
+        fileName,
+        runId: typeof approval.payload.runId === "string" ? approval.payload.runId : undefined
       });
       await this.recordMemoryCheckpoint(channelSessionId, {
         class: "decision",
@@ -3348,7 +3379,8 @@ export class GatewayService {
     channelSessionId: string,
     authSessionId: string,
     text: string,
-    authPreference: LlmAuthPreference
+    authPreference: LlmAuthPreference,
+    runId?: string
   ): Promise<string> {
     const prepared = await this.prepareChatInput(authSessionId, text, authPreference);
     if (!this.llmService) {
@@ -3407,7 +3439,8 @@ export class GatewayService {
           authSessionId,
           authPreference,
           decision.nextAction,
-          text
+          text,
+          runId
         );
         if (!actionResult) {
           return decisionText;
@@ -3442,7 +3475,7 @@ export class GatewayService {
     const actionDocs = actions
       .filter((action) => action.type !== "none" && action.type !== "ask_user")
       .map((action) => {
-        const fields = AGENT_ACTION_INPUT_HINTS[action.type];
+        const fields = action.inputHints;
         const fieldText = fields && fields.length > 0 ? ` fields: ${fields.join(", ")}` : "";
         return `- ${action.type}: ${action.description}${fieldText}`;
       });
@@ -3454,7 +3487,11 @@ export class GatewayService {
             "Recent action observations (newest last):",
             ...observations.slice(-6).map((item, index) => {
               const base = `${index + 1}. tool=${item.tool} status=${item.status} retryable=${String(item.retryable)} message=${item.message}`;
-              return item.errorClass ? `${base} errorClass=${item.errorClass}` : base;
+              const withError = item.errorClass ? `${base} errorClass=${item.errorClass}` : base;
+              if (item.outputPreview && item.outputPreview.trim()) {
+                return `${withError}\n   output_preview:\n${item.outputPreview}`;
+              }
+              return withError;
             }),
             ""
           ].join("\n")
@@ -3579,7 +3616,8 @@ export class GatewayService {
     authSessionId: string,
     authPreference: LlmAuthPreference,
     action: AgentNextAction,
-    userText: string
+    userText: string,
+    runId?: string
   ): Promise<AgentActionExecutionResult | null> {
     const approveCwdCorrection = async (
       correctedCwd: string,
@@ -3606,7 +3644,8 @@ export class GatewayService {
         nextAction: approvedAction,
         userText,
         authSessionId,
-        authPreference
+        authPreference,
+        runId
       });
       return {
         text: [
@@ -3676,7 +3715,8 @@ export class GatewayService {
           query,
           provider,
           authSessionId,
-          authPreference
+          authPreference,
+          runId
         });
         return {
           text: `Approval required for web search.\n- query: ${query}\n- provider: ${provider}\nReply yes/no, or approve ${approval.token}`,
@@ -3700,7 +3740,8 @@ export class GatewayService {
         provider,
         authSessionId,
         authPreference,
-        reason: action.reason?.trim() || "agent_turn_v2"
+        reason: action.reason?.trim() || "agent_turn_v2",
+        runId
       });
       if (taskType === "web_search") {
         return {
@@ -3770,12 +3811,13 @@ export class GatewayService {
       const output = await this.fetchWebPageSummary(targetUrl, 16_000);
       return {
         text: output,
-        continueLoop: false,
+        continueLoop: true,
         observation: {
           tool: action.type,
           status: "ok",
           message: "Fetched web page content.",
           retryable: false,
+          outputPreview: this.buildObservationOutputPreview(output),
           data: {
             url: targetUrl
           }
@@ -3821,6 +3863,7 @@ export class GatewayService {
           status: "ok",
           message: "Extracted grounded web summary.",
           retryable: false,
+          outputPreview: this.buildObservationOutputPreview(output),
           data: {
             provider,
             query
@@ -3881,12 +3924,13 @@ export class GatewayService {
       const output = await this.executeFileRead(resolved.absolutePath, action.fromLine, action.lineCount);
       return {
         text: output,
-        continueLoop: false,
+        continueLoop: true,
         observation: {
           tool: action.type,
           status: "ok",
           message: "Read file range successfully.",
           retryable: false,
+          outputPreview: this.buildObservationOutputPreview(output),
           data: {
             path: resolved.absolutePath
           }
@@ -3916,7 +3960,8 @@ export class GatewayService {
         provider,
         authSessionId,
         authPreference,
-        reason: action.reason?.trim() || "agent_turn_v2_worker"
+        reason: action.reason?.trim() || "agent_turn_v2_worker",
+        runId
       });
       return {
         text: `Queued task as job ${job.id}. I’ll share progress updates here.`,
@@ -3989,12 +4034,13 @@ export class GatewayService {
       const output = await this.listProcesses({ cwd: resolvedCwd.cwd, pattern, limit });
       return {
         text: output,
-        continueLoop: false,
+        continueLoop: true,
         observation: {
           tool: action.type,
           status: "ok",
           message: "Listed processes.",
           retryable: false,
+          outputPreview: this.buildObservationOutputPreview(output),
           data: {
             cwd: resolvedCwd.cwd,
             pattern: pattern || undefined
@@ -4078,7 +4124,9 @@ export class GatewayService {
         };
       }
       const signal = action.signal ?? "TERM";
-      const rerunQuery = (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || "";
+      const rerunQuery = this.messageRequestsRerun(userText)
+        ? action.rerunQuery?.trim() || (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || ""
+        : "";
       if (!this.approvalStore) {
         return {
           text: "Process termination requires approvals, but approvals are not configured.",
@@ -4100,7 +4148,8 @@ export class GatewayService {
         authSessionId,
         source: "agent_turn_v2",
         reason: action.reason ?? "agent_process_kill_request",
-        rerunQuery: rerunQuery || undefined
+        rerunQuery: rerunQuery || undefined,
+        runId
       });
       return {
         text: [
@@ -4203,7 +4252,9 @@ export class GatewayService {
       const verifyPattern = action.verifyPattern?.trim() || this.inferProcessPatternFromText(userText) || undefined;
       const verifyPort = Number.isFinite(action.verifyPort) && (action.verifyPort ?? 0) > 0 ? action.verifyPort : undefined;
       const timeoutSec = Number.isFinite(action.timeoutSec) && (action.timeoutSec ?? 0) > 0 ? Math.min(300, action.timeoutSec as number) : 20;
-      const rerunQuery = (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || "";
+      const rerunQuery = this.messageRequestsRerun(userText)
+        ? action.rerunQuery?.trim() || (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || ""
+        : "";
       if (!this.approvalStore) {
         return {
           text: "Process start requires approvals, but approvals are not configured.",
@@ -4226,7 +4277,8 @@ export class GatewayService {
         authSessionId,
         source: "agent_turn_v2",
         reason: action.reason ?? "agent_process_start_request",
-        rerunQuery: rerunQuery || undefined
+        rerunQuery: rerunQuery || undefined,
+        runId
       });
       return {
         text: [
@@ -4333,12 +4385,13 @@ export class GatewayService {
       });
       return {
         text: output,
-        continueLoop: false,
+        continueLoop: true,
         observation: {
           tool: action.type,
           status: "ok",
           message: "Process wait check completed.",
-          retryable: false
+          retryable: false,
+          outputPreview: this.buildObservationOutputPreview(output)
         }
       };
     }
@@ -4403,7 +4456,9 @@ export class GatewayService {
         };
       }
       const shellPolicy = this.evaluateShellCommandPolicy(command);
-      const rerunQuery = (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || "";
+      const rerunQuery = this.messageRequestsRerun(userText)
+        ? action.rerunQuery?.trim() || (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || ""
+        : "";
       if (shellPolicy.blocked) {
         if (!this.approvalStore) {
           return {
@@ -4425,7 +4480,8 @@ export class GatewayService {
           authSessionId,
           source: "agent_turn_v2",
           reason: action.reason ?? "policy_blocked",
-          rerunQuery
+          rerunQuery,
+          runId
         });
         return {
           text: [
@@ -4463,7 +4519,8 @@ export class GatewayService {
         authSessionId,
         source: "agent_turn_v2",
         reason: action.reason ?? "agent_shell_request",
-        rerunQuery: rerunQuery || undefined
+        rerunQuery: rerunQuery || undefined,
+        runId
       });
       return {
         text: [
@@ -5286,6 +5343,18 @@ export class GatewayService {
     return JSON.stringify(serialized);
   }
 
+  private buildObservationOutputPreview(output: string, maxChars = 1800): string {
+    const text = String(output ?? "").trim();
+    if (!text) {
+      return "";
+    }
+    const sliced = text.length > maxChars ? `${text.slice(0, maxChars)}\n...[truncated]` : text;
+    return sliced
+      .split("\n")
+      .slice(0, 40)
+      .join("\n");
+  }
+
   private serializeAgentNextAction(action: AgentNextAction): Record<string, unknown> {
     return {
       type: action.type,
@@ -5792,16 +5861,20 @@ export class GatewayService {
   }
 
   private async inferRerunQueryFromLocalOpsText(sessionId: string, rawText: string): Promise<string | undefined> {
-    const text = rawText.toLowerCase();
-    const wantsRerun =
-      /\brerun\b/.test(text) ||
-      /\bretry\b/.test(text) ||
-      /\brun\b[\s\w]{0,20}\bagain\b/.test(text) ||
-      /\bthen\b[\s\w]{0,20}\b(search|query|task|job)\b/.test(text);
-    if (!wantsRerun) {
+    if (!this.messageRequestsRerun(rawText)) {
       return undefined;
     }
     return (await this.findLatestRecoverableSearchQuery(sessionId)) ?? undefined;
+  }
+
+  private messageRequestsRerun(rawText: string): boolean {
+    const text = rawText.toLowerCase();
+    return (
+      /\brerun\b/.test(text) ||
+      /\bretry\b/.test(text) ||
+      /\brun\b[\s\w]{0,20}\bagain\b/.test(text) ||
+      /\bthen\b[\s\w]{0,20}\b(search|query|task|job)\b/.test(text)
+    );
   }
 
   private async verifyShellOutcome(command: string, cwd: string): Promise<{ ok: boolean; message: string }> {
@@ -6062,7 +6135,7 @@ export class GatewayService {
     const actionDocs = availableActions
       .filter((action) => action.type !== "none" && action.type !== "ask_user")
       .map((action) => {
-        const fields = AGENT_ACTION_INPUT_HINTS[action.type];
+        const fields = action.inputHints;
         const fieldText = fields && fields.length > 0 ? ` fields: ${fields.join(", ")}` : "";
         return `- ${action.type}: ${action.description}${fieldText}`;
       });
