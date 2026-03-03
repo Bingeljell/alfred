@@ -197,6 +197,9 @@ export function renderUiWorkspaceHtml(): string {
           <span class="pill" id="activeRunPill">run: none</span>
           <button class="secondary" id="refreshRight">Refresh</button>
         </div>
+        <h2 style="margin-top:0;">Execution Stream</h2>
+        <pre id="execLog" class="event-log"></pre>
+        <h2 style="margin-top:12px;">Run Trace</h2>
         <pre id="eventLog" class="event-log"></pre>
         <h2 style="margin-top:12px;">Pending Approvals</h2>
         <div id="approvals"></div>
@@ -262,6 +265,7 @@ export function renderUiWorkspaceHtml(): string {
       async function loadRuns() {
         if (!activeSessionId) {
           $("runList").innerHTML = "";
+          setActiveRun("");
           return;
         }
         const response = await api("GET", "/v1/agent/runs?sessionId=" + encodeURIComponent(activeSessionId) + "&limit=80");
@@ -271,6 +275,14 @@ export function renderUiWorkspaceHtml(): string {
           return;
         }
         const runs = Array.isArray(response.data?.runs) ? response.data.runs : [];
+        if (runs.length === 0) {
+          setActiveRun("");
+        } else {
+          const hasCurrent = runs.some((run) => String(run.runId || "") === activeRunId);
+          if (!hasCurrent) {
+            setActiveRun(String(runs[0]?.runId || ""));
+          }
+        }
         host.innerHTML = "";
         runs.forEach((run) => {
           const runId = String(run.runId || "");
@@ -294,7 +306,7 @@ export function renderUiWorkspaceHtml(): string {
         }
         const response = await api(
           "GET",
-          "/v1/stream/events?sessionId=" + encodeURIComponent(activeSessionId) + "&kinds=chat,command,job,error&limit=350&noisy=true"
+          "/v1/stream/events?sessionId=" + encodeURIComponent(activeSessionId) + "&kinds=chat&limit=300&noisy=true"
         );
         if (!response.ok) {
           $("chatLog").textContent = "Unable to load chat transcript.";
@@ -309,6 +321,31 @@ export function renderUiWorkspaceHtml(): string {
           return "[" + at + "] " + direction + ": " + text;
         });
         $("chatLog").textContent = lines.join("\\n");
+      }
+
+      async function loadExecutionStream() {
+        if (!activeSessionId) {
+          $("execLog").textContent = "Select a session to view execution stream.";
+          return;
+        }
+        const response = await api(
+          "GET",
+          "/v1/stream/events?sessionId=" + encodeURIComponent(activeSessionId) + "&kinds=command,job,error,status&limit=400&noisy=true"
+        );
+        if (!response.ok) {
+          $("execLog").textContent = "Unable to load execution stream.";
+          return;
+        }
+        const events = Array.isArray(response.data?.events) ? response.data.events : [];
+        const sorted = [...events].sort((a, b) => String(a.createdAt).localeCompare(String(b.createdAt)));
+        const lines = sorted.map((event) => {
+          const at = String(event.createdAt || "").slice(11, 19) || "??:??:??";
+          const source = String(event.source || "system");
+          const kind = String(event.kind || "event");
+          const text = String(event.text || "").replace(/\\s+/g, " ").trim();
+          return "[" + at + "] " + source + "/" + kind + ": " + text;
+        });
+        $("execLog").textContent = lines.join("\\n") || "No execution events yet.";
       }
 
       async function loadRunEvents() {
@@ -418,11 +455,11 @@ export function renderUiWorkspaceHtml(): string {
       }
 
       async function refreshRightPane() {
-        await Promise.all([loadRunEvents(), loadApprovals(), loadArtifacts()]);
+        await Promise.all([loadExecutionStream(), loadRunEvents(), loadApprovals(), loadArtifacts()]);
       }
 
       async function refreshAll() {
-        await Promise.all([loadSessions(), loadRuns(), loadChat(), loadApprovals()]);
+        await Promise.all([loadSessions(), loadRuns(), loadChat()]);
         await refreshRightPane();
       }
 
