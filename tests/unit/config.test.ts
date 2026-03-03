@@ -33,7 +33,7 @@ describe("loadConfig", () => {
     expect(config.streamDedupeWindowMs).toBe(2500);
     expect(config.publicBaseUrl).toBe("http://localhost:3000");
     expect(config.alfredWorkspaceDir.endsWith("workspace/alfred")).toBe(true);
-    expect(config.alfredApprovalMode).toBe("balanced");
+    expect(config.alfredApprovalMode).toBe("general");
     expect(config.alfredApprovalDefault).toBe(true);
     expect(config.alfredPlannerEnabled).toBe(true);
     expect(config.alfredPlannerTraceEnabled).toBe(false);
@@ -226,7 +226,7 @@ describe("loadConfig", () => {
     expect(config.streamDedupeWindowMs).toBe(1200);
     expect(config.publicBaseUrl).toBe("http://localhost:4010");
     expect(config.alfredWorkspaceDir.endsWith("tmp/alfred-workspace")).toBe(true);
-    expect(config.alfredApprovalMode).toBe("strict");
+    expect(config.alfredApprovalMode).toBe("step");
     expect(config.alfredApprovalDefault).toBe(false);
     expect(config.alfredPlannerEnabled).toBe(false);
     expect(config.alfredPlannerTraceEnabled).toBe(true);

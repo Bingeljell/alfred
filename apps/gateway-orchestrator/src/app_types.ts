@@ -113,7 +113,7 @@ export type CreateGatewayAppOptions = {
   };
   capabilityPolicy?: {
     workspaceDir?: string;
-    approvalMode?: "strict" | "balanced" | "relaxed";
+    approvalMode?: "step" | "general" | "strict" | "balanced" | "relaxed";
     approvalDefault?: boolean;
     plannerTraceEnabled?: boolean;
     webSearchEnabled?: boolean;

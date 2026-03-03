@@ -46,11 +46,16 @@ function requiresApprovalByMode(input: {
   capability: ExternalCapability;
   policy: ToolPolicyInput;
 }): boolean {
-  if (input.policy.approvalMode === "strict") {
+  const mode = input.policy.approvalMode;
+
+  if (mode === "strict" || mode === "step") {
     return true;
   }
-  if (input.policy.approvalMode === "balanced") {
+  if (mode === "balanced") {
     return input.capability === "file_write";
+  }
+  if (mode === "general") {
+    return false;
   }
   if (!input.policy.approvalDefault) {
     return false;
@@ -72,6 +77,7 @@ export function evaluateToolPolicy(
   }
 ): ToolPolicyDecision {
   const spec = TOOL_SPECS_V1[toolId];
+  const legacyMode = policy.approvalMode === "strict" || policy.approvalMode === "balanced" || policy.approvalMode === "relaxed";
   if (spec.capability === "web_search") {
     if (!policy.webSearchEnabled) {
       return {
@@ -83,7 +89,7 @@ export function evaluateToolPolicy(
     }
     return {
       allowed: true,
-      requiresApproval: false,
+      requiresApproval: legacyMode ? false : policy.webSearchRequireApproval,
       spec
     };
   }
@@ -164,9 +170,13 @@ export function evaluateToolPolicy(
         spec
       };
     }
+    const requiresApproval = requiresApprovalByMode({
+      capability: "shell_exec",
+      policy
+    });
     return {
       allowed: true,
-      requiresApproval: false,
+      requiresApproval,
       spec
     };
   }

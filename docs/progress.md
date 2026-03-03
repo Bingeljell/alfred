@@ -20,6 +20,7 @@
 
 ## Recent Task Updates
 
+- 2026-03-03: Introduced approval-mode migration groundwork (`step|general` with legacy compatibility), updated gateway/tool policy typing accordingly, and wired agent local-ops execution to run immediately for policy-allowed non-critical shell/process actions while still forcing approval for critical shell command classes.
 - 2026-03-03: Added planner-trace runtime gating (`ALFRED_PLANNER_TRACE_ENABLED`, default false) so planner hints can be disabled in normal chat flows, and switched model-driven `web.search` actions to enqueue `agentic_turn` by default (quick mode now only tunes budgets instead of forcing deterministic paged search output).
 - 2026-03-03: Improved cross-turn execution continuity by expanding recent conversation context depth and injecting explicit execution context (active job, latest search, latest recoverable search, preferred local cwd) into turn prompts.
 - 2026-03-03: Added per-session local-ops cwd memory so process/shell follow-ups reuse the last validated working directory when users omit paths, reducing repeated cwd-correction loops.

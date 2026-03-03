@@ -135,7 +135,7 @@ const EnvSchema = z.object({
     .pipe(z.number().int().min(0).max(60000)),
   PUBLIC_BASE_URL: z.string().optional().default("http://localhost:3000"),
   ALFRED_WORKSPACE_DIR: z.string().optional().default("./workspace/alfred"),
-  ALFRED_APPROVAL_MODE: z.enum(["strict", "balanced", "relaxed"]).optional().default("balanced"),
+  ALFRED_APPROVAL_MODE: z.enum(["step", "general", "strict", "balanced", "relaxed"]).optional().default("general"),
   ALFRED_APPROVAL_DEFAULT: z
     .string()
     .optional()
@@ -369,7 +369,7 @@ export type AppConfig = {
   streamDedupeWindowMs: number;
   publicBaseUrl: string;
   alfredWorkspaceDir: string;
-  alfredApprovalMode: "strict" | "balanced" | "relaxed";
+  alfredApprovalMode: "step" | "general";
   alfredApprovalDefault: boolean;
   alfredPlannerEnabled: boolean;
   alfredPlannerTraceEnabled: boolean;
@@ -475,6 +475,15 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     .map((item) => path.resolve(item));
   const alfredShellAllowedDirs = configuredShellAllowedDirs.length > 0 ? configuredShellAllowedDirs : [alfredWorkspaceDir];
 
+  const normalizeApprovalMode = (
+    value: "step" | "general" | "strict" | "balanced" | "relaxed"
+  ): "step" | "general" => {
+    if (value === "step" || value === "strict") {
+      return "step";
+    }
+    return "general";
+  };
+
   return {
     port: parsed.PORT,
     stateDir: path.resolve(parsed.STATE_DIR),
@@ -508,7 +517,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     streamDedupeWindowMs: parsed.STREAM_DEDUPE_WINDOW_MS,
     publicBaseUrl: parsed.PUBLIC_BASE_URL.replace(/\/+$/, ""),
     alfredWorkspaceDir,
-    alfredApprovalMode: parsed.ALFRED_APPROVAL_MODE,
+    alfredApprovalMode: normalizeApprovalMode(parsed.ALFRED_APPROVAL_MODE),
     alfredApprovalDefault: parsed.ALFRED_APPROVAL_DEFAULT,
     alfredPlannerEnabled: parsed.ALFRED_PLANNER_ENABLED,
     alfredPlannerTraceEnabled: parsed.ALFRED_PLANNER_TRACE_ENABLED,

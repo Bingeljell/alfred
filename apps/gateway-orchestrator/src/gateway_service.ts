@@ -79,7 +79,7 @@ type InboundHandleResult = {
 
 type CapabilityPolicy = {
   workspaceDir: string;
-  approvalMode: "strict" | "balanced" | "relaxed";
+  approvalMode: "step" | "general" | "strict" | "balanced" | "relaxed";
   approvalDefault: boolean;
   plannerTraceEnabled: boolean;
   webSearchEnabled: boolean;
@@ -314,7 +314,10 @@ export class GatewayService {
       ...DEFAULT_CAPABILITY_POLICY,
       ...(capabilityPolicy ?? {}),
       workspaceDir: resolvedWorkspaceDir,
-      approvalMode: capabilityPolicy?.approvalMode ?? DEFAULT_CAPABILITY_POLICY.approvalMode,
+      approvalMode:
+        typeof capabilityPolicy?.approvalMode === "string"
+          ? capabilityPolicy.approvalMode
+          : DEFAULT_CAPABILITY_POLICY.approvalMode,
       plannerTraceEnabled:
         typeof capabilityPolicy?.plannerTraceEnabled === "boolean"
           ? capabilityPolicy.plannerTraceEnabled
@@ -1975,17 +1978,19 @@ export class GatewayService {
           cwd: resolvedCwd.cwd,
           override: false
         });
-        if (policy.requiresApproval) {
+        const requiresCriticalApproval = this.isCriticalShellCommand(command.command);
+        if (this.isLegacyApprovalMode() || policy.requiresApproval || requiresCriticalApproval) {
           if (!this.approvalStore) {
             return "Approvals are not configured.";
           }
           const approval = await this.approvalStore.create(sessionId, "shell_exec", {
             command: command.command,
             cwd: resolvedCwd.cwd,
-            authSessionId
+            authSessionId,
+            reason: requiresCriticalApproval ? "critical_shell_command" : undefined
           });
           return [
-            "Approval required for shell command.",
+            requiresCriticalApproval ? "Approval required for critical shell command." : "Approval required for shell command.",
             `- cwd: ${resolvedCwd.cwd}`,
             `- command: ${command.command}`,
             `Reply yes or no. Optional explicit token: approve ${approval.token}`
@@ -2717,7 +2722,7 @@ export class GatewayService {
       sessionId: input.sessionId,
       authSessionId: input.authSessionId
     });
-    const requireSendApproval = requireWriteApproval && this.capabilityPolicy.approvalMode === "strict";
+    const requireSendApproval = requireWriteApproval && this.capabilityPolicy.approvalMode === "step";
     return {
       version: 1,
       id: input.runSpecRunId,
@@ -4156,6 +4161,32 @@ export class GatewayService {
       const rerunQuery = this.messageRequestsRerun(userText)
         ? action.rerunQuery?.trim() || (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || ""
         : "";
+      const payload = {
+        pid,
+        pattern: pattern || undefined,
+        signal,
+        cwd: resolvedCwd.cwd,
+        authSessionId,
+        source: "agent_turn_v2",
+        reason: action.reason ?? "agent_process_kill_request",
+        rerunQuery: rerunQuery || undefined,
+        runId
+      };
+      if (!this.isLegacyApprovalMode() && !this.requiresApproval("shell_exec", { sessionId: channelSessionId, authSessionId })) {
+        const output = await this.executeApprovedAction({ action: "process_kill", payload }, channelSessionId, authSessionId, authPreference);
+        return {
+          text: output,
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "ok",
+            message: "Process termination executed.",
+            retryable: false,
+            outputPreview: this.buildObservationOutputPreview(output),
+            data: { cwd: resolvedCwd.cwd }
+          }
+        };
+      }
       if (!this.approvalStore) {
         return {
           text: "Process termination requires approvals, but approvals are not configured.",
@@ -4169,17 +4200,7 @@ export class GatewayService {
           }
         };
       }
-      const approval = await this.approvalStore.create(channelSessionId, "process_kill", {
-        pid,
-        pattern: pattern || undefined,
-        signal,
-        cwd: resolvedCwd.cwd,
-        authSessionId,
-        source: "agent_turn_v2",
-        reason: action.reason ?? "agent_process_kill_request",
-        rerunQuery: rerunQuery || undefined,
-        runId
-      });
+      const approval = await this.approvalStore.create(channelSessionId, "process_kill", payload);
       return {
         text: [
         "Process termination ready for approval.",
@@ -4285,6 +4306,38 @@ export class GatewayService {
       const rerunQuery = this.messageRequestsRerun(userText)
         ? action.rerunQuery?.trim() || (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || ""
         : "";
+      const requiresCriticalApproval = this.isCriticalShellCommand(command);
+      const payload = {
+        command,
+        cwd: resolvedCwd.cwd,
+        verifyPattern,
+        verifyPort,
+        timeoutSec,
+        authSessionId,
+        source: "agent_turn_v2",
+        reason: action.reason ?? "agent_process_start_request",
+        rerunQuery: rerunQuery || undefined,
+        runId
+      };
+      if (
+        !requiresCriticalApproval &&
+        !this.isLegacyApprovalMode() &&
+        !this.requiresApproval("shell_exec", { sessionId: channelSessionId, authSessionId })
+      ) {
+        const output = await this.executeApprovedAction({ action: "process_start", payload }, channelSessionId, authSessionId, authPreference);
+        return {
+          text: output,
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "ok",
+            message: "Process start executed.",
+            retryable: false,
+            outputPreview: this.buildObservationOutputPreview(output),
+            data: { cwd: resolvedCwd.cwd }
+          }
+        };
+      }
       if (!this.approvalStore) {
         return {
           text: "Process start requires approvals, but approvals are not configured.",
@@ -4298,21 +4351,10 @@ export class GatewayService {
           }
         };
       }
-      const approval = await this.approvalStore.create(channelSessionId, "process_start", {
-        command,
-        cwd: resolvedCwd.cwd,
-        verifyPattern,
-        verifyPort,
-        timeoutSec,
-        authSessionId,
-        source: "agent_turn_v2",
-        reason: action.reason ?? "agent_process_start_request",
-        rerunQuery: rerunQuery || undefined,
-        runId
-      });
+      const approval = await this.approvalStore.create(channelSessionId, "process_start", payload);
       return {
         text: [
-        "Process start ready for approval.",
+        requiresCriticalApproval ? "Critical process start command ready for approval." : "Process start ready for approval.",
         `- cwd: ${resolvedCwd.cwd}`,
         `- command: ${command}`,
         verifyPattern ? `- verifyPattern: ${verifyPattern}` : "",
@@ -4532,6 +4574,34 @@ export class GatewayService {
           }
         };
       }
+      const requiresCriticalApproval = this.isCriticalShellCommand(command);
+      const payload = {
+        command,
+        cwd: resolvedCwd.cwd,
+        authSessionId,
+        source: "agent_turn_v2",
+        reason: action.reason ?? "agent_shell_request",
+        rerunQuery: rerunQuery || undefined,
+        runId
+      };
+      if (
+        !requiresCriticalApproval &&
+        !this.isLegacyApprovalMode() &&
+        !this.requiresApproval("shell_exec", { sessionId: channelSessionId, authSessionId })
+      ) {
+        const output = await this.executeApprovedAction({ action: "shell_exec", payload }, channelSessionId, authSessionId, authPreference);
+        return {
+          text: output,
+          continueLoop: false,
+          observation: {
+            tool: action.type,
+            status: "ok",
+            message: "Shell execution completed.",
+            retryable: false,
+            outputPreview: this.buildObservationOutputPreview(output)
+          }
+        };
+      }
       if (!this.approvalStore) {
         return {
           text: "Shell execution requires approvals, but approvals are not configured.",
@@ -4545,18 +4615,10 @@ export class GatewayService {
           }
         };
       }
-      const approval = await this.approvalStore.create(channelSessionId, "shell_exec", {
-        command,
-        cwd: resolvedCwd.cwd,
-        authSessionId,
-        source: "agent_turn_v2",
-        reason: action.reason ?? "agent_shell_request",
-        rerunQuery: rerunQuery || undefined,
-        runId
-      });
+      const approval = await this.approvalStore.create(channelSessionId, "shell_exec", payload);
       return {
         text: [
-        "Shell operation ready for approval.",
+        requiresCriticalApproval ? "Critical shell operation ready for approval." : "Shell operation ready for approval.",
         `- cwd: ${resolvedCwd.cwd}`,
         `- command: ${command}`,
         "Reply yes/no to approve or reject.",
@@ -4700,6 +4762,28 @@ export class GatewayService {
       return value;
     }
     return undefined;
+  }
+
+  private normalizeApprovalMode(raw: unknown): "step" | "general" {
+    if (typeof raw !== "string") {
+      return DEFAULT_CAPABILITY_POLICY.approvalMode;
+    }
+    const value = raw.trim().toLowerCase();
+    if (value === "step" || value === "strict") {
+      return "step";
+    }
+    if (value === "general" || value === "balanced" || value === "relaxed") {
+      return "general";
+    }
+    return DEFAULT_CAPABILITY_POLICY.approvalMode;
+  }
+
+  private isLegacyApprovalMode(): boolean {
+    return (
+      this.capabilityPolicy.approvalMode === "strict" ||
+      this.capabilityPolicy.approvalMode === "balanced" ||
+      this.capabilityPolicy.approvalMode === "relaxed"
+    );
   }
 
   private normalizeAttachmentFormat(raw: unknown): "md" | "txt" | "doc" | undefined {
@@ -5144,6 +5228,21 @@ export class GatewayService {
       return { blocked: true, ruleId: "manual_dir_change_use_cwd" };
     }
     return evaluateSandboxShellCommandPolicy(command);
+  }
+
+  private isCriticalShellCommand(command: string): boolean {
+    const normalized = command.trim().toLowerCase();
+    if (!normalized) {
+      return false;
+    }
+    const destructive = [
+      /\brm\s+-[^\n]*\b(f|r)\b/i,
+      /\bfind\b[^\n]*\b-delete\b/i,
+      /\brmdir\b/i,
+      /\bunlink\b/i
+    ];
+    const outboundEmail = [/\bsendmail\b/i, /\bmailx?\b/i, /\bmutt\b/i, /\bsmtp\b/i];
+    return destructive.some((rule) => rule.test(normalized)) || outboundEmail.some((rule) => rule.test(normalized));
   }
 
   private resolveWorkspacePath(relativePath: string): { ok: true; absolutePath: string } | { ok: false; error: string } {

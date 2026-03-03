@@ -44,7 +44,7 @@ export type SessionPhaseContext = OrchestrationMarkers & {
 };
 
 export type ToolPolicySnapshot = {
-  approvalMode: "strict" | "balanced" | "relaxed";
+  approvalMode: "step" | "general";
   approvalDefault: boolean;
   plannerTraceEnabled?: boolean;
   webSearchEnabled: boolean;

@@ -27,7 +27,7 @@ export type ToolSpecV1 = {
 };
 
 export type ToolPolicyInput = {
-  approvalMode: "strict" | "balanced" | "relaxed";
+  approvalMode: "step" | "general" | "strict" | "balanced" | "relaxed";
   approvalDefault: boolean;
   webSearchEnabled: boolean;
   webSearchRequireApproval: boolean;
