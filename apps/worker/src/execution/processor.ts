@@ -257,7 +257,7 @@ export function createWorkerProcessor(input: {
       const maxRetries = clampInt(job.payload.maxRetries, 0, 5, 1);
       const timeBudgetMs = clampInt(job.payload.timeBudgetMs, 5000, 10 * 60 * 1000, 120_000);
       const tokenBudget = clampInt(job.payload.tokenBudget, 128, 50_000, 8_000);
-      const progressPulseMs = 30_000;
+      const progressPulseMs = 15_000;
       const runStartedAt = Date.now();
       const deadlineAt = runStartedAt + timeBudgetMs;
       const searchBudgetMs = Math.min(35_000, Math.max(8_000, Math.floor(timeBudgetMs * 0.35)));
@@ -800,6 +800,7 @@ export function createWorkerProcessor(input: {
     let resultProvider: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | null = null;
     let lastError: unknown = null;
 
+    const perAttemptTimeoutMs = Math.max(8_000, Math.min(30_000, Math.floor(timeBudgetMs / Math.max(1, maxRetries + 1))));
     while (attempt <= maxRetries) {
       attempt += 1;
       await context.reportProgress({
@@ -807,14 +808,29 @@ export function createWorkerProcessor(input: {
         message: `Searching via ${provider} (attempt ${attempt}/${maxRetries + 1})...`
       });
       try {
-        const result = await withTimeout(
-          input.webSearchService.search(query, {
-            provider,
-            authSessionId,
-            authPreference
-          }),
-          timeBudgetMs,
-          "web_search_time_budget_exceeded"
+        const result = await withProgressPulse(
+          () =>
+            withTimeout(
+              input.webSearchService.search(query, {
+                provider,
+                authSessionId,
+                authPreference
+              }),
+              perAttemptTimeoutMs,
+              "web_search_time_budget_exceeded"
+            ),
+          {
+            intervalMs: 10_000,
+            onPulse: async (elapsedMs) => {
+              await context.reportProgress({
+                step: "searching",
+                message: `Still searching via ${provider} (attempt ${attempt}/${maxRetries + 1})...`,
+                details: {
+                  elapsedSec: Math.max(1, Math.floor(elapsedMs / 1000))
+                }
+              });
+            }
+          }
         );
         if (result?.text?.trim()) {
           resultText = result.text.trim();

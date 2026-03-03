@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { realpathSync } from "node:fs";
+import { closeSync, openSync, realpathSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
@@ -81,6 +81,7 @@ type CapabilityPolicy = {
   workspaceDir: string;
   approvalMode: "strict" | "balanced" | "relaxed";
   approvalDefault: boolean;
+  plannerTraceEnabled: boolean;
   webSearchEnabled: boolean;
   webSearchRequireApproval: boolean;
   webSearchProvider: WebSearchProvider;
@@ -106,6 +107,7 @@ const DEFAULT_CAPABILITY_POLICY: CapabilityPolicy = {
   workspaceDir: path.resolve(process.cwd(), "workspace", "alfred"),
   approvalMode: "balanced",
   approvalDefault: true,
+  plannerTraceEnabled: false,
   webSearchEnabled: true,
   webSearchRequireApproval: false,
   webSearchProvider: "searxng",
@@ -203,6 +205,7 @@ type ProcessKillResult = {
 export class GatewayService {
   private readonly capabilityPolicy: CapabilityPolicy;
   private readonly fileWriteApprovalLeases = new Set<string>();
+  private readonly sessionLocalCwdHints = new Map<string, string>();
   private readonly webSearchService?: {
     search: (
       query: string,
@@ -312,6 +315,10 @@ export class GatewayService {
       ...(capabilityPolicy ?? {}),
       workspaceDir: resolvedWorkspaceDir,
       approvalMode: capabilityPolicy?.approvalMode ?? DEFAULT_CAPABILITY_POLICY.approvalMode,
+      plannerTraceEnabled:
+        typeof capabilityPolicy?.plannerTraceEnabled === "boolean"
+          ? capabilityPolicy.plannerTraceEnabled
+          : DEFAULT_CAPABILITY_POLICY.plannerTraceEnabled,
       webSearchProvider: this.normalizeWebSearchProvider(capabilityPolicy?.webSearchProvider) ?? DEFAULT_CAPABILITY_POLICY.webSearchProvider,
       fileReadEnabled:
         typeof capabilityPolicy?.fileReadEnabled === "boolean"
@@ -411,6 +418,7 @@ export class GatewayService {
       capabilityPolicySnapshot: {
         approvalMode: this.capabilityPolicy.approvalMode,
         approvalDefault: this.capabilityPolicy.approvalDefault,
+        plannerTraceEnabled: this.capabilityPolicy.plannerTraceEnabled,
         webSearchEnabled: this.capabilityPolicy.webSearchEnabled,
         webSearchRequireApproval: this.capabilityPolicy.webSearchRequireApproval,
         webSearchProvider: this.capabilityPolicy.webSearchProvider,
@@ -502,13 +510,15 @@ export class GatewayService {
 
         await runPlanPhase({ markPhase });
         const activeJob = await this.findLatestActiveJob(inbound.sessionId);
-        const plan = await this.intentPlanner?.plan(authSessionId, inbound.text, {
-          authPreference,
-          hasActiveJob: activeJob !== null
-        });
+        const plan = this.capabilityPolicy.plannerTraceEnabled
+          ? await this.intentPlanner?.plan(authSessionId, inbound.text, {
+              authPreference,
+              hasActiveJob: activeJob !== null
+            })
+          : undefined;
         let plannerTraceLogged = false;
         const recordPlannerTrace = async (chosenAction: string, extra?: Record<string, unknown>): Promise<void> => {
-          if (!plan || plannerTraceLogged) {
+          if (!this.capabilityPolicy.plannerTraceEnabled || !plan || plannerTraceLogged) {
             return;
           }
           plannerTraceLogged = true;
@@ -2556,6 +2566,26 @@ export class GatewayService {
     return String(latest.payload.query ?? "").trim() || null;
   }
 
+  private extractLatestSearchQuery(
+    jobs: Array<{
+      payload: Record<string, unknown>;
+      status: string;
+    }>
+  ): string | null {
+    const candidate = jobs.find((job) => {
+      const taskType = typeof job.payload.taskType === "string" ? job.payload.taskType : "";
+      const query = typeof job.payload.query === "string" ? job.payload.query.trim() : "";
+      if (!query) {
+        return false;
+      }
+      return taskType === "web_search" || taskType === "agentic_turn" || taskType === "web_to_file";
+    });
+    if (!candidate) {
+      return null;
+    }
+    return String(candidate.payload.query ?? "").trim() || null;
+  }
+
   private async enqueueLongTaskJob(
     sessionId: string,
     input: {
@@ -2565,6 +2595,9 @@ export class GatewayService {
       authSessionId: string;
       authPreference: LlmAuthPreference;
       reason: string;
+      timeBudgetMs?: number;
+      maxRetries?: number;
+      tokenBudget?: number;
       fileFormat?: "md" | "txt" | "doc";
       fileName?: string;
       runSpecRunId?: string;
@@ -2617,6 +2650,9 @@ export class GatewayService {
         authSessionId: input.authSessionId,
         authPreference: input.authPreference,
         routeReason: input.reason,
+        timeBudgetMs: input.timeBudgetMs,
+        maxRetries: input.maxRetries,
+        tokenBudget: input.tokenBudget,
         runId: input.runId
       },
       priority: 5
@@ -2909,6 +2945,7 @@ export class GatewayService {
       if (!resolvedCwd.ok) {
         return `Approved action failed: ${resolvedCwd.error}`;
       }
+      this.rememberSessionLocalCwd(channelSessionId, resolvedCwd.cwd);
       await this.recordToolUsage(channelSessionId, "process.kill", {
         route: "approval_execute",
         pid,
@@ -2965,6 +3002,7 @@ export class GatewayService {
       if (!resolvedCwd.ok) {
         return `Approved action failed: ${resolvedCwd.error}`;
       }
+      this.rememberSessionLocalCwd(channelSessionId, resolvedCwd.cwd);
       const shellPolicy = this.evaluateShellCommandPolicy(command);
       if (shellPolicy.blocked) {
         return `Approved action failed: shell command blocked by policy (${shellPolicy.ruleId}).`;
@@ -3017,6 +3055,7 @@ export class GatewayService {
       if (!resolvedCwd.ok) {
         return `Approved action failed: ${resolvedCwd.error}`;
       }
+      this.rememberSessionLocalCwd(channelSessionId, resolvedCwd.cwd);
       await this.recordToolUsage(channelSessionId, "shell.exec", {
         command,
         cwd: resolvedCwd.cwd,
@@ -3079,6 +3118,7 @@ export class GatewayService {
       if (!resolvedCwd.ok) {
         return `Approved action failed: ${resolvedCwd.error}`;
       }
+      this.rememberSessionLocalCwd(channelSessionId, resolvedCwd.cwd);
       const shellPolicy = this.evaluateShellCommandPolicy(command);
       if (shellPolicy.blocked) {
         return `Approved action failed: shell command blocked by policy (${shellPolicy.ruleId}).`;
@@ -3733,7 +3773,7 @@ export class GatewayService {
           }
         };
       }
-      const taskType = action.mode === "quick" ? "web_search" : "agentic_turn";
+      const taskType = "agentic_turn";
       const job = await this.enqueueLongTaskJob(channelSessionId, {
         taskType,
         query,
@@ -3741,24 +3781,11 @@ export class GatewayService {
         authSessionId,
         authPreference,
         reason: action.reason?.trim() || "agent_turn_v2",
+        timeBudgetMs: action.mode === "quick" ? 90_000 : undefined,
+        maxRetries: action.mode === "quick" ? 0 : undefined,
+        tokenBudget: action.mode === "quick" ? 5_000 : undefined,
         runId
       });
-      if (taskType === "web_search") {
-        return {
-          text: `Queued web search as job ${job.id}. I’ll share results here.`,
-          continueLoop: false,
-          observation: {
-            tool: action.type,
-            status: "ok",
-            message: `Queued quick web search job ${job.id}.`,
-            retryable: false,
-            data: {
-              taskType,
-              jobId: job.id
-            }
-          }
-        };
-      }
       return {
         text: `Queued research as job ${job.id}. I’ll share concise progress and final results here.`,
         continueLoop: false,
@@ -4006,7 +4033,7 @@ export class GatewayService {
           }
         };
       }
-      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
+      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText, channelSessionId);
       if (!resolvedCwd.ok) {
         if (resolvedCwd.suggestedCwd) {
           return approveCwdCorrection(resolvedCwd.suggestedCwd, resolvedCwd.error);
@@ -4031,6 +4058,7 @@ export class GatewayService {
         cwd: resolvedCwd.cwd,
         limit
       });
+      this.rememberSessionLocalCwd(channelSessionId, resolvedCwd.cwd);
       const output = await this.listProcesses({ cwd: resolvedCwd.cwd, pattern, limit });
       return {
         text: output,
@@ -4077,7 +4105,7 @@ export class GatewayService {
           }
         };
       }
-      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
+      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText, channelSessionId);
       if (!resolvedCwd.ok) {
         if (resolvedCwd.suggestedCwd) {
           return approveCwdCorrection(resolvedCwd.suggestedCwd, resolvedCwd.error);
@@ -4124,6 +4152,7 @@ export class GatewayService {
         };
       }
       const signal = action.signal ?? "TERM";
+      this.rememberSessionLocalCwd(channelSessionId, resolvedCwd.cwd);
       const rerunQuery = this.messageRequestsRerun(userText)
         ? action.rerunQuery?.trim() || (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || ""
         : "";
@@ -4218,7 +4247,7 @@ export class GatewayService {
           }
         };
       }
-      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
+      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText, channelSessionId);
       if (!resolvedCwd.ok) {
         if (resolvedCwd.suggestedCwd) {
           return approveCwdCorrection(resolvedCwd.suggestedCwd, resolvedCwd.error);
@@ -4252,6 +4281,7 @@ export class GatewayService {
       const verifyPattern = action.verifyPattern?.trim() || this.inferProcessPatternFromText(userText) || undefined;
       const verifyPort = Number.isFinite(action.verifyPort) && (action.verifyPort ?? 0) > 0 ? action.verifyPort : undefined;
       const timeoutSec = Number.isFinite(action.timeoutSec) && (action.timeoutSec ?? 0) > 0 ? Math.min(300, action.timeoutSec as number) : 20;
+      this.rememberSessionLocalCwd(channelSessionId, resolvedCwd.cwd);
       const rerunQuery = this.messageRequestsRerun(userText)
         ? action.rerunQuery?.trim() || (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || ""
         : "";
@@ -4334,7 +4364,7 @@ export class GatewayService {
           }
         };
       }
-      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
+      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText, channelSessionId);
       if (!resolvedCwd.ok) {
         if (resolvedCwd.suggestedCwd) {
           return approveCwdCorrection(resolvedCwd.suggestedCwd, resolvedCwd.error);
@@ -4376,6 +4406,7 @@ export class GatewayService {
         timeoutSec,
         cwd: resolvedCwd.cwd
       });
+      this.rememberSessionLocalCwd(channelSessionId, resolvedCwd.cwd);
       const output = await this.waitForProcessReady({
         cwd: resolvedCwd.cwd,
         pid,
@@ -4438,7 +4469,7 @@ export class GatewayService {
           }
         };
       }
-      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText);
+      const resolvedCwd = this.resolveAgentActionCwd(action.cwd, userText, channelSessionId);
       if (!resolvedCwd.ok) {
         if (resolvedCwd.suggestedCwd) {
           return approveCwdCorrection(resolvedCwd.suggestedCwd, resolvedCwd.error);
@@ -4456,6 +4487,7 @@ export class GatewayService {
         };
       }
       const shellPolicy = this.evaluateShellCommandPolicy(command);
+      this.rememberSessionLocalCwd(channelSessionId, resolvedCwd.cwd);
       const rerunQuery = this.messageRequestsRerun(userText)
         ? action.rerunQuery?.trim() || (await this.inferRerunQueryFromLocalOpsText(channelSessionId, userText)) || ""
         : "";
@@ -4761,6 +4793,7 @@ export class GatewayService {
 
     const providerManagedContext = await this.shouldUseProviderManagedContext(authPreference);
     const historyLines = providerManagedContext ? [] : await this.buildRecentConversationContext(sessionId, trimmed);
+    const executionContext = await this.buildSessionExecutionContext(sessionId);
 
     if (!this.memoryService) {
       if (historyLines.length === 0) {
@@ -4770,6 +4803,7 @@ export class GatewayService {
         "You are answering using recent persisted conversation context when relevant.",
         "Recent conversation context (oldest first):",
         historyLines.join("\n"),
+        executionContext,
         `User message: ${trimmed}`
       ].join("\n\n");
       return { prompt: promptWithoutMemory, references: [] };
@@ -4821,6 +4855,7 @@ export class GatewayService {
       promptParts.push("Memory snippets:");
       promptParts.push(snippets.join("\n\n"));
     }
+    promptParts.push(executionContext);
     promptParts.push(`User message: ${trimmed}`);
 
     const prompt = promptParts.join("\n\n");
@@ -4877,7 +4912,7 @@ export class GatewayService {
 
     let events: Awaited<ReturnType<ConversationStore["listBySession"]>> = [];
     try {
-      events = await this.conversationStore.listBySession(sessionId, 40);
+      events = await this.conversationStore.listBySession(sessionId, 120);
     } catch {
       return [];
     }
@@ -4910,13 +4945,39 @@ export class GatewayService {
       }
 
       const role = event.direction === "inbound" ? "user" : "assistant";
-      selected.push(`${role}: ${normalizedText.slice(0, 280)}`);
-      if (selected.length >= 10) {
+      selected.push(`${role}: ${normalizedText.slice(0, 500)}`);
+      if (selected.length >= 20) {
         break;
       }
     }
 
     return selected.reverse();
+  }
+
+  private async buildSessionExecutionContext(sessionId: string): Promise<string> {
+    const jobs = await this.store.listJobs();
+    const relevant = jobs
+      .filter((job) => {
+        const owner = typeof job.payload.sessionId === "string" ? job.payload.sessionId : "";
+        return owner === sessionId;
+      })
+      .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+
+    const active = relevant.find((job) => job.status === "queued" || job.status === "running" || job.status === "cancelling");
+    const latestQuery = this.extractLatestSearchQuery(relevant);
+    const recoverableQuery = await this.findLatestRecoverableSearchQuery(sessionId);
+    const hintedCwd = this.sessionLocalCwdHints.get(sessionId);
+
+    const lines = [
+      "Execution context:",
+      active
+        ? `- active_job: ${active.id} (${active.status})${active.progress?.message ? ` | ${String(active.progress.message)}` : ""}`
+        : "- active_job: none",
+      latestQuery ? `- latest_search_query: ${latestQuery}` : "- latest_search_query: none",
+      recoverableQuery ? `- latest_recoverable_query: ${recoverableQuery}` : "- latest_recoverable_query: none",
+      hintedCwd ? `- preferred_local_cwd: ${hintedCwd}` : "- preferred_local_cwd: none"
+    ];
+    return lines.join("\n");
   }
 
   private async recordMemoryCheckpoint(
@@ -5281,7 +5342,8 @@ export class GatewayService {
 
   private resolveAgentActionCwd(
     rawCwd: string | undefined,
-    rawText: string
+    rawText: string,
+    sessionId?: string
   ): { ok: true; cwd: string } | { ok: false; error: string; suggestedCwd?: string } {
     const explicitCwd = typeof rawCwd === "string" ? rawCwd.trim() : "";
     if (explicitCwd) {
@@ -5315,6 +5377,15 @@ export class GatewayService {
     if (inferred) {
       return { ok: true, cwd: inferred };
     }
+    if (sessionId) {
+      const hinted = this.sessionLocalCwdHints.get(sessionId);
+      if (hinted) {
+        const hintedResolved = this.resolveShellCwd(hinted);
+        if (hintedResolved.ok) {
+          return hintedResolved;
+        }
+      }
+    }
     return this.resolveShellCwd(undefined);
   }
 
@@ -5336,6 +5407,19 @@ export class GatewayService {
       return searxRoot;
     }
     return this.capabilityPolicy.shellAllowedDirs[0] ?? null;
+  }
+
+  private rememberSessionLocalCwd(sessionId: string, cwd: string): void {
+    const normalizedSessionId = sessionId.trim();
+    const normalizedCwd = cwd.trim();
+    if (!normalizedSessionId || !normalizedCwd) {
+      return;
+    }
+    const resolved = this.resolveShellCwd(normalizedCwd);
+    if (!resolved.ok) {
+      return;
+    }
+    this.sessionLocalCwdHints.set(normalizedSessionId, resolved.cwd);
   }
 
   private computeAgentActionSignature(action: AgentNextAction): string {
@@ -5620,25 +5704,35 @@ export class GatewayService {
   private async startBackgroundProcess(
     command: string,
     cwd: string
-  ): Promise<{ ok: true; pid: number | null; message: string } | { ok: false; message: string }> {
+  ): Promise<{ ok: true; pid: number | null; logPath: string; message: string } | { ok: false; message: string }> {
     const trimmed = command.trim();
     if (!trimmed) {
       return { ok: false, message: "Process start failed: empty command." };
     }
     try {
-      const child = spawn(trimmed, {
-        cwd,
-        shell: true,
-        env: process.env,
-        detached: true,
-        stdio: "ignore"
-      });
+      const logsDir = path.resolve(this.capabilityPolicy.workspaceDir, ".alfred", "process_logs");
+      await fs.mkdir(logsDir, { recursive: true });
+      const logPath = path.join(logsDir, `process-${Date.now()}-${randomUUID().slice(0, 8)}.log`);
+      const logFd = openSync(logPath, "a");
+      let child;
+      try {
+        child = spawn(trimmed, {
+          cwd,
+          shell: true,
+          env: process.env,
+          detached: true,
+          stdio: ["ignore", logFd, logFd]
+        });
+      } finally {
+        closeSync(logFd);
+      }
       child.unref();
       const pid = child.pid ?? null;
       return {
         ok: true,
         pid,
-        message: `Process start dispatched in ${path.relative(process.cwd(), cwd) || "."}${pid ? ` (pid=${pid})` : ""}.`
+        logPath,
+        message: `Process start dispatched in ${path.relative(process.cwd(), cwd) || "."}${pid ? ` (pid=${pid})` : ""} (log: ${logPath}).`
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -5655,12 +5749,15 @@ export class GatewayService {
     pattern?: string;
     verifyPort?: number;
     timeoutSec: number;
+    minStableSec?: number;
   }): Promise<string> {
     const timeoutMs = Math.max(1_000, Math.min(300_000, input.timeoutSec * 1_000));
     const intervalMs = 1_000;
+    const stabilityWindowMs = Math.max(0, Math.min(15_000, Math.trunc((input.minStableSec ?? 3) * 1_000)));
     const startedAt = Date.now();
     const deadline = startedAt + timeoutMs;
     let lastObserved = "waiting";
+    let readySince: number | null = null;
 
     while (Date.now() <= deadline) {
       const checks: string[] = [];
@@ -5696,9 +5793,23 @@ export class GatewayService {
         }
       }
 
+      if (checks.length === 0) {
+        allReady = false;
+        lastObserved = "no readiness checks";
+      }
+
       if (allReady) {
-        const elapsed = Math.round((Date.now() - startedAt) / 1000);
-        return `Process readiness verified in ${elapsed}s (${checks.join(", ")}).`;
+        if (!readySince) {
+          readySince = Date.now();
+        }
+        const stableForMs = Date.now() - readySince;
+        if (stableForMs >= stabilityWindowMs) {
+          const elapsed = Math.round((Date.now() - startedAt) / 1000);
+          const stableForSec = Math.round(stableForMs / 1000);
+          return `Process readiness verified in ${elapsed}s (${checks.join(", ")}; stable_for=${stableForSec}s).`;
+        }
+      } else {
+        readySince = null;
       }
 
       await new Promise((resolve) => setTimeout(resolve, intervalMs));

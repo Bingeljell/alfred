@@ -355,6 +355,7 @@ async function main(): Promise<void> {
       workspaceDir: config.alfredWorkspaceDir,
       approvalMode: config.alfredApprovalMode,
       approvalDefault: config.alfredApprovalDefault,
+      plannerTraceEnabled: config.alfredPlannerTraceEnabled,
       webSearchEnabled: config.alfredWebSearchEnabled,
       webSearchRequireApproval: config.alfredWebSearchRequireApproval,
       webSearchProvider: config.alfredWebSearchProvider,

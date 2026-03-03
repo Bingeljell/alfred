@@ -20,6 +20,10 @@
 
 ## Recent Task Updates
 
+- 2026-03-03: Added planner-trace runtime gating (`ALFRED_PLANNER_TRACE_ENABLED`, default false) so planner hints can be disabled in normal chat flows, and switched model-driven `web.search` actions to enqueue `agentic_turn` by default (quick mode now only tunes budgets instead of forcing deterministic paged search output).
+- 2026-03-03: Improved cross-turn execution continuity by expanding recent conversation context depth and injecting explicit execution context (active job, latest search, latest recoverable search, preferred local cwd) into turn prompts.
+- 2026-03-03: Added per-session local-ops cwd memory so process/shell follow-ups reuse the last validated working directory when users omit paths, reducing repeated cwd-correction loops.
+- 2026-03-03: Hardened local process startup checks with child log capture under `workspace/alfred/.alfred/process_logs` plus readiness stability windows, and reduced worker silence by increasing progress pulse frequency for agentic turns and adding in-attempt search pulses for `web_search`.
 - 2026-03-03: Added a dedicated runtime tool registry under `tools/` (ToolSpec + AgentAction specs + input schemas) and shared manifest builders, then rewired gateway policy typing to consume the centralized registry contract.
 - 2026-03-03: Improved the agent loop to carry tool output back into subsequent reasoning steps (output previews in observations), enabled multi-step continuation for read-only local/context tools (`web.fetch`, `file.read.range`, `process.list`, `process.wait`), and tightened rerun behavior so shell/process recovery reruns are only attached when the current user message explicitly asks to rerun/retry.
 - 2026-03-03: Added runtime run-correlation plumbing for delegated jobs by propagating `runId` into queued worker payloads and outbound worker notification metadata, improving run-to-job event traceability in observability surfaces.

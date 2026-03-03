@@ -36,6 +36,7 @@ describe("loadConfig", () => {
     expect(config.alfredApprovalMode).toBe("balanced");
     expect(config.alfredApprovalDefault).toBe(true);
     expect(config.alfredPlannerEnabled).toBe(true);
+    expect(config.alfredPlannerTraceEnabled).toBe(false);
     expect(config.alfredPlannerMinConfidence).toBe(0.65);
     expect(config.alfredPlannerSystemFiles).toEqual([
       "docs/alfred_identity.md",
@@ -133,6 +134,7 @@ describe("loadConfig", () => {
       ALFRED_APPROVAL_MODE: "strict",
       ALFRED_APPROVAL_DEFAULT: "false",
       ALFRED_PLANNER_ENABLED: "false",
+      ALFRED_PLANNER_TRACE_ENABLED: "true",
       ALFRED_PLANNER_MIN_CONFIDENCE: "0.8",
       ALFRED_PLANNER_SYSTEM_FILES: "docs/a.md,docs/b.md",
       ALFRED_WEB_SEARCH_ENABLED: "false",
@@ -227,6 +229,7 @@ describe("loadConfig", () => {
     expect(config.alfredApprovalMode).toBe("strict");
     expect(config.alfredApprovalDefault).toBe(false);
     expect(config.alfredPlannerEnabled).toBe(false);
+    expect(config.alfredPlannerTraceEnabled).toBe(true);
     expect(config.alfredPlannerMinConfidence).toBe(0.8);
     expect(config.alfredPlannerSystemFiles).toEqual(["docs/a.md", "docs/b.md"]);
     expect(config.alfredWebSearchEnabled).toBe(false);

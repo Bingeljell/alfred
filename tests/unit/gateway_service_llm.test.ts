@@ -207,6 +207,7 @@ describe("GatewayService llm path", () => {
       undefined,
       {
         approvalDefault: true,
+        plannerTraceEnabled: true,
         webSearchEnabled: true,
         webSearchRequireApproval: false
       },
@@ -419,6 +420,7 @@ describe("GatewayService llm path", () => {
       undefined,
       {
         approvalDefault: true,
+        plannerTraceEnabled: true,
         webSearchEnabled: true,
         webSearchRequireApproval: false
       },
@@ -1853,7 +1855,7 @@ describe("GatewayService llm path", () => {
     });
     expect(approved.response).toContain("Approved action executed: process_start");
     expect(approved.response).toContain("Process start dispatched");
-  });
+  }, 15000);
 
   it("runs process.wait and reports readiness", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "alfred-gw-process-wait-unit-"));

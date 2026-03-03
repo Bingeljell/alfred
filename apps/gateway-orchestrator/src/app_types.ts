@@ -115,6 +115,7 @@ export type CreateGatewayAppOptions = {
     workspaceDir?: string;
     approvalMode?: "strict" | "balanced" | "relaxed";
     approvalDefault?: boolean;
+    plannerTraceEnabled?: boolean;
     webSearchEnabled?: boolean;
     webSearchRequireApproval?: boolean;
     webSearchProvider?: "searxng" | "openai" | "brave" | "perplexity" | "brightdata" | "auto";

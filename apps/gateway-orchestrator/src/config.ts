@@ -144,6 +144,10 @@ const EnvSchema = z.object({
     .string()
     .optional()
     .transform((v) => (v ? v.toLowerCase() !== "false" : true)),
+  ALFRED_PLANNER_TRACE_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => (v ? v.toLowerCase() !== "false" : false)),
   ALFRED_PLANNER_MIN_CONFIDENCE: z
     .string()
     .optional()
@@ -368,6 +372,7 @@ export type AppConfig = {
   alfredApprovalMode: "strict" | "balanced" | "relaxed";
   alfredApprovalDefault: boolean;
   alfredPlannerEnabled: boolean;
+  alfredPlannerTraceEnabled: boolean;
   alfredPlannerMinConfidence: number;
   alfredPlannerSystemFiles: string[];
   alfredWebSearchEnabled: boolean;
@@ -506,6 +511,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     alfredApprovalMode: parsed.ALFRED_APPROVAL_MODE,
     alfredApprovalDefault: parsed.ALFRED_APPROVAL_DEFAULT,
     alfredPlannerEnabled: parsed.ALFRED_PLANNER_ENABLED,
+    alfredPlannerTraceEnabled: parsed.ALFRED_PLANNER_TRACE_ENABLED,
     alfredPlannerMinConfidence: parsed.ALFRED_PLANNER_MIN_CONFIDENCE,
     alfredPlannerSystemFiles: parsed.ALFRED_PLANNER_SYSTEM_FILES.split(",")
       .map((item) => item.trim())
