@@ -10,6 +10,7 @@ type SearchProvider = "searxng" | "openai" | "brave" | "perplexity" | "brightdat
 type AttachmentFormat = "md" | "txt" | "doc";
 type ResolvedProvider = "searxng" | "openai" | "brave" | "perplexity" | "brightdata";
 type AgenticObjectiveMode = "research" | "local_ops" | "direct_answer";
+type AgenticResponseMode = "recommendation" | "extract_answer" | "artifact_csv";
 
 type SearchHit = {
   title: string;
@@ -55,6 +56,13 @@ type CsvArtifactRequest = {
   requested: boolean;
   rowTarget: number;
   columns: string[] | null;
+};
+
+type CsvArtifactMeta = {
+  generated: boolean;
+  rowCount: number;
+  fallbackRows: boolean;
+  relativePath?: string;
 };
 
 type CsvLeadRow = {
@@ -279,6 +287,8 @@ export function createWorkerProcessor(input: {
         timeoutMs: Math.max(2500, Math.min(9000, Math.floor(timeBudgetMs * 0.12)))
       });
       const searchGoal = objective.searchQuery?.trim() || buildSearchGoal(goal);
+      const csvRequest = parseCsvArtifactRequest(goal);
+      const responseMode = selectAgenticResponseMode(goal, csvRequest);
 
       if (objective.mode === "local_ops") {
         await context.reportProgress({
@@ -550,8 +560,8 @@ export function createWorkerProcessor(input: {
       }
 
       const compactEvidence = compactSearchHitsForSynthesis(mergedHits, 14);
-      const csvRequest = parseCsvArtifactRequest(goal);
       let csvArtifactNote = "";
+      let csvArtifactMeta: CsvArtifactMeta | null = null;
       if (csvRequest.requested) {
         await context.reportProgress({
           step: "artifact",
@@ -585,18 +595,135 @@ export function createWorkerProcessor(input: {
                 caption: `CSV artifact generated (${artifact.rowCount} rows)`
               });
             }
+            csvArtifactMeta = {
+              generated: true,
+              rowCount: artifact.rowCount,
+              fallbackRows: usedFallbackRows,
+              relativePath: artifact.relativePath
+            };
             csvArtifactNote = `CSV artifact generated with ${artifact.rowCount} rows at ${artifact.relativePath}.`;
             if (usedFallbackRows) {
               csvArtifactNote = `${csvArtifactNote}\nNote: direct public emails were sparse, so fallback source rows were included for manual enrichment.`;
             }
           } catch (error) {
             const detail = error instanceof Error ? error.message : String(error);
+            csvArtifactMeta = {
+              generated: false,
+              rowCount: 0,
+              fallbackRows: false
+            };
             csvArtifactNote = `I could not write the requested CSV artifact: ${detail}`;
           }
         } else {
+          csvArtifactMeta = {
+            generated: false,
+            rowCount: 0,
+            fallbackRows: false
+          };
           csvArtifactNote = "I could not extract enough public source rows to create the requested CSV yet.";
         }
       }
+
+      if (responseMode === "artifact_csv") {
+        await context.reportProgress({
+          step: "synthesizing",
+          phase: "synth",
+          message: "Summarizing collected artifact results."
+        });
+        const artifactText = appendArtifactNote(
+          renderArtifactSummary({
+            goal,
+            providersUsed,
+            hits: mergedHits,
+            artifact: csvArtifactMeta
+          }),
+          csvArtifactNote
+        );
+        return finalizePagedAgenticResponse({
+          sessionId,
+          fullText: artifactText,
+          pagedResponseStore: input.pagedResponseStore,
+          summary: `agentic_turn_${primary.provider}`,
+          providersUsed,
+          retriesUsed,
+          tokenBudget,
+          confidence: csvArtifactMeta?.generated ? "medium" : "low",
+          recommendationMode: "artifact_csv",
+          sourceStats: {
+            hits: mergedHits.length,
+            distinctDomains: countDistinctDomains(mergedHits),
+            fetchedPages: pageEvidence.length
+          },
+          elapsedSec: Math.max(1, Math.floor((Date.now() - runStartedAt) / 1000))
+        });
+      }
+
+      if (responseMode === "extract_answer") {
+        await context.reportProgress({
+          step: "synthesizing",
+          phase: "synth",
+          message: "Extracting a direct answer from gathered evidence."
+        });
+
+        let answerText = "";
+        const answerPrompt = buildExtractAnswerPrompt(goal, compactEvidence, pageEvidence, providersUsed);
+        try {
+          const generated = await withTimeout(
+            input.llmService.generateText(authSessionId || sessionId, answerPrompt, {
+              authPreference
+            }),
+            Math.max(3500, Math.min(synthesisBudgetMs, msRemaining(deadlineAt, 3500))),
+            "agentic_turn_extract_answer_time_budget_exceeded"
+          );
+          answerText = String(generated?.text ?? "").trim();
+        } catch {
+          answerText = "";
+        }
+
+        if (isWeakExtractedAnswer(goal, answerText)) {
+          try {
+            const repairPrompt = buildExtractAnswerRepairPrompt(goal, answerText, compactEvidence, pageEvidence);
+            const repaired = await withTimeout(
+              input.llmService.generateText(authSessionId || sessionId, repairPrompt, {
+                authPreference,
+                executionMode: "reasoning_only"
+              }),
+              Math.max(2500, Math.min(9000, msRemaining(deadlineAt, 2500))),
+              "agentic_turn_extract_answer_repair_time_budget_exceeded"
+            );
+            const repairedText = String(repaired?.text ?? "").trim();
+            if (!isWeakExtractedAnswer(goal, repairedText)) {
+              answerText = repairedText;
+            }
+          } catch {
+            // best-effort repair only
+          }
+        }
+
+        if (isWeakExtractedAnswer(goal, answerText)) {
+          answerText = renderExtractAnswerFallback(goal, mergedHits, pageEvidence);
+        }
+
+        const fullText = appendArtifactNote(answerText, csvArtifactNote);
+        return finalizePagedAgenticResponse({
+          sessionId,
+          fullText,
+          pagedResponseStore: input.pagedResponseStore,
+          summary: `agentic_turn_${primary.provider}`,
+          providersUsed,
+          retriesUsed,
+          tokenBudget,
+          confidence: pageEvidence.length > 0 ? "medium" : "low",
+          recommendationMode: "extract_answer",
+          sourceStats: {
+            hits: mergedHits.length,
+            distinctDomains: countDistinctDomains(mergedHits),
+            fetchedPages: pageEvidence.length
+          },
+          elapsedSec: Math.max(1, Math.floor((Date.now() - runStartedAt) / 1000))
+        });
+      }
+
       await context.reportProgress({
         step: "ranking",
         phase: "rank",
@@ -1133,6 +1260,162 @@ function buildSupplementalSearchGoal(goal: string, primaryQuery: string, hits: S
     : "official docs comparison";
   const supplemental = `${primaryQuery} ${hint}`.replace(/\s+/g, " ").trim();
   return supplemental.length > primaryQuery.length ? supplemental : null;
+}
+
+function selectAgenticResponseMode(goal: string, csvRequest: CsvArtifactRequest): AgenticResponseMode {
+  if (csvRequest.requested) {
+    return "artifact_csv";
+  }
+  const text = goal.toLowerCase();
+  const recommendationSignals =
+    /\b(recommend|best|which\b.*\bshould\b|pros?\b|cons?\b|tradeoff|alternative|rank\b|compare|comparison|vs|versus)\b/.test(text);
+  if (recommendationSignals) {
+    return "recommendation";
+  }
+  return "extract_answer";
+}
+
+function buildExtractAnswerPrompt(
+  goal: string,
+  hits: SearchHit[],
+  pages: PageEvidence[],
+  providersUsed: ResolvedProvider[]
+): string {
+  const evidence = hits
+    .slice(0, 12)
+    .map((hit, index) => `${index + 1}. ${hit.title} (${hit.url}) — ${hit.snippet}`)
+    .join("\n");
+  const pageEvidence = pages
+    .slice(0, 8)
+    .map((page, index) => `${index + 1}. ${page.title} (${page.url}) — ${page.excerpt}`)
+    .join("\n");
+  return [
+    "You are Alfred.",
+    "Use evidence to answer the user's request directly.",
+    "Do not output a recommendation template.",
+    "Do not tell the user to click links as the primary answer.",
+    "If asked for top/list/table items, provide the requested items in bullet points.",
+    "Output format:",
+    "1) Direct answer",
+    "2) Sources (URLs only)",
+    "",
+    `Goal: ${goal}`,
+    `Providers used: ${providersUsed.join(", ")}`,
+    "",
+    "Evidence snippets:",
+    evidence || "none",
+    "",
+    "Fetched page excerpts:",
+    pageEvidence || "none"
+  ].join("\n");
+}
+
+function buildExtractAnswerRepairPrompt(goal: string, priorAnswer: string, hits: SearchHit[], pages: PageEvidence[]): string {
+  const evidence = hits
+    .slice(0, 10)
+    .map((hit, index) => `${index + 1}. ${hit.title} (${hit.url}) — ${hit.snippet}`)
+    .join("\n");
+  const pageEvidence = pages
+    .slice(0, 6)
+    .map((page, index) => `${index + 1}. ${page.title} (${page.url}) — ${page.excerpt}`)
+    .join("\n");
+  return [
+    "Rewrite the prior answer so it directly satisfies the user's request.",
+    "Avoid recommendation templates and avoid source-title-as-answer.",
+    "When user asks for a top/list output, include list items directly.",
+    "Return only:",
+    "1) Direct answer",
+    "2) Sources (URLs only)",
+    "",
+    `Goal: ${goal}`,
+    "",
+    "Prior answer:",
+    priorAnswer || "(empty)",
+    "",
+    "Evidence snippets:",
+    evidence || "none",
+    "",
+    "Fetched page excerpts:",
+    pageEvidence || "none"
+  ].join("\n");
+}
+
+function isWeakExtractedAnswer(goal: string, answer: string): boolean {
+  const text = answer.trim();
+  if (!text) {
+    return true;
+  }
+  if (/^recommendation:/i.test(text) || /\bprovisional shortlist\b/i.test(text)) {
+    return true;
+  }
+  const topCount = extractRequestedTopCount(goal);
+  if (topCount > 0) {
+    const listItems = countListItems(text);
+    if (listItems < Math.min(topCount, 5)) {
+      return true;
+    }
+  }
+  const urlMatches = text.match(/https?:\/\/\S+/g) ?? [];
+  const nonUrlText = text.replace(/https?:\/\/\S+/g, "").replace(/\s+/g, " ").trim();
+  if (urlMatches.length >= 3 && nonUrlText.length < 80) {
+    return true;
+  }
+  return false;
+}
+
+function renderExtractAnswerFallback(goal: string, hits: SearchHit[], pages: PageEvidence[]): string {
+  const topCount = Math.max(1, extractRequestedTopCount(goal) || 5);
+  const sourced = pages.length > 0 ? pages.map((page) => ({ title: page.title, url: page.url })) : hits.map((hit) => ({ title: hit.title, url: hit.url }));
+  const rows = sourced.slice(0, topCount);
+  if (rows.length === 0) {
+    return [
+      "I gathered partial context but couldn't extract a reliable direct answer yet.",
+      "Please retry once and I can run a second pass."
+    ].join("\n");
+  }
+  return [
+    `Direct answer for: ${goal}`,
+    ...rows.map((row, index) => `- ${index + 1}. ${sanitizeCandidateName(extractOptionName(row.title) || row.title)}`),
+    "",
+    "Sources:",
+    ...rows.map((row) => `- ${row.url}`)
+  ].join("\n");
+}
+
+function renderArtifactSummary(input: {
+  goal: string;
+  providersUsed: ResolvedProvider[];
+  hits: SearchHit[];
+  artifact: CsvArtifactMeta | null;
+}): string {
+  const topSources = input.hits.slice(0, 5).map((hit) => hit.url);
+  const head = input.artifact?.generated
+    ? `I prepared the requested CSV artifact with ${input.artifact.rowCount} rows.`
+    : "I collected sources but could not fully build the requested CSV artifact.";
+  return [
+    head,
+    `Goal: ${input.goal}`,
+    `Providers used: ${input.providersUsed.join(", ")}`,
+    "",
+    "Top sources considered:",
+    ...(topSources.length > 0 ? topSources.map((url) => `- ${url}`) : ["- none"])
+  ].join("\n");
+}
+
+function extractRequestedTopCount(goal: string): number {
+  const lower = goal.toLowerCase();
+  const direct = lower.match(/\btop\s+(\d{1,2})\b/);
+  if (direct?.[1]) {
+    return clampInt(Number.parseInt(direct[1], 10), 1, 20, 0);
+  }
+  return 0;
+}
+
+function countListItems(text: string): number {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^(\d+[.)]|[-*•])\s+/.test(line)).length;
 }
 
 function rankSearchHitsForGoal(hits: SearchHit[], goal: string): SearchHit[] {
@@ -1819,7 +2102,7 @@ async function finalizePagedAgenticResponse(input: {
   retriesUsed: number;
   tokenBudget: number;
   confidence: "low" | "medium" | "high";
-  recommendationMode: "rank_only" | "rank_plus_synthesis";
+  recommendationMode: "rank_only" | "rank_plus_synthesis" | "extract_answer" | "artifact_csv";
   sourceStats?: { hits: number; distinctDomains: number; fetchedPages?: number };
   elapsedSec?: number;
 }) {
@@ -1950,7 +2233,11 @@ function appendArtifactNote(text: string, note: string): string {
 
 function parseCsvArtifactRequest(goal: string): CsvArtifactRequest {
   const normalized = goal.toLowerCase();
-  const requested = /\b(csv|spreadsheet|sheet|table)\b/.test(normalized) || /\b\d+\s+emails?\b/.test(normalized);
+  const explicitArtifact = /\b(csv|spreadsheet|excel|xlsx|export|download|file)\b/.test(normalized);
+  const contactListIntent =
+    /\b\d+\s+(?:emails?|contacts?|leads?|rows?)\b/.test(normalized) ||
+    ((/\b(email|contact|lead)\b/.test(normalized) && /\b(list|database|directory|find|collect|gather)\b/.test(normalized)));
+  const requested = explicitArtifact || contactListIntent;
   if (!requested) {
     return {
       requested: false,

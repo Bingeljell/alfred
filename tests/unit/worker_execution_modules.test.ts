@@ -739,4 +739,155 @@ describe("worker execution modules", () => {
     expect(payload?.mimeType).toBe("text/csv");
     expect(String(result.responseText)).toContain("CSV artifact generated");
   });
+
+  it("uses extract-answer mode for top-N table queries without forcing CSV artifact output", async () => {
+    const search = vi.fn(async () => ({
+      provider: "searxng" as const,
+      text:
+        "1. EPL Standings - https://example.com/epl | live table\n" +
+        "2. League Table - https://example.net/table | weekly update"
+    }));
+    const generateText = vi.fn(async () => ({
+      text:
+        "1) Direct answer\n" +
+        "- 1. Team A\n" +
+        "- 2. Team B\n" +
+        "- 3. Team C\n" +
+        "- 4. Team D\n" +
+        "- 5. Team E\n\n" +
+        "2) Sources\n" +
+        "- https://example.com/epl\n" +
+        "- https://example.net/table"
+    }));
+    const enqueue = vi.fn(async () => undefined);
+    const processor = createWorkerProcessor({
+      config: {
+        alfredWorkspaceDir: "/tmp/alfred-worker-no-csv-test",
+        alfredWebSearchProvider: "searxng"
+      },
+      webSearchService: {
+        search
+      },
+      llmService: {
+        generateText
+      },
+      pagedResponseStore: {
+        setPages: async () => undefined,
+        clear: async () => undefined
+      },
+      notificationStore: {
+        enqueue
+      },
+      runSpecStore: {
+        put: async () => undefined,
+        setStatus: async () => null,
+        updateStep: async () => null
+      }
+    });
+
+    const result = await processor(
+      {
+        id: "j-agentic-extract-top5",
+        type: "stub_task",
+        payload: {
+          taskType: "agentic_turn",
+          query: "Top 5 EPL standings teams and summarize in bullets",
+          sessionId: "owner@s.whatsapp.net",
+          authSessionId: "owner@s.whatsapp.net"
+        },
+        priority: 5,
+        status: "queued",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      {
+        reportProgress: async () => undefined
+      }
+    );
+
+    const fileNotification = (enqueue.mock.calls as Array<Array<unknown>>).find((call) => {
+      const payload = call[0] as Record<string, unknown> | undefined;
+      return payload?.kind === "file";
+    });
+
+    expect(fileNotification).toBeUndefined();
+    expect(result.recommendationMode).toBe("extract_answer");
+    expect(String(result.responseText)).toContain("Team A");
+    expect(String(result.responseText)).not.toContain("CSV artifact generated");
+  });
+
+  it("repairs weak extract-answer output instead of returning recommendation/link-dump text", async () => {
+    const search = vi.fn(async () => ({
+      provider: "searxng" as const,
+      text:
+        "1. EPL Standings - https://example.com/epl | standings\n" +
+        "2. Backup Table - https://example.net/epl | table"
+    }));
+    const generateText = vi
+      .fn()
+      .mockResolvedValueOnce({
+        text: "Recommendation: ESPN table page\nhttps://example.com/epl\nhttps://example.net/epl"
+      })
+      .mockResolvedValueOnce({
+        text:
+          "1) Direct answer\n" +
+          "- 1. Team A\n" +
+          "- 2. Team B\n" +
+          "- 3. Team C\n" +
+          "- 4. Team D\n" +
+          "- 5. Team E\n\n" +
+          "2) Sources\n" +
+          "- https://example.com/epl"
+      });
+
+    const processor = createWorkerProcessor({
+      config: {
+        alfredWorkspaceDir: "/tmp/alfred-worker-repair-test",
+        alfredWebSearchProvider: "searxng"
+      },
+      webSearchService: {
+        search
+      },
+      llmService: {
+        generateText
+      },
+      pagedResponseStore: {
+        setPages: async () => undefined,
+        clear: async () => undefined
+      },
+      notificationStore: {
+        enqueue: async () => undefined
+      },
+      runSpecStore: {
+        put: async () => undefined,
+        setStatus: async () => null,
+        updateStep: async () => null
+      }
+    });
+
+    const result = await processor(
+      {
+        id: "j-agentic-repair-top5",
+        type: "stub_task",
+        payload: {
+          taskType: "agentic_turn",
+          query: "Top 5 EPL standings teams right now",
+          sessionId: "owner@s.whatsapp.net",
+          authSessionId: "owner@s.whatsapp.net"
+        },
+        priority: 5,
+        status: "queued",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      },
+      {
+        reportProgress: async () => undefined
+      }
+    );
+
+    expect(generateText).toHaveBeenCalledTimes(2);
+    expect(result.recommendationMode).toBe("extract_answer");
+    expect(String(result.responseText)).toContain("Team A");
+    expect(String(result.responseText)).not.toContain("Recommendation:");
+  });
 });
